@@ -153,6 +153,7 @@ cython_debug/
 
 # Project Specific
 data/parents/
+data/image_caption_cache.json
 uploads/
 temp_images/
 fastembed_cache/
