@@ -1,19 +1,29 @@
-import dashscope
-from http import HTTPStatus
-from app.core.config import settings
+import requests
+import base64
 import os
+from app.core.config import settings
 
 class MultiModalAnalyzer:
     def __init__(self):
-        self.api_key = settings.DASHSCOPE_API_KEY
-        self.model = settings.QWEN_VL_CHAT_MODEL
+        self.api_key = settings.MIMO_API_KEY
+        self.base_url = settings.MIMO_BASE_URL
+        self.model = settings.MIMO_MODEL_NAME
+
+    def _encode_image(self, image_path: str) -> str:
+        """将本地图片转换为 Base64 编码"""
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode('utf-8')
 
     def analyze_image(self, image_path: str, context: str) -> str:
         """
-        调用 Qwen-VL 模型对图片进行深度分析，结合上下文生成高质量 Caption
+        调用小米 MIMO-v2.5 模型 (OpenAI 兼容接口) 对图片进行深度分析
         """
         if not os.path.exists(image_path):
             return "图片文件不存在"
+
+        if not self.api_key:
+            print("错误: 未配置 MIMO_API_KEY")
+            return ""
 
         # 构造提示词
         prompt = f"""
@@ -26,28 +36,46 @@ class MultiModalAnalyzer:
         请直接输出生成的描述，不要包含任何多余的解释。
         """
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"image": f"file://{os.path.abspath(image_path)}"},
-                    {"text": prompt}
-                ]
-            }
-        ]
+        base64_image = self._encode_image(image_path)
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 500
+        }
 
         try:
-            response = dashscope.MultiModalConversation.call(
-                model=self.model,
-                messages=messages,
-                api_key=self.api_key
-            )
-
-            if response.status_code == HTTPStatus.OK:
-                return response.output.choices[0].message.content[0]["text"].strip()
+            # 拼接完整的聊天补全接口地址
+            url = f"{self.base_url.rstrip('/')}/chat/completions"
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result["choices"][0]["message"]["content"].strip()
             else:
-                print(f"AI 分析图片失败: {response.code} - {response.message}")
+                print(f"MIMO 分析图片失败: {response.status_code} - {response.text}")
                 return ""
         except Exception as e:
-            print(f"调用 AI 分析服务时发生异常: {e}")
+            print(f"调用 MIMO 分析服务时发生异常: {e}")
             return ""

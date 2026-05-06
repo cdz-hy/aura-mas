@@ -30,19 +30,32 @@ class QdrantService:
 
     def upsert_points(self, points: List[Dict[str, Any]]):
         """
-        批量插入或更新数据点
-        points 列表中的每个 dict 应包含:
-        - id: str/int (UUID)
-        - vector: dict {"text-dense": [...], "text-sparse": {...}}
-        - payload: dict (元数据)
+        批量插入或更新数据点 (支持自动分批防止 Payload 过大)
         """
-        self.client.upsert(
-            collection_name=self.collection_name,
-            points=[
-                models.PointStruct(
-                    id=p['id'],
-                    vector=p['vector'],
-                    payload=p['payload']
-                ) for p in points
-            ]
-        )
+        batch_size = 20
+        total_points = len(points)
+        total_batches = (total_points + batch_size - 1) // batch_size
+        
+        print(f"开始同步数据至向量库: 总计 {total_points} 个点, 分为 {total_batches} 批次")
+        
+        for i in range(0, total_points, batch_size):
+            batch = points[i : i + batch_size]
+            current_batch_num = (i // batch_size) + 1
+            
+            print(f"  >> 正在推送第 {current_batch_num}/{total_batches} 批次 ({len(batch)} 点)...", end="", flush=True)
+            
+            try:
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=[
+                        models.PointStruct(
+                            id=p['id'],
+                            vector=p['vector'],
+                            payload=p['payload']
+                        ) for p in batch
+                    ]
+                )
+                print(" [成功]")
+            except Exception as e:
+                print(f" [失败: {e}]")
+                raise e

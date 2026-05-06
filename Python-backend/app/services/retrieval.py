@@ -36,11 +36,15 @@ class HybridRetrievalService:
         4. 使用 Reranker 进行二次精排，取前 5 条。
         5. 对前 5 条结果的大切块进行去重，提取最终上下文。
         """
+        print(f"开始执行检索: {query}")
+        
         # 1. 生成查询向量
+        print("正在生成查询向量 (Dense + Sparse)...")
         dense_vec = self.dense_embedding.embed_query(query)
         sparse_vec = self.sparse_embedding.embed_text(query)
 
         # 2. 执行混合检索 (RRF 融合)
+        print(f"正在从 Qdrant 执行混合检索, 候选限制: {limit}...")
         search_result = self.vector_db.client.query_points(
             collection_name=self.vector_db.collection_name,
             prefetch=[
@@ -63,17 +67,25 @@ class HybridRetrievalService:
                 "payload": point.payload
             })
 
+        print(f"混合检索完成, 召回候选点数: {len(initial_results)}")
         if not initial_results:
+            print("警告: 未能在向量数据库中找到任何匹配项。")
             return {"final_results": [], "context_chunks": []}
 
         # 4. 执行多模态重排序 (针对小切块进行精排)
+        print(f"正在启动多模态重排序 (模型: {self.reranker.model_name})...")
         reranked_results = self.reranker.rerank(
             query=query,
             documents=initial_results,
             top_n=rerank_top_n
         )
+        
+        if reranked_results:
+            best_score = reranked_results[0].get("rerank_score", 0)
+            print(f"重排序完成, Top 1 核心相关度得分: {best_score:.4f}")
 
         # 5. 仅针对精排后的 Top 5 结果进行大切块回溯与去重
+        print("开始父块内容回溯与上下文去重...")
         final_context_chunks = []
         seen_parents = set()
         
@@ -97,11 +109,7 @@ class HybridRetrievalService:
                         "doc_title": payload.get("doc_title")
                     })
 
-            elif payload.get("type") == "image":
-                # 图片即便没有 parent 或者 parent 重复，可能也需要单独列出路径
-                # 但通常图片也关联了 parent_id，这里根据需求决定
-                pass
-
+        print(f"检索全流程结束。最终提取大切块上下文数量: {len(final_context_chunks)}")
         return {
             "final_results": reranked_results,        # 前 5 个精排后的原信息（含图片路径等）
             "context_chunks": final_context_chunks     # 去重后的 1200 字大切块上下文（喂给 AI）

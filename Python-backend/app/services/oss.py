@@ -12,11 +12,14 @@ class QiniuOSSService:
         """
         上传文件到七牛云并返回公网访问 URL
         """
+        # 1. 生成上传 Token
         token = self.q.upload_token(self.bucket_name, remote_file_name, 3600)
+        
+        # 2. 执行上传
         ret, info = put_file(token, remote_file_name, local_file_path, version='v2')
         
         if info.status_code == 200:
-            # 确保域名以 / 结尾
+            # 3. 构造基础 URL (直接返回，不带签名)
             base_url = self.domain if self.domain.endswith('/') else f"{self.domain}/"
             return f"{base_url}{remote_file_name}"
         else:
