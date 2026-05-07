@@ -1,3 +1,4 @@
+import threading
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from app.core.config import settings
@@ -5,9 +6,16 @@ from typing import List, Dict, Any
 
 class QdrantService:
     def __init__(self):
-        self.client = QdrantClient(url=settings.QDRANT_URL)
+        self._local = threading.local()
         self.collection_name = settings.QDRANT_COLLECTION_NAME
         self._ensure_collection()
+
+    @property
+    def client(self) -> QdrantClient:
+        """动态获取或创建当前线程独享的 Qdrant 客户端，保证多线程并发安全并复用连接池"""
+        if not hasattr(self._local, "client"):
+            self._local.client = QdrantClient(url=settings.QDRANT_URL)
+        return self._local.client
 
     def _ensure_collection(self):
         """确保 Qdrant 集合存在，不存在则创建"""

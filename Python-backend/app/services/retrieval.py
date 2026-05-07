@@ -1,10 +1,16 @@
 import os
 import json
+import asyncio
 from typing import List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from qdrant_client import models
 from app.services.vector_db import QdrantService
 from app.services.embedding import BailianEmbeddingService, SparseEmbeddingService
 from app.services.reranker import BailianRerankerService
+
+# 全局共享线程池，硬性限制最多 15 个并发任务，防止爆 Qps/并发
+_executor = ThreadPoolExecutor(max_workers=15)
 
 class HybridRetrievalService:
     def __init__(self):
@@ -44,10 +50,13 @@ class HybridRetrievalService:
         print(f"  [检索启动] 用户查询: {query}")
         print(f"{'='*60}")
         
+        loop = asyncio.get_running_loop()
+
         # 1. 生成查询向量
-        print(f"\n  [阶段 1/4] 正在生成查询向量 (Dense + Sparse)...")
-        dense_vec = self.dense_embedding.embed_query(query)
-        sparse_vec = self.sparse_embedding.embed_text(query)
+        print(f"\n  [阶段 1/4] 正在并发生成查询向量 (Dense + Sparse)...")
+        dense_task = loop.run_in_executor(_executor, self.dense_embedding.embed_query, query)
+        sparse_task = loop.run_in_executor(_executor, self.sparse_embedding.embed_text, query)
+        dense_vec, sparse_vec = await asyncio.gather(dense_task, sparse_task)
         print(f"  [阶段 1/4] 查询向量生成完成 (Dense 维度: {len(dense_vec)}, Sparse 非零项: {len(sparse_vec.get('indices', []))})")
 
         # 2. 执行混合检索 (DBSF 融合)
@@ -75,12 +84,14 @@ class HybridRetrievalService:
             print(f"  [降级] 查询词稀疏向量为空，本次检索自动关闭 text-sparse 并联通道")
 
         print(f"\n  [阶段 2/4] 正在执行并联混合检索 (Dense文本 + Sparse文本 + Dense图片 -> DBSF 融合), 候选上限: {limit}...")
-        search_result = self.vector_db.client.query_points(
+        search_func = partial(
+            self.vector_db.client.query_points,
             collection_name=self.vector_db.collection_name,
             prefetch=prefetch_list,
             query=models.FusionQuery(fusion=models.Fusion.DBSF),
             limit=limit,
         )
+        search_result = await loop.run_in_executor(_executor, search_func)
 
         # 3. 整理初步检索结果 (Top N 小切块)
         initial_results = []
@@ -122,11 +133,13 @@ class HybridRetrievalService:
 
         # 4. 执行多模态重排序 (针对小切块进行精排)
         print(f"\n  [阶段 3/4] 正在启动多模态重排序 (模型: {self.reranker.model_name}, 精选 Top {rerank_top_n})...")
-        reranked_results = self.reranker.rerank(
+        rerank_func = partial(
+            self.reranker.rerank,
             query=query,
             documents=initial_results,
             top_n=rerank_top_n
         )
+        reranked_results = await loop.run_in_executor(_executor, rerank_func)
 
         # 5. 仅针对精排后的 Top N 结果进行大切块回溯与去重
         print(f"\n  [阶段 4/4] 开始父块内容回溯与上下文去重...")

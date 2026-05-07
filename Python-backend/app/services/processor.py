@@ -2,13 +2,19 @@ import os
 import shutil
 import uuid
 import hashlib
+import asyncio
+import json
+import threading
 from typing import List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor
 from app.services.oss import QiniuOSSService
 from app.services.embedding import BailianEmbeddingService, SparseEmbeddingService
 from app.services.vector_db import QdrantService
 from app.utils.md_parser import parse_markdown
 from app.services.ai_analyzer import MultiModalAnalyzer
-import json
+
+# 入库专属线程池，最大限制 10，防止并发请求过大导致百炼/七牛 API 触发 Rate Limit 报错
+_executor = ThreadPoolExecutor(max_workers=10)
 
 class DocumentProcessor:
     def __init__(self):
@@ -20,7 +26,8 @@ class DocumentProcessor:
         # 确保存储父块 JSON 的目录存在
         self.parents_dir = os.path.join(os.getcwd(), "data", "parents")
         os.makedirs(self.parents_dir, exist_ok=True)
-        # 图片 AI 分析缓存
+        # 图片 AI 分析缓存及并发锁
+        self.cache_lock = threading.Lock()
         self.cache_path = os.path.join(os.getcwd(), "data", "image_caption_cache.json")
         self.image_cache = self._load_cache()
 
@@ -34,8 +41,9 @@ class DocumentProcessor:
         return {}
 
     def _save_cache(self):
-        with open(self.cache_path, "w", encoding="utf-8") as f:
-            json.dump(self.image_cache, f, ensure_ascii=False, indent=2)
+        with self.cache_lock:
+            with open(self.cache_path, "w", encoding="utf-8") as f:
+                json.dump(self.image_cache, f, ensure_ascii=False, indent=2)
 
     def _get_file_hash(self, file_path: str) -> str:
         """计算文件的 MD5 哈希值"""
@@ -53,6 +61,7 @@ class DocumentProcessor:
         3. 对图片进行 AI 智能内容分析 (带缓存)。
         4. 分批流式处理小切块并入库向量数据库。
         """
+        loop = asyncio.get_running_loop()
         chunks, parent_chunks = parse_markdown(md_content, doc_id, doc_title)
         print(f"解析完成: 提取出 {len(parent_chunks)} 个大切块, {len(chunks)} 个原始切片数据点。")
         
@@ -81,8 +90,9 @@ class DocumentProcessor:
                     # 处理文本块
                     preview = chunk["content"][:30].replace("\n", " ")
                     print(f"  [{idx}/{total}] 文本块 | 章节: {' > '.join(chunk['heading'])} | 内容: {preview}...")
-                    dense_vector = self.embedding_service.embed_query(chunk["content"])
-                    sparse_vector = self.sparse_embedding_service.embed_text(chunk["content"])
+                    dense_task = loop.run_in_executor(_executor, self.embedding_service.embed_query, chunk["content"])
+                    sparse_task = loop.run_in_executor(_executor, self.sparse_embedding_service.embed_text, chunk["content"])
+                    dense_vector, sparse_vector = await asyncio.gather(dense_task, sparse_task)
                     payload = chunk.copy()
                     print(f"  [{idx}/{total}] 文本块向量化完成。")
                 else:
@@ -97,18 +107,21 @@ class DocumentProcessor:
                         
                         # 0. AI 智能分析图片 (先查缓存)
                         img_hash = self._get_file_hash(local_img_path)
-                        if img_hash in self.image_cache:
-                            ai_caption = self.image_cache[img_hash]
+                        with self.cache_lock:
+                            ai_caption = self.image_cache.get(img_hash)
+                        
+                        if ai_caption:
                             print(f"  [{idx}/{total}] 命中图片分析缓存: {ai_caption[:40]}...")
                         else:
                             parent_context = parent_chunks.get(chunk["parent_id"], "")
                             print(f"  [{idx}/{total}] 正在调用 AI 分析图片内容...")
-                            ai_caption = self.ai_analyzer.analyze_image(local_img_path, parent_context)
+                            ai_caption = await loop.run_in_executor(_executor, self.ai_analyzer.analyze_image, local_img_path, parent_context)
                             if ai_caption:
                                 print(f"  [{idx}/{total}] AI 分析完成: {ai_caption[:40]}...")
                                 # 更新并保存缓存
-                                self.image_cache[img_hash] = ai_caption
-                                self._save_cache()
+                                with self.cache_lock:
+                                    self.image_cache[img_hash] = ai_caption
+                                    self._save_cache()
 
                         if ai_caption:
                             chunk["image_caption"] = ai_caption
@@ -119,12 +132,13 @@ class DocumentProcessor:
                         print(f"  [{idx}/{total}] 正在上传图片至七牛云...")
                         file_ext = os.path.splitext(local_img_path)[1]
                         remote_name = f"docs/{doc_id}/{uuid.uuid4()}{file_ext}"
-                        qiniu_url = self.oss_service.upload_file(local_img_path, remote_name)
+                        qiniu_url = await loop.run_in_executor(_executor, self.oss_service.upload_file, local_img_path, remote_name)
                         print(f"  [{idx}/{total}] 七牛云上传成功: {qiniu_url}")
                         
                         # 2. 向量化
-                        dense_vector = self.embedding_service.embed_image(local_img_path, chunk["image_caption"])
-                        sparse_vector = self.sparse_embedding_service.embed_text(chunk["image_caption"])
+                        dense_task = loop.run_in_executor(_executor, self.embedding_service.embed_image, local_img_path, chunk["image_caption"])
+                        sparse_task = loop.run_in_executor(_executor, self.sparse_embedding_service.embed_text, chunk["image_caption"])
+                        dense_vector, sparse_vector = await asyncio.gather(dense_task, sparse_task)
                         
                         payload = chunk.copy()
                         payload["image_path"] = qiniu_url
@@ -150,7 +164,7 @@ class DocumentProcessor:
                 # 流式同步
                 if len(processed_points) >= 20:
                     print(f"\n  [流式同步] 已积累 {len(processed_points)} 个点, 正在执行同步...")
-                    self.vector_db.upsert_points(processed_points)
+                    await loop.run_in_executor(_executor, self.vector_db.upsert_points, processed_points)
                     success_count += len(processed_points)
                     processed_points = []
                     print(f"  [流式同步] 累计入库数: {success_count}\n")
@@ -163,7 +177,7 @@ class DocumentProcessor:
         # 处理剩余零头
         if processed_points:
             print(f"\n  [最终同步] 正在处理剩余 {len(processed_points)} 个点...")
-            self.vector_db.upsert_points(processed_points)
+            await loop.run_in_executor(_executor, self.vector_db.upsert_points, processed_points)
             success_count += len(processed_points)
             print(f"  [最终同步] 累计入库数: {success_count}\n")
 
