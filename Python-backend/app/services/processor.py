@@ -135,12 +135,15 @@ class DocumentProcessor:
                         continue
 
                 if dense_vector:
+                    vector_dict = {"text-dense": dense_vector}
+                    # 护栏：只有 indices 非空时才写入稀疏向量，防止空向量引发 Qdrant OffsetZero 崩溃
+                    if sparse_vector and sparse_vector.get("indices") and len(sparse_vector["indices"]) > 0:
+                        vector_dict["text-sparse"] = sparse_vector
+                    else:
+                        print(f"  [{idx}/{total}] [拦截] 发现空稀疏向量，已丢弃 text-sparse 通道")
                     processed_points.append({
                         "id": chunk["id"],
-                        "vector": {
-                            "text-dense": dense_vector,
-                            "text-sparse": sparse_vector
-                        },
+                        "vector": vector_dict,
                         "payload": payload
                     })
 

@@ -56,17 +56,23 @@ class HybridRetrievalService:
         # 反而因图片在 Sparse 通道排名极低而影响 DBSF 融合质量
         text_filter = models.Filter(must=[models.FieldCondition(key="type", match=models.MatchValue(value="text"))])
         image_filter = models.Filter(must=[models.FieldCondition(key="type", match=models.MatchValue(value="image"))])
+        # 先放入绝对安全的 Dense 通道
         prefetch_list = [
             # 文本 Dense 通道
             models.Prefetch(query=dense_vec, using="text-dense", filter=text_filter, limit=limit),
-            # 文本 Sparse (BM25) 通道
-            models.Prefetch(
-                query=models.SparseVector(indices=sparse_vec["indices"], values=sparse_vec["values"]),
-                using="text-sparse", filter=text_filter, limit=limit
-            ),
             # 图片 Dense 通道（仅 Dense，BM25 对图片 caption 检索无显著增益）
             models.Prefetch(query=dense_vec, using="text-dense", filter=image_filter, limit=limit),
         ]
+        # 护栏：只有查询词 Sparse 向量非空时，才开启 BM25 并联通道，防止空 indices 送入 DBSF 引发崩溃
+        if sparse_vec.get("indices") and len(sparse_vec["indices"]) > 0:
+            prefetch_list.append(
+                models.Prefetch(
+                    query=models.SparseVector(indices=sparse_vec["indices"], values=sparse_vec["values"]),
+                    using="text-sparse", filter=text_filter, limit=limit
+                )
+            )
+        else:
+            print(f"  [降级] 查询词稀疏向量为空，本次检索自动关闭 text-sparse 并联通道")
 
         print(f"\n  [阶段 2/4] 正在执行并联混合检索 (Dense文本 + Sparse文本 + Dense图片 -> DBSF 融合), 候选上限: {limit}...")
         search_result = self.vector_db.client.query_points(
