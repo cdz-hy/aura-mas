@@ -67,15 +67,58 @@ class BailianRerankerService:
         print(f"  [重排序] 构建文档完成: {text_count} 个文本块, {image_count} 个图片块")
         print(f"  [重排序] 实际送入条目: {len(rerank_docs)} 个 (图片视觉通道: {image_entry_count}/{MAX_IMAGE_ENTRIES}, 其余以语义描述替代)")
 
-        resp = dashscope.TextReRank.call(
-            model=self.model_name,
-            query={"text": query},
-            documents=rerank_docs,
-            top_n=min(top_n * 3, len(rerank_docs)),  # 多取一些，去重后再筛 top_n
-            api_key=self.api_key
+        # 尝试调用百炼 API 
+        try:
+            resp = dashscope.TextReRank.call(
+                model=self.model_name,
+                query={"text": query},
+                documents=rerank_docs,
+                top_n=min(top_n * 3, len(rerank_docs)),  # 多取一些，去重后再筛 top_n
+                api_key=self.api_key
+            )
+        except Exception as e:
+            print(f"  [警告] Reranker API 抛出异常: {e}，将自动尝试纯文本语义降级重排...")
+            resp = None
+
+        # 检查是否为图片 URL 无法下载导致的报错，如果是则进行优雅降级
+        is_failed = (resp is None) or (resp.status_code != HTTPStatus.OK)
+        is_download_error = is_failed and resp and (
+            "download" in resp.message.lower() or 
+            "url" in resp.message.lower() or 
+            "invalidparameter" in resp.message.lower()
         )
 
-        if resp.status_code == HTTPStatus.OK:
+        if is_failed:
+            if resp and not is_download_error:
+                # 若为其他致命错误（如 API_KEY 错误），直接报错
+                raise Exception(f"Reranker API 调用异常 ({resp.status_code}): {resp.message}")
+
+            err_msg = resp.message if resp else "网络请求超时"
+            print(f"  [优雅降级] 百炼下载图片失败或超时 ({err_msg})，触发纯文本语义兜底重排...")
+            
+            # 重建纯文本 Rerank 文档 (图片全量降级为 AI 描述文本参与重排，100% 避免下载 URL 报错)
+            rerank_docs = []
+            index_map = {}
+            for orig_idx, doc in enumerate(documents):
+                payload = doc.get("payload", {})
+                if payload.get("type") == "text":
+                    index_map[len(rerank_docs)] = orig_idx
+                    rerank_docs.append({"text": payload.get("content", "")})
+                else:
+                    caption = payload.get("image_caption", "")
+                    index_map[len(rerank_docs)] = orig_idx
+                    rerank_docs.append({"text": caption if caption else "图片内容"})
+
+            # 重新发起纯文本重排序请求
+            resp = dashscope.TextReRank.call(
+                model=self.model_name,
+                query={"text": query},
+                documents=rerank_docs,
+                top_n=top_n,
+                api_key=self.api_key
+            )
+
+        if resp and resp.status_code == HTTPStatus.OK:
             results = resp.output.results
 
             # 合并分数：同一原始文档可能有多个 API 条目，取最高分
@@ -109,4 +152,5 @@ class BailianRerankerService:
 
             return final_results
         else:
-            raise Exception(f"Reranker API 调用失败 ({resp.status_code}): {resp.message}")
+            err_final = resp.message if resp else "重排请求失败"
+            raise Exception(f"Reranker 最终调用失败: {err_final}")
