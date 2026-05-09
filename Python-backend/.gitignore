@@ -152,8 +152,7 @@ cython_debug/
 .vscode/
 
 # Project Specific
-data/parents/
-data/image_caption_cache.json
+data/
 uploads/
 temp_images/
 fastembed_cache/

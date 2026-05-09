@@ -11,3 +11,5 @@ dashscope
 fastembed
 aiofiles
 pillow
+langgraph
+langchain-core
