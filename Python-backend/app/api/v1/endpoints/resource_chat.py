@@ -72,11 +72,11 @@ async def plan_chat(
     except Exception:
         pass
 
-    # 获取对话历史（按计划隔离）
+    # 获取对话历史（按当前会话隔离）
     chat_history = []
     try:
         history = java_client.get_dialogue_history(
-            user_id=user_id, plan_id=plan_id_int, limit=30
+            user_id=user_id, plan_id=plan_id_int, session_id=session_id, limit=30
         )
         for h in history:
             chat_history.append({
@@ -139,15 +139,31 @@ async def plan_chat(
 
     async def stream():
         ai_response_parts = []
+        module_list = []
+        orchestrated_content = None
+        quiz_questions = None
+        quiz_config = None
         try:
             graph = get_learning_graph()
             async for event in graph.astream(initial_state, stream_mode="updates"):
                 for node_name, node_output in event.items():
                     if node_output is None:
                         continue
+                    # 收集编排结果用于持久化
+                    if isinstance(node_output, dict):
+                        if node_output.get("orchestrated_content"):
+                            orchestrated_content = node_output["orchestrated_content"]
+                        if node_output.get("module_list"):
+                            module_list = node_output["module_list"]
+                        if node_output.get("quiz_questions"):
+                            quiz_questions = node_output["quiz_questions"]
+                        if node_output.get("quiz_config"):
+                            quiz_config = node_output["quiz_config"]
                     # 使用 sse_bridge 翻译 graph 事件为前端格式
                     for sse_data in graph_step_to_sse(node_name, node_output):
                         yield sse_data
+                        # 持久化画像更新
+                        _persist_profile_update(sse_data, user_id)
                         # 收集 AI 回复文本
                         if '"chunk"' in sse_data:
                             try:
@@ -155,6 +171,17 @@ async def plan_chat(
                                 ai_response_parts.append(d.get("content", ""))
                             except Exception:
                                 pass
+
+            # 用户确认后，将生成的学习资源保存到数据库
+            if breakdown_confirmed and plan_id_int:
+                resource_ids = _save_modules_as_resources(plan_id_int, module_list, orchestrated_content)
+                # 保存任务分解为对话记录并关联资源ID
+                if parsed_breakdown:
+                    _save_breakdown_dialogue(user_id, session_id, plan_id_int, parsed_breakdown, resource_ids)
+
+            # 题目生成后，保存到学习资源库
+            if quiz_questions and plan_id_int:
+                _save_quiz_resource(plan_id_int, quiz_questions, quiz_config)
 
             yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
 
@@ -282,14 +309,26 @@ async def generate_single_resource(
     }
 
     async def stream():
+        orchestrated_content = None
+        module_list = []
         try:
             graph = get_learning_graph()
             async for event in graph.astream(initial_state, stream_mode="updates"):
                 for node_name, node_output in event.items():
                     if node_output is None:
                         continue
+                    # 收集编排结果用于持久化
+                    if isinstance(node_output, dict):
+                        if node_output.get("orchestrated_content"):
+                            orchestrated_content = node_output["orchestrated_content"]
+                        if node_output.get("module_list"):
+                            module_list = node_output["module_list"]
                     for sse_data in graph_step_to_sse(node_name, node_output):
                         yield sse_data
+                        _persist_profile_update(sse_data, user_id)
+
+            # 持久化生成的资源内容到数据库
+            _save_resource_content(module_id_int, orchestrated_content, module_list)
 
             yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
 
@@ -310,3 +349,141 @@ async def generate_single_resource(
 
 async def _error_stream(message: str) -> AsyncGenerator[str, None]:
     yield f'data: {json.dumps({"type": "error", "content": message}, ensure_ascii=False)}\n\n'
+
+
+def _persist_profile_update(sse_data: str, user_id: int):
+    """从 SSE 事件中提取画像更新并持久化到数据库"""
+    try:
+        if '"profile_update"' not in sse_data:
+            return
+        d = json.loads(sse_data.replace("data: ", "").strip())
+        if d.get("type") != "profile_update":
+            return
+        dimensions = d.get("dimensions", {})
+        updates = dimensions.get("updates")
+        if not updates:
+            return
+        reason = dimensions.get("reason", "对话分析自动更新")
+        logger.info(f"[画像持久化] 保存用户 {user_id} 的画像更新: {reason}")
+        java_client.save_user_profile(user_id, updates, reason)
+        logger.info(f"[画像持久化] 画像保存成功")
+    except Exception as e:
+        logger.warning(f"[画像持久化] 保存失败: {e}")
+
+
+def _save_breakdown_dialogue(user_id: int, session_id: str, plan_id: int, breakdown: dict, resource_ids: list = None):
+    """将任务分解保存为对话记录（intent_type=task_breakdown），并关联资源ID"""
+    try:
+        modules = breakdown.get("modules", [])
+        text = json.dumps(breakdown, ensure_ascii=False)
+        result = java_client.create_dialogue(
+            user_id=user_id,
+            session_id=session_id,
+            conversation_text=text,
+            dialogue_type="AI",
+            plan_id=plan_id,
+            intent_type="task_breakdown",
+        )
+        dialogue_id = result.get("data", {}).get("id") if isinstance(result, dict) else None
+        # 关联第一个资源ID（主资源）
+        if dialogue_id and resource_ids:
+            try:
+                java_client.update_dialogue_resource_id(dialogue_id, resource_ids[0])
+            except Exception as e:
+                logger.warning(f"[任务分解持久化] 关联资源ID失败: {e}")
+        logger.info(f"[任务分解持久化] 已保存任务分解，{len(modules)} 个模块")
+    except Exception as e:
+        logger.warning(f"[任务分解持久化] 保存失败: {e}")
+
+
+def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None):
+    """将生成的题目保存为 quiz 类型的学习资源"""
+    try:
+        if not questions:
+            return
+        config = quiz_config or {}
+        module_data = {
+            "title": config.get("title", "练习题"),
+            "description": config.get("description", ""),
+            "questions": [
+                {
+                    "index": i,
+                    "type": q.get("question_type", "short_answer"),
+                    "question": q.get("question_text", ""),
+                    "options": q.get("options"),
+                    "correctAnswer": q.get("correct_answer", ""),
+                    "explanation": q.get("explanation", ""),
+                    "difficulty": q.get("difficulty", 3),
+                    "points": 20,
+                }
+                for i, q in enumerate(questions)
+            ],
+            "totalPoints": len(questions) * 20,
+            "estimatedMinutes": len(questions) * 2,
+        }
+        # 获取当前计划最大的 moduleOrder
+        existing = java_client.get_plan_resources(plan_id)
+        max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
+        java_client.create_resource(
+            plan_id=plan_id,
+            module_type="quiz",
+            module_data=json.dumps(module_data, ensure_ascii=False),
+            module_order=max_order + 1,
+            status=2,
+            generated_by_agent="quiz_generator",
+        )
+        logger.info(f"[资源持久化] 已保存题目资源到计划 {plan_id}，共 {len(questions)} 题")
+    except Exception as e:
+        logger.warning(f"[资源持久化] 保存题目资源失败: {e}")
+
+
+def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_content: dict = None) -> list:
+    """将确认后的学习模块保存为 learning_resource 记录，返回创建的资源ID列表"""
+    try:
+        if not module_list:
+            return []
+        resources = []
+        for i, mod in enumerate(module_list):
+            module_type = mod.get("module_type", "document")
+            module_data = {
+                "title": mod.get("title", f"模块 {i + 1}"),
+                "content": mod.get("content", ""),
+                "description": mod.get("description", ""),
+                "key_concepts": mod.get("metadata", {}).get("key_concepts", []),
+                "module_title": mod.get("title", f"模块 {i + 1}"),
+                "estimated_hours": mod.get("estimated_hours", 2),
+            }
+            resources.append({
+                "planId": plan_id,
+                "moduleType": module_type,
+                "moduleData": json.dumps(module_data, ensure_ascii=False),
+                "moduleOrder": mod.get("order", i + 1),
+                "status": 2,
+                "generatedByAgent": "content_orchestrator",
+            })
+        if resources:
+            result = java_client.create_resources_bulk(resources)
+            resource_ids = [r.get("id") for r in (result or []) if r.get("id")]
+            logger.info(f"[资源持久化] 已保存 {len(resources)} 个学习资源到计划 {plan_id}")
+            return resource_ids
+    except Exception as e:
+        logger.warning(f"[资源持久化] 保存模块资源失败: {e}")
+    return []
+
+
+def _save_resource_content(resource_id: int, orchestrated_content: dict = None, module_list: list = None):
+    """将生成的资源内容持久化到数据库"""
+    try:
+        if not orchestrated_content and not module_list:
+            return
+        result_data = {
+            "title": orchestrated_content.get("title", "") if orchestrated_content else "",
+            "description": orchestrated_content.get("description", "") if orchestrated_content else "",
+            "modules": module_list or (orchestrated_content.get("modules", []) if orchestrated_content else []),
+            "summary": orchestrated_content.get("summary", "") if orchestrated_content else "",
+        }
+        module_data_json = json.dumps(result_data, ensure_ascii=False)
+        java_client.update_resource_content(resource_id, module_data_json, 2)
+        logger.info(f"[资源持久化] 资源 {resource_id} 内容已保存")
+    except Exception as e:
+        logger.warning(f"[资源持久化] 保存失败: {e}")

@@ -1,10 +1,14 @@
 import logging
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api.v1.endpoints import upload, query, agent_chat
 from app.api.v1.endpoints import profile_builder, plan_generator, resource_chat
 from app.core.config import settings
+from app.services.mq_consumer import mq_consumer
+from app.services.mq_producer import mq_producer
 import uvicorn
 
 # ==================== 日志配置 ====================
@@ -18,7 +22,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
-app = FastAPI(title="AURA 多模态 RAG + 多智能体学习系统")
+# ==================== 生命周期管理 ====================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期：启动时连接 MQ，关闭时清理"""
+    logger.info("=" * 60)
+    logger.info("AURA 多智能体学习系统启动")
+    logger.info(f"  调试模式: {settings.DEBUG}")
+    logger.info(f"  服务端口: {settings.PORT}")
+    logger.info(f"  Java 后端: {settings.JAVA_BACKEND_URL}")
+    logger.info(f"  Qdrant: {settings.QDRANT_URL}")
+    logger.info("=" * 60)
+
+    logger.info("正在启动 MQ 消费者...")
+    await mq_consumer.start()
+    # 如果 MQ 未就绪（start 内部失败），consumer.running 为 False，不影响应用启动
+    if mq_consumer.running:
+        # 后台保活任务
+        async def keepalive():
+            while mq_consumer.running:
+                await asyncio.sleep(5)
+        asyncio.create_task(keepalive())
+    yield
+    # 关闭时清理
+    await mq_consumer.stop()
+    await mq_producer.close()
+    logger.info("MQ 消费者已关闭")
+
+
+app = FastAPI(title="AURA 多模态 RAG + 多智能体学习系统", lifespan=lifespan)
 
 # 跨域配置
 app.add_middleware(
@@ -46,16 +79,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.get("/")
 async def root():
     return {"message": "AURA Python 后端服务已启动 (RAG + 多智能体)"}
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info("=" * 60)
-    logger.info("AURA 多智能体学习系统启动")
-    logger.info(f"  调试模式: {settings.DEBUG}")
-    logger.info(f"  服务端口: {settings.PORT}")
-    logger.info(f"  Java 后端: {settings.JAVA_BACKEND_URL}")
-    logger.info(f"  Qdrant: {settings.QDRANT_URL}")
-    logger.info("=" * 60)
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=settings.PORT, reload=settings.DEBUG)

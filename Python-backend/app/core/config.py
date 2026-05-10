@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     MIMO_BASE_URL: str = "https://token-plan-cn.xiaomimimo.com/v1"
     MIMO_MODEL_NAME: str = "mimo-v2.5"
 
+    # RabbitMQ 设置 (异步任务队列)
+    RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
+
     # Java 后端设置 (多智能体系统数据持久化)
     JAVA_BACKEND_URL: str = "http://localhost:8080"
 

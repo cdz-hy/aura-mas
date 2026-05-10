@@ -47,6 +47,7 @@ async def agent_chat(request: ChatRequest):
                 history = java_client.get_dialogue_history(
                     user_id=request.user_id,
                     plan_id=request.plan_id,
+                    session_id=request.session_id,
                     limit=30,
                 )
                 for h in history:
@@ -143,6 +144,10 @@ async def agent_chat(request: ChatRequest):
                             text = evt.get("data", {}).get("text", "")
                             if text:
                                 ai_response_parts.append(text)
+
+                        # 持久化画像更新
+                        if evt.get("event_type") == "profile_update":
+                            _persist_profile_update_raw(evt, request.user_id)
 
                     step = node_output.get("current_step", "")
                     if step:
@@ -243,6 +248,7 @@ async def confirm_task(request: ChatRequest):
                 history = java_client.get_dialogue_history(
                     user_id=request.user_id,
                     plan_id=request.plan_id,
+                    session_id=request.session_id,
                     limit=30,
                 )
                 for h in history:
@@ -327,6 +333,9 @@ async def confirm_task(request: ChatRequest):
                             text = evt.get("data", {}).get("text", "")
                             if text:
                                 ai_response_parts.append(text)
+                        # 持久化画像更新
+                        if evt.get("event_type") == "profile_update":
+                            _persist_profile_update_raw(evt, request.user_id)
 
                     step = node_output.get("current_step", "")
                     if step:
@@ -379,3 +388,18 @@ async def confirm_task(request: ChatRequest):
 def _sse_event(data: dict) -> str:
     """格式化 SSE 事件"""
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _persist_profile_update_raw(evt: dict, user_id: int):
+    """从原始 graph 事件中提取画像更新并持久化到数据库"""
+    try:
+        data = evt.get("data", {})
+        updates = data.get("updates")
+        if not updates:
+            return
+        reason = data.get("reason", "对话分析自动更新")
+        logger.info(f"[画像持久化] 保存用户 {user_id} 的画像更新: {reason}")
+        java_client.save_user_profile(user_id, updates, reason)
+        logger.info(f"[画像持久化] 画像保存成功")
+    except Exception as e:
+        logger.warning(f"[画像持久化] 保存失败: {e}")

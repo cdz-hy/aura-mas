@@ -3,13 +3,14 @@ LangGraph 多智能体工作流图 - 个性化学习资源生成系统
 """
 import logging
 from typing import Dict, Any, List, AsyncGenerator
+from concurrent.futures import ThreadPoolExecutor
 from langgraph.graph import StateGraph, END
 from app.agents.schemas import (
     AgentState,
     NODE_CONTROLLER, NODE_TASK_DECOMPOSER, NODE_SIMPLE_ANSWER,
-    NODE_RAG_RETRIEVER, NODE_CONTENT_ORCHESTRATOR, NODE_REVIEWER,
-    NODE_RESOURCE_GENERATOR, NODE_QUIZ_GENERATOR, NODE_QUIZ_GRADER,
-    NODE_PROFILE_MAINTAINER, NODE_HUMAN_CONFIRM,
+    NODE_RAG_RETRIEVER, NODE_RESOURCE_GENERATOR, NODE_QUIZ_GENERATOR,
+    NODE_QUIZ_GRADER, NODE_PROFILE_MAINTAINER, NODE_HUMAN_CONFIRM,
+    NODE_REVIEW_ORCHESTRATE,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
     INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP,
 )
@@ -45,32 +46,26 @@ def route_after_controller(state: AgentState) -> str:
 
 
 def route_after_rag(state: AgentState) -> str:
-    """RAG 检索之后的路由 - 先审查再编排"""
+    """RAG 检索之后的路由 - 审查与编排并行"""
     rag_sufficient = state.get("rag_sufficient", False)
     if not rag_sufficient:
         logger.info(f"  [路由] RAG 检索不足 -> 简答智能体")
         return NODE_SIMPLE_ANSWER
-    logger.info(f"  [路由] RAG 检索完成 -> 审查智能体")
-    return NODE_REVIEWER
+    logger.info(f"  [路由] RAG 检索完成 -> 审查编排并行节点")
+    return NODE_REVIEW_ORCHESTRATE
 
 
-def route_after_review(state: AgentState) -> str:
-    """审查之后的路由"""
+def route_after_review_orchestrate(state: AgentState) -> str:
+    """审查编排并行之后的路由"""
+    error = state.get("error")
+    if error:
+        logger.warning(f"  [路由] 审查编排未通过 -> 主控智能体 (重新决策)")
+        return NODE_CONTROLLER
     review_passed = state.get("review_passed", True)
     if not review_passed:
         logger.warning(f"  [路由] 审查未通过 -> 主控智能体 (重新决策)")
         return NODE_CONTROLLER
-    logger.info(f"  [路由] 审查通过 -> 内容编排智能体")
-    return NODE_CONTENT_ORCHESTRATOR
-
-
-def route_after_orchestrator(state: AgentState) -> str:
-    """编排之后的路由"""
-    error = state.get("error")
-    if error:
-        logger.error(f"  [路由] 编排出错 -> 主控智能体")
-        return NODE_CONTROLLER
-    logger.info(f"  [路由] 编排完成 -> 画像维护智能体")
+    logger.info(f"  [路由] 审查编排完成 -> 画像维护智能体")
     return NODE_PROFILE_MAINTAINER
 
 
@@ -127,14 +122,82 @@ def route_after_quiz_grader(state: AgentState) -> str:
 
 def route_after_resource_generator(state: AgentState) -> str:
     """自主生成之后的路由"""
-    logger.info(f"  [路由] 资源自主生成完成 -> 内容编排智能体")
-    return NODE_CONTENT_ORCHESTRATOR
+    logger.info(f"  [路由] 资源自主生成完成 -> 审查编排并行节点")
+    return NODE_REVIEW_ORCHESTRATE
 
 
 def route_after_profile_maintainer(state: AgentState) -> str:
     """画像维护之后的路由"""
     logger.info(f"  [路由] 画像维护完成 -> END")
     return END
+
+
+# ==================== 审查编排并行节点 ====================
+
+def review_and_orchestrate_node(state: AgentState) -> Dict[str, Any]:
+    """审查与编排并行执行节点 - 两者同时启动，审查不通过则丢弃编排结果"""
+    logger.info(f"{'='*60}")
+    logger.info(f"  [审查编排节点] 开始并行处理")
+
+    stream_events = []
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        review_future = executor.submit(reviewer_node, state)
+        orchestrate_future = executor.submit(content_orchestrator_node, state)
+
+        review_result = review_future.result()
+        orchestrate_result = orchestrate_future.result()
+
+    # 收集审查事件
+    review_events = review_result.get("stream_events", [])
+    stream_events.extend(review_events)
+
+    review_passed = review_result.get("review_passed", True)
+    review_feedback = review_result.get("review_feedback", "")
+    review_suggestions = review_result.get("review_suggestions", [])
+
+    # 审查未通过 → 丢弃编排结果，返回错误让主控重试
+    if not review_passed:
+        logger.warning(f"  [审查编排节点] 审查未通过，丢弃编排结果")
+        logger.info(f"{'='*60}")
+        return {
+            "review_passed": False,
+            "review_feedback": review_feedback,
+            "review_suggestions": review_suggestions,
+            "error": f"内容审查未通过: {review_feedback}",
+            "current_step": f"审查编排节点: 审查未通过 - {review_feedback[:80]}",
+            "stream_events": stream_events,
+        }
+
+    # 编排出错 → 返回错误
+    orchestrate_error = orchestrate_result.get("error")
+    if orchestrate_error:
+        logger.error(f"  [审查编排节点] 编排出错: {orchestrate_error}")
+        logger.info(f"{'='*60}")
+        stream_events.extend(orchestrate_result.get("stream_events", []))
+        return {
+            "error": orchestrate_error,
+            "current_step": f"审查编排节点: 编排出错",
+            "stream_events": stream_events,
+        }
+
+    # 审查通过 + 编排成功 → 合并结果
+    logger.info(f"  [审查编排节点] 审查通过，编排完成")
+    logger.info(f"    编排标题: {orchestrate_result.get('orchestrated_content', {}).get('title', '未命名')}")
+    logger.info(f"    模块数: {len(orchestrate_result.get('module_list', []))}")
+    logger.info(f"{'='*60}")
+
+    stream_events.extend(orchestrate_result.get("stream_events", []))
+
+    return {
+        "orchestrated_content": orchestrate_result.get("orchestrated_content"),
+        "module_list": orchestrate_result.get("module_list", []),
+        "review_passed": True,
+        "review_feedback": review_feedback,
+        "review_suggestions": review_suggestions,
+        "current_step": orchestrate_result.get("current_step", "审查编排完成"),
+        "stream_events": stream_events,
+    }
 
 
 # ==================== 构建工作流图 ====================
@@ -150,14 +213,13 @@ def build_learning_graph() -> StateGraph:
     graph.add_node(NODE_TASK_DECOMPOSER, task_decomposer_node)
     graph.add_node(NODE_SIMPLE_ANSWER, simple_answer_node)
     graph.add_node(NODE_RAG_RETRIEVER, rag_retriever_node)
-    graph.add_node(NODE_CONTENT_ORCHESTRATOR, content_orchestrator_node)
-    graph.add_node(NODE_REVIEWER, reviewer_node)
+    graph.add_node(NODE_REVIEW_ORCHESTRATE, review_and_orchestrate_node)
     graph.add_node(NODE_RESOURCE_GENERATOR, resource_generator_node)
     graph.add_node(NODE_QUIZ_GENERATOR, quiz_generator_node)
     graph.add_node(NODE_QUIZ_GRADER, quiz_grader_node)
     graph.add_node(NODE_PROFILE_MAINTAINER, profile_maintainer_node)
     graph.add_node(NODE_HUMAN_CONFIRM, _human_confirm_node)
-    logger.info("已注册 11 个节点")
+    logger.info("已注册 10 个节点")
 
     # 设置入口
     graph.set_entry_point(NODE_CONTROLLER)
@@ -195,30 +257,20 @@ def build_learning_graph() -> StateGraph:
         }
     )
 
-    # RAG 检索 -> 审查（审查通过后再编排）
+    # RAG 检索 -> 审查编排并行节点（或简答）
     graph.add_conditional_edges(
         NODE_RAG_RETRIEVER,
         route_after_rag,
         {
-            NODE_REVIEWER: NODE_REVIEWER,
+            NODE_REVIEW_ORCHESTRATE: NODE_REVIEW_ORCHESTRATE,
             NODE_SIMPLE_ANSWER: NODE_SIMPLE_ANSWER,
         }
     )
 
-    # 审查 -> 编排或回到主控
+    # 审查编排并行 -> 画像维护或回到主控
     graph.add_conditional_edges(
-        NODE_REVIEWER,
-        route_after_review,
-        {
-            NODE_CONTENT_ORCHESTRATOR: NODE_CONTENT_ORCHESTRATOR,
-            NODE_CONTROLLER: NODE_CONTROLLER,
-        }
-    )
-
-    # 编排 -> 画像维护
-    graph.add_conditional_edges(
-        NODE_CONTENT_ORCHESTRATOR,
-        route_after_orchestrator,
+        NODE_REVIEW_ORCHESTRATE,
+        route_after_review_orchestrate,
         {
             NODE_PROFILE_MAINTAINER: NODE_PROFILE_MAINTAINER,
             NODE_CONTROLLER: NODE_CONTROLLER,
@@ -250,11 +302,11 @@ def build_learning_graph() -> StateGraph:
         {NODE_PROFILE_MAINTAINER: NODE_PROFILE_MAINTAINER}
     )
 
-    # 自主生成 -> 编排
+    # 自主生成 -> 审查编排并行节点
     graph.add_conditional_edges(
         NODE_RESOURCE_GENERATOR,
         route_after_resource_generator,
-        {NODE_CONTENT_ORCHESTRATOR: NODE_CONTENT_ORCHESTRATOR}
+        {NODE_REVIEW_ORCHESTRATE: NODE_REVIEW_ORCHESTRATE}
     )
 
     # 画像维护 -> 结束

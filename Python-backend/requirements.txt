@@ -13,3 +13,4 @@ aiofiles
 pillow
 langgraph
 langchain-core
+aio-pika

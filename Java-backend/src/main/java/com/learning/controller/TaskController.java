@@ -5,11 +5,14 @@ import com.learning.dto.TaskDispatchRequest;
 import com.learning.entity.ResourceGenerationTask;
 import com.learning.service.LearningResourceService;
 import com.learning.service.TaskDispatchService;
+import com.learning.service.TaskSseService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @Tag(name = "任务管理")
 @RestController
@@ -19,6 +22,7 @@ public class TaskController {
 
     private final TaskDispatchService taskDispatchService;
     private final LearningResourceService resourceService;
+    private final TaskSseService taskSseService;
 
     @Operation(summary = "分派生成任务")
     @PostMapping("/dispatch")
@@ -38,6 +42,12 @@ public class TaskController {
     public Result<Void> retryTask(@PathVariable Long taskId) {
         taskDispatchService.retryTask(taskId);
         return Result.success();
+    }
+
+    @Operation(summary = "SSE 订阅任务状态推送")
+    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamTasks(@RequestParam Long userId) {
+        return taskSseService.subscribe(userId);
     }
 
     @Operation(summary = "内部接口：创建资源生成任务")

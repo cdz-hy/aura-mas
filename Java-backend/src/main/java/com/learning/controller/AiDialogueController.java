@@ -33,25 +33,49 @@ public class AiDialogueController {
         return Result.success(dialogueService.createDialogue(userId, sessionId, planId, conversationText, dialogueType, intentType));
     }
 
+    @Operation(summary = "内部接口：更新对话记录的资源ID")
+    @PutMapping("/api/internal/dialogue/{dialogueId}/resource")
+    public Result<Void> updateResourceId(
+            @PathVariable Long dialogueId,
+            @RequestParam Long resourceId) {
+        dialogueService.updateResourceId(dialogueId, resourceId);
+        return Result.success();
+    }
+
     @Operation(summary = "内部接口：获取对话历史")
     @GetMapping("/api/internal/dialogue/history")
     public Result<List<AiDialogue>> getHistory(
             @RequestParam Long userId,
             @RequestParam(required = false) Long planId,
+            @RequestParam(required = false) String sessionId,
             @RequestParam(required = false) String intentType,
             @RequestParam(defaultValue = "50") int limit) {
+        if (sessionId != null && !sessionId.isEmpty()) {
+            return Result.success(dialogueService.getHistoryBySession(sessionId, planId, limit));
+        }
         return Result.success(dialogueService.getHistory(userId, planId, intentType, limit));
     }
 
     // ===== User-facing endpoints (JWT authenticated) =====
 
+    @Operation(summary = "获取指定学习计划的所有对话历史")
+    @GetMapping("/api/dialogue/history")
+    public Result<List<AiDialogue>> getDialogueHistory(
+            Authentication authentication,
+            @RequestParam Long planId,
+            @RequestParam(defaultValue = "200") int limit) {
+        Long userId = (Long) authentication.getPrincipal();
+        return Result.success(dialogueService.getHistoryByPlan(userId, planId, limit));
+    }
+
     @Operation(summary = "获取会话列表")
     @GetMapping("/api/dialogue/sessions")
     public Result<List<Map<String, Object>>> getSessions(
             Authentication authentication,
-            @RequestParam(required = false) String intentType) {
+            @RequestParam(required = false) String intentType,
+            @RequestParam(required = false) Long planId) {
         Long userId = (Long) authentication.getPrincipal();
-        return Result.success(dialogueService.getSessionList(userId, intentType));
+        return Result.success(dialogueService.getSessionList(userId, intentType, planId));
     }
 
     @Operation(summary = "获取会话消息历史")

@@ -49,6 +49,24 @@ public class AiDialogueService {
         return dialogueMapper.selectList(wrapper);
     }
 
+    public List<AiDialogue> getHistoryBySession(String sessionId, Long planId, int limit) {
+        LambdaQueryWrapper<AiDialogue> wrapper = new LambdaQueryWrapper<AiDialogue>()
+                .eq(AiDialogue::getSessionId, sessionId)
+                .eq(planId != null, AiDialogue::getPlanId, planId)
+                .orderByAsc(AiDialogue::getId)
+                .last("LIMIT " + limit);
+        return dialogueMapper.selectList(wrapper);
+    }
+
+    public List<AiDialogue> getHistoryByPlan(Long userId, Long planId, int limit) {
+        LambdaQueryWrapper<AiDialogue> wrapper = new LambdaQueryWrapper<AiDialogue>()
+                .eq(AiDialogue::getUserId, userId)
+                .eq(AiDialogue::getPlanId, planId)
+                .orderByAsc(AiDialogue::getId)
+                .last("LIMIT " + limit);
+        return dialogueMapper.selectList(wrapper);
+    }
+
     public List<AiDialogue> getHistoryBySession(String sessionId, int limit) {
         LambdaQueryWrapper<AiDialogue> wrapper = new LambdaQueryWrapper<AiDialogue>()
                 .eq(AiDialogue::getSessionId, sessionId)
@@ -57,11 +75,12 @@ public class AiDialogueService {
         return dialogueMapper.selectList(wrapper);
     }
 
-    public List<Map<String, Object>> getSessionList(Long userId, String intentType) {
-        // Get all dialogues for this user+intent, grouped by session
+    public List<Map<String, Object>> getSessionList(Long userId, String intentType, Long planId) {
+        // Get all dialogues for this user+intent+plan, grouped by session
         LambdaQueryWrapper<AiDialogue> wrapper = new LambdaQueryWrapper<AiDialogue>()
                 .eq(AiDialogue::getUserId, userId)
                 .eq(intentType != null, AiDialogue::getIntentType, intentType)
+                .eq(planId != null, AiDialogue::getPlanId, planId)
                 .orderByDesc(AiDialogue::getId);
         List<AiDialogue> all = dialogueMapper.selectList(wrapper);
 
@@ -81,13 +100,6 @@ public class AiDialogueService {
                     .orElse("新对话");
             if (title.length() > 50) title = title.substring(0, 50) + "...";
 
-            // Get plan_id from any message in the session
-            Long planId = msgs.stream()
-                    .map(AiDialogue::getPlanId)
-                    .filter(Objects::nonNull)
-                    .findFirst()
-                    .orElse(null);
-
             Map<String, Object> session = new LinkedHashMap<>();
             session.put("sessionId", entry.getKey());
             session.put("intentType", intentType);
@@ -99,6 +111,15 @@ public class AiDialogueService {
             sessions.add(session);
         }
         return sessions;
+    }
+
+    @Transactional
+    public void updateResourceId(Long dialogueId, Long resourceId) {
+        AiDialogue dialogue = dialogueMapper.selectById(dialogueId);
+        if (dialogue != null) {
+            dialogue.setResourceId(resourceId);
+            dialogueMapper.updateById(dialogue);
+        }
     }
 
     @Transactional

@@ -101,6 +101,7 @@ import type { QuizData } from '@/types/quiz'
 import { QUESTION_TYPE_LABELS } from '@/types/quiz'
 
 const props = defineProps<{ data: QuizData | null }>()
+const emit = defineEmits<{ submit: [answers: Record<number, any>] }>()
 
 const answers = ref<Record<number, any>>({})
 const submitted = ref(false)
@@ -176,6 +177,7 @@ function submitQuiz() {
   })
   score.value = Math.round((correct / props.data!.questions.length) * 100)
   submitted.value = true
+  emit('submit', { ...answers.value })
 }
 
 function resetQuiz() {

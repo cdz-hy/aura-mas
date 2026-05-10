@@ -1,9 +1,9 @@
 import request from './request'
 import type { ChatSession, ChatMessage } from '@/types/chat'
 
-export function getSessions(intentType: string) {
+export function getSessions(intentType: string, planId?: number) {
   return request.get<any, { data: ChatSession[] }>('/dialogue/sessions', {
-    params: { intentType },
+    params: { intentType, planId },
   })
 }
 
@@ -19,4 +19,10 @@ export function deleteSession(sessionId: string) {
 
 export function linkSessionToPlan(sessionId: string, planId: number) {
   return request.put<any, { data: null }>(`/dialogue/session/${sessionId}/link-plan/${planId}`)
+}
+
+export function getDialogueHistoryByPlan(planId: number, limit = 200) {
+  return request.get<any, { data: ChatMessage[] }>('/dialogue/history', {
+    params: { planId, limit },
+  })
 }

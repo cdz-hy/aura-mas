@@ -9,17 +9,16 @@ export function getResource(resourceId: number) {
   return request.get<any, { data: LearningResource }>(`/resource/${resourceId}`)
 }
 
-export function generateResource(data: {
+export function dispatchTask(data: {
   planId: number
-  moduleId?: number
-  resourceType: string
-  params?: Record<string, any>
+  resourceId: number
+  agentChain?: string
 }) {
-  return request.post<any, { data: { taskId: number } }>('/resource/generate', data)
+  return request.post<any, { data: ResourceGenerationTask }>('/task/dispatch', data)
 }
 
 export function getTaskStatus(taskId: number) {
-  return request.get<any, { data: ResourceGenerationTask }>(`/resource/task/${taskId}`)
+  return request.get<any, { data: ResourceGenerationTask }>(`/task/${taskId}`)
 }
 
 export function updateResourceContent(resourceId: number, moduleData: Record<string, any>, status: number) {

@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { createSSEConnection, cancelSSE } from '@/utils/sse'
 import { issueTicket } from '@/api/auth'
-import { getSessions, getSessionMessages, deleteSession as apiDeleteSession } from '@/api/chat'
+import { getSessions, getSessionMessages, getDialogueHistoryByPlan, deleteSession as apiDeleteSession } from '@/api/chat'
 import type { ChatSession, ChatMessage } from '@/types/chat'
 
 const moduleTypeLabels: Record<string, string> = {
@@ -22,6 +22,13 @@ export const useChatStore = defineStore('chat', () => {
   const pendingTaskBreakdown = ref<any>(null)
   const pendingModules = ref<any[]>([])
   const awaitingConfirmation = ref(false)
+  // 用户确认后，跳过 onDone 中的模块消息推送（避免重复）
+  let skipNextModulesPush = false
+
+  // 题目资源事件（供 PlanDetailView 拦截并创建侧栏卡片）
+  const lastQuizResource = ref<{ questions: any[] } | null>(null)
+  // 批改结果事件（供 PlanDetailView 显示在中间面板）
+  const lastGradingResult = ref<Record<string, any> | null>(null)
 
   let currentSSE: EventSource | null = null
   let currentPlanId = ''
@@ -34,10 +41,49 @@ export const useChatStore = defineStore('chat', () => {
     sessionsLoading.value = true
     currentPlanId = planId
     try {
-      const res = await getSessions('chat')
-      sessions.value = (res.data || []).filter((s: ChatSession) => !s.planId || String(s.planId) === planId)
+      const res = await getSessions(undefined, Number(planId))
+      sessions.value = res.data || []
     } catch (e) {
       console.error('Failed to load sessions:', e)
+    } finally {
+      sessionsLoading.value = false
+    }
+  }
+
+  /**
+   * 将数据库消息转为前端消息格式
+   */
+  function dbMessageToChatMessage(m: ChatMessage) {
+    if (m.intentType === 'task_breakdown') {
+      try {
+        const breakdown = JSON.parse(m.conversationText)
+        return {
+          role: 'assistant' as const,
+          content: '学习路径已生成，请确认',
+          type: 'confirm',
+          breakdown,
+        }
+      } catch {}
+    }
+    return {
+      role: m.dialogueType === 'USER' ? 'user' as const : 'assistant' as const,
+      content: m.conversationText,
+    }
+  }
+
+  /**
+   * 加载指定学习计划的所有对话历史（跨会话）
+   */
+  async function loadHistoryByPlan(planId: string) {
+    sessionsLoading.value = true
+    currentPlanId = planId
+    try {
+      const res = await getDialogueHistoryByPlan(Number(planId))
+      const dbMessages: ChatMessage[] = res.data || []
+      messages.value = dbMessages.map(dbMessageToChatMessage)
+    } catch (e) {
+      console.error('Failed to load plan dialogue history:', e)
+      messages.value = []
     } finally {
       sessionsLoading.value = false
     }
@@ -57,6 +103,9 @@ export const useChatStore = defineStore('chat', () => {
     pendingTaskBreakdown.value = null
     pendingModules.value = []
     awaitingConfirmation.value = false
+    lastQuizResource.value = null
+    lastGradingResult.value = null
+    skipNextModulesPush = false
   }
 
   function newSession() {
@@ -69,6 +118,8 @@ export const useChatStore = defineStore('chat', () => {
     pendingTaskBreakdown.value = null
     pendingModules.value = []
     awaitingConfirmation.value = false
+    lastQuizResource.value = null
+    lastGradingResult.value = null
   }
 
   async function selectSession(sessionId: string) {
@@ -79,15 +130,15 @@ export const useChatStore = defineStore('chat', () => {
     streamBuffer.value = ''
     pendingTaskBreakdown.value = null
     awaitingConfirmation.value = false
+    lastQuizResource.value = null
+    lastGradingResult.value = null
+    skipNextModulesPush = false
     activeSessionId.value = sessionId
 
     try {
       const res = await getSessionMessages(sessionId, 100)
       const dbMessages: ChatMessage[] = res.data || []
-      messages.value = dbMessages.map(m => ({
-        role: m.dialogueType === 'USER' ? 'user' : 'assistant',
-        content: m.conversationText,
-      }))
+      messages.value = dbMessages.map(dbMessageToChatMessage)
     } catch (e) {
       console.error('Failed to load session messages:', e)
       messages.value = []
@@ -160,25 +211,13 @@ export const useChatStore = defineStore('chat', () => {
             if (data?.type === 'quiz') {
               const questions = data.questions || []
               if (questions.length > 0) {
-                const quizMd = questions.map((q: any, i: number) => {
-                  let md = `**${i + 1}. ${q.question || q.question_text || ''}**\n`
-                  if (q.options && q.options.length) {
-                    md += q.options.map((o: string, j: number) => `  ${String.fromCharCode(65 + j)}. ${o}`).join('\n')
-                  }
-                  if (q.answer) md += `\n> **答案**: ${q.answer}`
-                  return md
-                }).join('\n\n')
-                messages.value.push({
-                  role: 'assistant',
-                  content: `### 练习题 (${questions.length} 道)\n\n${quizMd}`,
-                })
+                // 通知 PlanDetailView 创建侧栏卡片并在中间面板显示
+                lastQuizResource.value = { questions }
               }
             } else if (data?.type === 'quiz_result') {
               const r = data.result || {}
-              messages.value.push({
-                role: 'assistant',
-                content: `### 答题结果\n\n得分: ${r.score ?? '—'}\n${r.analysis || ''}`,
-              })
+              // 通知 PlanDetailView 显示批改结果
+              lastGradingResult.value = r
             }
           },
           onResourceTrigger(type, moduleId) {
@@ -188,8 +227,15 @@ export const useChatStore = defineStore('chat', () => {
             })
           },
           onDone() {
-            // 如果有编排好的学习资源模块，显示完整内容
-            if (pendingModules.value.length > 0) {
+            // 用户确认后跳过模块消息推送（已在 onNeedConfirmation 中显示过）
+            if (skipNextModulesPush) {
+              skipNextModulesPush = false
+              pendingModules.value = []
+              streamBuffer.value = ''
+              streaming.value = false
+              loadSessions(planId)
+              return
+            } else if (pendingModules.value.length > 0) {
               const mods = pendingModules.value
               const hasContent = mods.some((m: any) => m.content)
               if (hasContent) {
@@ -206,7 +252,7 @@ export const useChatStore = defineStore('chat', () => {
                   })
                 }
               } else {
-                // 任务分解模块列表
+                // 任务分解模块列表（首次对话，非确认后）
                 const moduleList = mods.map((m: any, i: number) =>
                   `**${i + 1}. ${m.title}**\n${m.description || ''}${m.estimated_hours ? ` (${m.estimated_hours}h)` : ''}`
                 ).join('\n\n')
@@ -264,6 +310,8 @@ export const useChatStore = defineStore('chat', () => {
     const breakdown = pendingTaskBreakdown.value
     pendingTaskBreakdown.value = null
     awaitingConfirmation.value = false
+    // 标记跳过下次 onDone 中的模块推送（避免重复显示学习路径）
+    skipNextModulesPush = true
     // 将已有的任务分解结果传回后端，避免状态丢失
     const extra: Record<string, string> = {}
     if (breakdown) {
@@ -291,7 +339,10 @@ export const useChatStore = defineStore('chat', () => {
     streamBuffer,
     pendingTaskBreakdown,
     awaitingConfirmation,
+    lastQuizResource,
+    lastGradingResult,
     loadSessions,
+    loadHistoryByPlan,
     resetForPlan,
     newSession,
     selectSession,

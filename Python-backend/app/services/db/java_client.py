@@ -4,9 +4,12 @@ Java 后端 HTTP 客户端 - 用于多智能体系统与 Java 后端的数据交
 """
 import json
 import base64
+import logging
 import requests
 from typing import Optional, List, Dict, Any
 from app.core.config import settings
+
+logger = logging.getLogger("java_client")
 
 
 class JavaBackendClient:
@@ -100,16 +103,23 @@ class JavaBackendClient:
             body["intentType"] = intent_type
         return self._request("POST", "/api/internal/dialogue", json=body)
 
+    def update_dialogue_resource_id(self, dialogue_id: int, resource_id: int):
+        """更新对话记录的资源ID"""
+        return self._request("PUT", f"/api/internal/dialogue/{dialogue_id}/resource", params={"resourceId": resource_id})
+
     def get_dialogue_history(
         self,
         user_id: int,
         plan_id: Optional[int] = None,
+        session_id: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """获取对话历史"""
         params = {"userId": user_id, "limit": limit}
         if plan_id:
             params["planId"] = plan_id
+        if session_id:
+            params["sessionId"] = session_id
         return self._request("GET", "/api/internal/dialogue/history", params=params)
 
     # ==================== 学习计划 ====================
@@ -222,6 +232,10 @@ class JavaBackendClient:
         """获取用户当前画像"""
         return self._request("GET", f"/api/internal/profile/current", params={"userId": user_id})
 
+    def get_resource_by_id(self, resource_id: int) -> Dict[str, Any]:
+        """获取单个学习资源"""
+        return self._request("GET", f"/api/resource/internal/{resource_id}")
+
     def update_user_profile(
         self,
         user_id: int,
@@ -234,6 +248,34 @@ class JavaBackendClient:
             "learningBehavior": json.dumps(learning_behavior, ensure_ascii=False),
             "updateReason": update_reason,
         })
+
+    def create_user_profile(
+        self,
+        user_id: int,
+        learning_behavior: Dict[str, Any],
+        update_reason: str = "初始创建",
+    ) -> Dict[str, Any]:
+        """创建用户画像（当用户无画像时使用）"""
+        return self._request("POST", "/api/internal/profile", json={
+            "userId": user_id,
+            "learningBehavior": json.dumps(learning_behavior, ensure_ascii=False),
+            "updateReason": update_reason,
+        })
+
+    def save_user_profile(
+        self,
+        user_id: int,
+        learning_behavior: Dict[str, Any],
+        update_reason: str,
+    ):
+        """保存用户画像（自动判断创建或更新）"""
+        try:
+            self.update_user_profile(user_id, learning_behavior, update_reason)
+        except Exception:
+            try:
+                self.create_user_profile(user_id, learning_behavior, update_reason)
+            except Exception as e:
+                logger.warning(f"保存用户画像失败: {e}")
 
     # ==================== 资源生成任务 ====================
 

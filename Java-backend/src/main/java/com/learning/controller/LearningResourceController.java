@@ -94,6 +94,12 @@ public class LearningResourceController {
         return Result.success(resourceService.getResourcesByPlanId(planId));
     }
 
+    @Operation(summary = "内部接口：获取资源详情")
+    @GetMapping("/internal/{resourceId}")
+    public Result<LearningResource> getResourceInternal(@PathVariable Long resourceId) {
+        return Result.success(resourceService.getResourceById(resourceId));
+    }
+
     @Operation(summary = "内部接口：更新资源状态")
     @PutMapping("/internal/{resourceId}/status")
     public Result<Void> updateResourceStatusInternal(@PathVariable Long resourceId,

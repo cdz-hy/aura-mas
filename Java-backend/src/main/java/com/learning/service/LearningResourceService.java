@@ -2,9 +2,11 @@ package com.learning.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.learning.common.ErrorCode;
+import com.learning.entity.LearningPlan;
 import com.learning.entity.LearningResource;
 import com.learning.entity.ResourceGenerationTask;
 import com.learning.exception.BusinessException;
+import com.learning.mapper.LearningPlanMapper;
 import com.learning.mapper.LearningResourceMapper;
 import com.learning.mapper.ResourceGenerationTaskMapper;
 import com.learning.mq.TaskProducer;
@@ -22,6 +24,7 @@ public class LearningResourceService {
     private final LearningResourceMapper resourceMapper;
     private final ResourceGenerationTaskMapper taskMapper;
     private final TaskProducer taskProducer;
+    private final LearningPlanMapper planMapper;
 
     public List<LearningResource> getResourcesByPlanId(Long planId) {
         return resourceMapper.selectList(
@@ -59,7 +62,10 @@ public class LearningResourceService {
         task.setCreatedAt(LocalDateTime.now());
         taskMapper.insert(task);
 
-        taskProducer.sendGenerationTask(task);
+        // 获取 userId 包含在 MQ 消息中，供 Python 消费者使用
+        LearningPlan plan = planMapper.selectById(planId);
+        Long userId = plan != null ? plan.getUserId() : null;
+        taskProducer.sendGenerationTask(task, userId);
 
         task.setTaskStatus(1);
         taskMapper.updateById(task);

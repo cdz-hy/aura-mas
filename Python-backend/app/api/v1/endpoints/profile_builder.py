@@ -67,7 +67,7 @@ async def profile_chat(
     plan_id_int = int(plan_id) if plan_id and plan_id.isdigit() else None
     chat_history = []
     try:
-        history = java_client.get_dialogue_history(user_id=user_id, plan_id=plan_id_int, limit=30)
+        history = java_client.get_dialogue_history(user_id=user_id, plan_id=plan_id_int, session_id=session_id, limit=30)
         for h in history:
             chat_history.append({
                 "role": "user" if h.get("dialogueType") == "USER" else "assistant",
@@ -137,6 +137,7 @@ async def profile_chat(
                         continue
                     for sse_data in graph_step_to_sse(node_name, node_output):
                         yield sse_data
+                        _persist_profile_update(sse_data, user_id)
                         if '"chunk"' in sse_data:
                             try:
                                 d = json.loads(sse_data.replace("data: ", "").strip())
@@ -177,3 +178,23 @@ async def profile_chat(
 
 async def _error_stream(message: str) -> AsyncGenerator[str, None]:
     yield _sse({"type": "error", "content": message})
+
+
+def _persist_profile_update(sse_data: str, user_id: int):
+    """从 SSE 事件中提取画像更新并持久化到数据库"""
+    try:
+        if '"profile_update"' not in sse_data:
+            return
+        d = json.loads(sse_data.replace("data: ", "").strip())
+        if d.get("type") != "profile_update":
+            return
+        dimensions = d.get("dimensions", {})
+        updates = dimensions.get("updates")
+        if not updates:
+            return
+        reason = dimensions.get("reason", "画像构建自动更新")
+        logger.info(f"[画像持久化] 保存用户 {user_id} 的画像更新: {reason}")
+        java_client.save_user_profile(user_id, updates, reason)
+        logger.info(f"[画像持久化] 画像保存成功")
+    except Exception as e:
+        logger.warning(f"[画像持久化] 保存失败: {e}")
