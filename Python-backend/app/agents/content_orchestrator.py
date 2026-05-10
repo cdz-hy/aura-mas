@@ -66,6 +66,7 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     learning_goal = state.get("learning_goal", user_message)
     user_profile = state.get("user_profile", {})
     generated_content = state.get("generated_content")
+    chat_history = state.get("chat_history", [])
 
     logger.info(f"{'='*60}")
     logger.info(f"  [内容编排智能体] 开始处理")
@@ -115,9 +116,23 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     pref_text = "视觉型" if vv < -0.3 else ("言语型" if vv > 0.3 else "均衡型")
     logger.info(f"  [内容编排智能体] 用户内容偏好: {pref_text}")
 
+    # 构造对话历史上下文
+    history_text = ""
+    if chat_history:
+        recent = chat_history[-6:]
+        history_lines = []
+        for msg in recent:
+            role = "用户" if msg["role"] == "user" else "助手"
+            content = msg["content"][:200]
+            history_lines.append(f"{role}: {content}")
+        history_text = "\n".join(history_lines)
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"""学习目标: {learning_goal}
+
+对话历史（请结合上下文理解用户需求）:
+{history_text if history_text else "无历史记录"}
 
 参考学习路径:
 {modules_desc}

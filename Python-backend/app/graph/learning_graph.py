@@ -195,6 +195,7 @@ def review_and_orchestrate_node(state: AgentState) -> Dict[str, Any]:
         "review_passed": True,
         "review_feedback": review_feedback,
         "review_suggestions": review_suggestions,
+        "error": None,  # 显式清除 error，防止上一次迭代的残留值导致路由误判
         "current_step": orchestrate_result.get("current_step", "审查编排完成"),
         "stream_events": stream_events,
     }
@@ -235,6 +236,7 @@ def build_learning_graph() -> StateGraph:
             NODE_QUIZ_GENERATOR: NODE_QUIZ_GENERATOR,
             NODE_QUIZ_GRADER: NODE_QUIZ_GRADER,
             NODE_RESOURCE_GENERATOR: NODE_RESOURCE_GENERATOR,
+            NODE_HUMAN_CONFIRM: NODE_HUMAN_CONFIRM,
             END: END,
         }
     )

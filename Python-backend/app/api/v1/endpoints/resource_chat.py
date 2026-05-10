@@ -54,8 +54,10 @@ async def plan_chat(
     if task_breakdown:
         try:
             parsed_breakdown = json.loads(task_breakdown)
-            breakdown_confirmed = True
-            logger.info(f"[计划对话] 收到前端回传的任务分解: {len(parsed_breakdown.get('modules', []))} 个模块")
+            # 默认确认文本 = 用户直接点击确认；其他文本 = 补充说明/反馈
+            is_default_confirm = message.strip() == "确认，开始生成学习资源"
+            breakdown_confirmed = is_default_confirm
+            logger.info(f"[计划对话] 收到前端回传的任务分解: {len(parsed_breakdown.get('modules', []))} 个模块, 确认={breakdown_confirmed}")
         except Exception as e:
             logger.warning(f"[计划对话] 解析 task_breakdown 失败: {e}")
 
@@ -98,13 +100,17 @@ async def plan_chat(
     except Exception as e:
         logger.warning(f"记录用户消息失败: {e}")
 
+    human_feedback = None
+    if not breakdown_confirmed and parsed_breakdown:
+        human_feedback = message
+
     # 构造现有 graph 的初始状态
     initial_state: AgentState = {
         "user_id": user_id,
         "plan_id": plan_id_int,
         "session_id": session_id,
         "user_message": message,
-        "human_feedback": None,
+        "human_feedback": human_feedback,
         "chat_history": chat_history,
         "user_profile": user_profile,
         "intent": "",
@@ -143,6 +149,8 @@ async def plan_chat(
         orchestrated_content = None
         quiz_questions = None
         quiz_config = None
+        new_breakdown = None
+        generated_resource_info = []  # 收集生成的资源信息 [{id, type, title}]
         try:
             graph = get_learning_graph()
             async for event in graph.astream(initial_state, stream_mode="updates"):
@@ -159,6 +167,10 @@ async def plan_chat(
                             quiz_questions = node_output["quiz_questions"]
                         if node_output.get("quiz_config"):
                             quiz_config = node_output["quiz_config"]
+                        # 收集新生成的任务分解
+                        tb = node_output.get("task_breakdown")
+                        if tb and node_name == "task_decomposer":
+                            new_breakdown = tb
                     # 使用 sse_bridge 翻译 graph 事件为前端格式
                     for sse_data in graph_step_to_sse(node_name, node_output):
                         yield sse_data
@@ -172,16 +184,54 @@ async def plan_chat(
                             except Exception:
                                 pass
 
+            # 任务分解生成后保存到 ai_dialogue（新生成或重新生成的）
+            if new_breakdown and plan_id_int and not breakdown_confirmed:
+                _save_breakdown_dialogue(user_id, session_id, plan_id_int, new_breakdown)
+
             # 用户确认后，将生成的学习资源保存到数据库
             if breakdown_confirmed and plan_id_int:
                 resource_ids = _save_modules_as_resources(plan_id_int, module_list, orchestrated_content)
-                # 保存任务分解为对话记录并关联资源ID
+                for idx, rid in enumerate(resource_ids):
+                    mod = module_list[idx] if idx < len(module_list) else {}
+                    generated_resource_info.append({
+                        "id": rid,
+                        "type": mod.get("module_type", "document"),
+                        "title": mod.get("title", f"模块 {idx + 1}"),
+                    })
                 if parsed_breakdown:
                     _save_breakdown_dialogue(user_id, session_id, plan_id_int, parsed_breakdown, resource_ids)
 
             # 题目生成后，保存到学习资源库
             if quiz_questions and plan_id_int:
-                _save_quiz_resource(plan_id_int, quiz_questions, quiz_config)
+                quiz_res_id = _save_quiz_resource(plan_id_int, quiz_questions, quiz_config)
+                if quiz_res_id:
+                    generated_resource_info.append({
+                        "id": quiz_res_id,
+                        "type": "quiz",
+                        "title": (quiz_config or {}).get("title", "练习题"),
+                    })
+
+            # 生成了学习资源时，保存结构化的 AI 对话记录
+            if generated_resource_info and plan_id_int:
+                summary = _build_resource_summary(module_list, quiz_questions, orchestrated_content)
+                dialogue_data = {
+                    "type": "resource_generated",
+                    "summary": summary,
+                    "resources": generated_resource_info,
+                }
+                try:
+                    java_client.create_dialogue(
+                        user_id=user_id,
+                        session_id=session_id,
+                        conversation_text=json.dumps(dialogue_data, ensure_ascii=False),
+                        dialogue_type="AI",
+                        plan_id=plan_id_int,
+                        intent_type="resource_generated",
+                    )
+                except Exception as e:
+                    logger.warning(f"记录资源生成对话失败: {e}")
+                # 通知前端新资源已生成
+                yield f'data: {json.dumps({"type": "resource_generated", "resources": generated_resource_info}, ensure_ascii=False)}\n\n'
 
             yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
 
@@ -189,19 +239,20 @@ async def plan_chat(
             logger.error(f"对话流异常: {e}", exc_info=True)
             yield f'data: {json.dumps({"type": "error", "content": str(e)}, ensure_ascii=False)}\n\n'
 
-        # 记录 AI 回复
-        ai_response = "\n".join(ai_response_parts) if ai_response_parts else "处理完成"
-        if ai_response:
-            try:
-                java_client.create_dialogue(
-                    user_id=user_id,
-                    session_id=session_id,
-                    conversation_text=ai_response,
-                    dialogue_type="AI",
-                    plan_id=plan_id,
-                )
-            except Exception as e:
-                logger.warning(f"记录 AI 回复失败: {e}")
+        # 未生成资源时，保存纯文本 AI 回复
+        if not generated_resource_info:
+            ai_response = "\n".join(ai_response_parts) if ai_response_parts else "处理完成"
+            if ai_response:
+                try:
+                    java_client.create_dialogue(
+                        user_id=user_id,
+                        session_id=session_id,
+                        conversation_text=ai_response,
+                        dialogue_type="AI",
+                        plan_id=plan_id_int,
+                    )
+                except Exception as e:
+                    logger.warning(f"记录 AI 回复失败: {e}")
 
     return StreamingResponse(
         stream(),
@@ -252,6 +303,20 @@ async def generate_single_resource(
     except Exception:
         pass
 
+    # 获取该计划的对话历史作为上下文
+    chat_history = []
+    try:
+        history = java_client.get_dialogue_history(
+            user_id=user_id, plan_id=plan_id_int, limit=20
+        )
+        for h in history:
+            chat_history.append({
+                "role": "user" if h.get("dialogueType") == "USER" else "assistant",
+                "content": h.get("conversationText", ""),
+            })
+    except Exception:
+        pass
+
     # 更新计划状态为"生成中"
     try:
         java_client.update_plan_status(plan_id_int, 1)
@@ -269,7 +334,7 @@ async def generate_single_resource(
         "session_id": f"resource-{plan_id_int}-{module_id_int}",
         "user_message": resource_message,
         "human_feedback": None,
-        "chat_history": [],
+        "chat_history": chat_history,
         "user_profile": user_profile,
         "intent": "generate_resource",
         "next_node": "rag_retriever",  # 直接进入 RAG 检索
@@ -330,6 +395,26 @@ async def generate_single_resource(
             # 持久化生成的资源内容到数据库
             _save_resource_content(module_id_int, orchestrated_content, module_list)
 
+            # 保存结构化的 AI 对话记录
+            if module_id_int:
+                summary = _build_resource_summary(module_list, orchestrated_content=orchestrated_content)
+                dialogue_data = {
+                    "type": "resource_generated",
+                    "summary": summary,
+                    "resources": [{"id": module_id_int, "type": type, "title": title or summary}],
+                }
+                try:
+                    java_client.create_dialogue(
+                        user_id=user_id,
+                        session_id=f"resource-{plan_id_int}-{module_id_int}",
+                        conversation_text=json.dumps(dialogue_data, ensure_ascii=False),
+                        dialogue_type="AI",
+                        plan_id=plan_id_int,
+                        intent_type="resource_generated",
+                    )
+                except Exception as e:
+                    logger.warning(f"记录资源生成对话失败: {e}")
+
             yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
 
         except Exception as e:
@@ -351,6 +436,21 @@ async def _error_stream(message: str) -> AsyncGenerator[str, None]:
     yield f'data: {json.dumps({"type": "error", "content": message}, ensure_ascii=False)}\n\n'
 
 
+def _build_resource_summary(module_list: list, quiz_questions: list = None, orchestrated_content: dict = None) -> str:
+    """构建生成资源的简要摘要"""
+    parts = []
+    if module_list:
+        titles = [m.get("title", "") for m in module_list if m.get("title")]
+        types = list({m.get("module_type", "document") for m in module_list})
+        type_label = "/".join(types)
+        parts.append(f"已生成 {len(module_list)} 个{type_label}类型学习模块：{'、'.join(titles)}")
+    if quiz_questions:
+        parts.append(f"已生成 {len(quiz_questions)} 道练习题")
+    if orchestrated_content and orchestrated_content.get("summary"):
+        parts.append(orchestrated_content["summary"])
+    return "；".join(parts) if parts else "学习资源生成完成"
+
+
 def _persist_profile_update(sse_data: str, user_id: int):
     """从 SSE 事件中提取画像更新并持久化到数据库"""
     try:
@@ -369,6 +469,22 @@ def _persist_profile_update(sse_data: str, user_id: int):
         logger.info(f"[画像持久化] 画像保存成功")
     except Exception as e:
         logger.warning(f"[画像持久化] 保存失败: {e}")
+
+
+def _soft_delete_breakdown_dialogue(user_id: int, session_id: str, plan_id: int):
+    """软删除该会话中之前的 task_breakdown 对话记录"""
+    try:
+        history = java_client.get_dialogue_history(
+            user_id=user_id, plan_id=plan_id, session_id=session_id, limit=50
+        )
+        for h in history:
+            if h.get("intentType") == "task_breakdown" and h.get("dialogueType") == "AI":
+                dialogue_id = h.get("id")
+                if dialogue_id:
+                    java_client.delete_dialogue(dialogue_id)
+                    logger.info(f"[任务分解] 已软删除旧的分解记录 id={dialogue_id}")
+    except Exception as e:
+        logger.warning(f"[任务分解] 软删除旧分解记录失败: {e}")
 
 
 def _save_breakdown_dialogue(user_id: int, session_id: str, plan_id: int, breakdown: dict, resource_ids: list = None):
@@ -396,11 +512,11 @@ def _save_breakdown_dialogue(user_id: int, session_id: str, plan_id: int, breakd
         logger.warning(f"[任务分解持久化] 保存失败: {e}")
 
 
-def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None):
-    """将生成的题目保存为 quiz 类型的学习资源"""
+def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None) -> int:
+    """将生成的题目保存为 quiz 类型的学习资源，返回资源 ID"""
     try:
         if not questions:
-            return
+            return 0
         config = quiz_config or {}
         module_data = {
             "title": config.get("title", "练习题"),
@@ -424,7 +540,7 @@ def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None)
         # 获取当前计划最大的 moduleOrder
         existing = java_client.get_plan_resources(plan_id)
         max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
-        java_client.create_resource(
+        result = java_client.create_resource(
             plan_id=plan_id,
             module_type="quiz",
             module_data=json.dumps(module_data, ensure_ascii=False),
@@ -432,9 +548,12 @@ def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None)
             status=2,
             generated_by_agent="quiz_generator",
         )
-        logger.info(f"[资源持久化] 已保存题目资源到计划 {plan_id}，共 {len(questions)} 题")
+        resource_id = result.get("id") if isinstance(result, dict) else 0
+        logger.info(f"[资源持久化] 已保存题目资源到计划 {plan_id}，共 {len(questions)} 题，ID={resource_id}")
+        return resource_id
     except Exception as e:
         logger.warning(f"[资源持久化] 保存题目资源失败: {e}")
+        return 0
 
 
 def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_content: dict = None) -> list:
@@ -442,6 +561,9 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
     try:
         if not module_list:
             return []
+        # 查询当前计划已有的最大 moduleOrder，避免编号重复
+        existing = java_client.get_plan_resources(plan_id)
+        max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
         resources = []
         for i, mod in enumerate(module_list):
             module_type = mod.get("module_type", "document")
@@ -457,14 +579,14 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
                 "planId": plan_id,
                 "moduleType": module_type,
                 "moduleData": json.dumps(module_data, ensure_ascii=False),
-                "moduleOrder": mod.get("order", i + 1),
+                "moduleOrder": max_order + i + 1,
                 "status": 2,
                 "generatedByAgent": "content_orchestrator",
             })
         if resources:
             result = java_client.create_resources_bulk(resources)
             resource_ids = [r.get("id") for r in (result or []) if r.get("id")]
-            logger.info(f"[资源持久化] 已保存 {len(resources)} 个学习资源到计划 {plan_id}")
+            logger.info(f"[资源持久化] 已保存 {len(resources)} 个学习资源到计划 {plan_id}，编号从 {max_order + 1} 开始")
             return resource_ids
     except Exception as e:
         logger.warning(f"[资源持久化] 保存模块资源失败: {e}")

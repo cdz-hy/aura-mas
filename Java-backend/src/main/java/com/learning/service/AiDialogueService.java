@@ -114,6 +114,16 @@ public class AiDialogueService {
     }
 
     @Transactional
+    public void deleteDialogue(Long dialogueId) {
+        AiDialogue dialogue = dialogueMapper.selectById(dialogueId);
+        if (dialogue != null) {
+            dialogue.setIsDeleted(1);
+            dialogue.setDeletedAt(LocalDateTime.now());
+            dialogueMapper.updateById(dialogue);
+        }
+    }
+
+    @Transactional
     public void updateResourceId(Long dialogueId, Long resourceId) {
         AiDialogue dialogue = dialogueMapper.selectById(dialogueId);
         if (dialogue != null) {

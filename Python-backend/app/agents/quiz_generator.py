@@ -59,6 +59,7 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
     rag_chunks = state.get("rag_context_chunks", [])
     user_profile = state.get("user_profile", {})
     orchestrated_content = state.get("orchestrated_content")
+    chat_history = state.get("chat_history", [])
 
     logger.info(f"{'='*60}")
     logger.info(f"  [题目生成智能体] 开始处理")
@@ -93,9 +94,23 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
     pref_text = f"偏好题型: {', '.join(pref_types)}" if pref_types else "无特殊偏好"
     weak_text = f"薄弱知识点: {', '.join(weak_points)}" if weak_points else "暂无薄弱点记录"
 
+    # 构造对话历史上下文
+    history_text = ""
+    if chat_history:
+        recent = chat_history[-8:]
+        history_lines = []
+        for msg in recent:
+            role = "用户" if msg["role"] == "user" else "助手"
+            content = msg["content"][:200]
+            history_lines.append(f"{role}: {content}")
+        history_text = "\n".join(history_lines)
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"""学习目标: {learning_goal}
+
+对话历史（请结合上下文理解用户意图）:
+{history_text if history_text else "无历史记录"}
 
 学习内容摘要:
 {content_summary}

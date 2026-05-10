@@ -107,6 +107,10 @@ class JavaBackendClient:
         """更新对话记录的资源ID"""
         return self._request("PUT", f"/api/internal/dialogue/{dialogue_id}/resource", params={"resourceId": resource_id})
 
+    def delete_dialogue(self, dialogue_id: int):
+        """软删除对话记录"""
+        return self._request("DELETE", f"/api/internal/dialogue/{dialogue_id}")
+
     def get_dialogue_history(
         self,
         user_id: int,

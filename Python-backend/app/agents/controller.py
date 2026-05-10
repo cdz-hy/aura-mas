@@ -150,8 +150,12 @@ def _route_by_intent(intent: str, state: AgentState) -> str:
 
     elif intent == INTENT_FOLLOW_UP:
         if has_task_breakdown and not state.get("task_breakdown_confirmed"):
-            logger.info(f"  [主控路由] 跟随 + 未确认分解 -> 任务分解智能体")
-            return NODE_TASK_DECOMPOSER
+            if state.get("human_feedback"):
+                logger.info(f"  [主控路由] 跟随 + 未确认分解 + 有待处理反馈 -> 任务分解智能体")
+                return NODE_TASK_DECOMPOSER
+            else:
+                logger.info(f"  [主控路由] 跟随 + 未确认分解 + 反馈已处理 -> 用户确认")
+                return NODE_HUMAN_CONFIRM
         if needs_confirm:
             logger.info(f"  [主控路由] 跟随 + 需确认 -> RAG检索")
             return NODE_RAG_RETRIEVER

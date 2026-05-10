@@ -56,7 +56,7 @@ async def _retrieve_for_module(query: str, retrieval_config: Dict[str, Any]) -> 
     return result
 
 
-def _optimize_search_queries(modules: List[Dict[str, Any]], user_message: str, llm) -> List[str]:
+def _optimize_search_queries(modules: List[Dict[str, Any]], user_message: str, llm, chat_history: list = None) -> List[str]:
     """使用 LLM 为每个模块生成优化的检索词"""
     if not modules:
         logger.info(f"  [RAG检索] 无模块，使用用户消息作为查询")
@@ -71,15 +71,30 @@ def _optimize_search_queries(modules: List[Dict[str, Any]], user_message: str, l
 
     logger.info(f"  [RAG检索] 正在优化 {len(modules)} 个模块的检索词...")
 
+    # 构造对话历史上下文
+    history_text = ""
+    if chat_history:
+        recent = chat_history[-6:]
+        history_lines = []
+        for msg in recent:
+            role = "用户" if msg["role"] == "user" else "助手"
+            content = msg["content"][:150]
+            history_lines.append(f"{role}: {content}")
+        history_text = "\n".join(history_lines)
+
     messages = [
-        {"role": "system", "content": """你是检索词优化专家。根据学习模块的描述，为每个模块生成最有效的搜索查询词。
+        {"role": "system", "content": """你是检索词优化专家。根据学习模块的描述和对话上下文，为每个模块生成最有效的搜索查询词。
 输出 JSON 数组，每个元素是一个优化后的检索查询字符串。
 规则：
 1. 查询词要精炼、具体，适合向量检索
 2. 包含核心概念和关键词
 3. 适合搜索教学资料
+4. 结合对话历史理解用户的真实学习需求
 严禁使用 emoji。"""},
         {"role": "user", "content": f"""用户学习目标: {user_message}
+
+对话历史（请结合上下文理解用户需求）:
+{history_text if history_text else "无历史记录"}
 
 学习模块:
 {chr(10).join(module_summaries)}
@@ -110,6 +125,7 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
     task_breakdown = state.get("task_breakdown", {})
     user_profile = state.get("user_profile", {})
     modules = task_breakdown.get("modules", [])
+    chat_history = state.get("chat_history", [])
 
     logger.info(f"{'='*60}")
     logger.info(f"  [RAG检索智能体] 开始处理")
@@ -118,7 +134,7 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
 
     llm = get_rag_retriever_llm()
     retrieval_config = _compute_retrieval_config(user_profile)
-    search_queries = _optimize_search_queries(modules, user_message, llm)
+    search_queries = _optimize_search_queries(modules, user_message, llm, chat_history)
 
     all_results = []
     all_context_chunks = []

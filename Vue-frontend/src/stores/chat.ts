@@ -14,7 +14,7 @@ export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([])
   const activeSessionId = ref('')
   const sessionsLoading = ref(false)
-  const messages = ref<Array<{ role: string; content: string; type?: string; breakdown?: any }>>([])
+  const messages = ref<Array<{ role: string; content: string; type?: string; breakdown?: any; resources?: Array<{ id: number; type: string; title: string }> }>>([])
   const streaming = ref(false)
   const streamBuffer = ref('')
 
@@ -29,6 +29,8 @@ export const useChatStore = defineStore('chat', () => {
   const lastQuizResource = ref<{ questions: any[] } | null>(null)
   // 批改结果事件（供 PlanDetailView 显示在中间面板）
   const lastGradingResult = ref<Record<string, any> | null>(null)
+  // 生成的资源事件（供 PlanDetailView 将资源添加到侧栏并打开）
+  const lastGeneratedResources = ref<Array<{ id: number; type: string; title: string }> | null>(null)
 
   let currentSSE: EventSource | null = null
   let currentPlanId = ''
@@ -65,6 +67,17 @@ export const useChatStore = defineStore('chat', () => {
         }
       } catch {}
     }
+    if (m.intentType === 'resource_generated') {
+      try {
+        const data = JSON.parse(m.conversationText)
+        return {
+          role: 'assistant' as const,
+          content: data.summary || '学习资源已生成',
+          type: 'resource_generated',
+          resources: data.resources || [],
+        }
+      } catch {}
+    }
     return {
       role: m.dialogueType === 'USER' ? 'user' as const : 'assistant' as const,
       content: m.conversationText,
@@ -91,8 +104,13 @@ export const useChatStore = defineStore('chat', () => {
 
   /**
    * 切换计划时重置整个对话状态，防止残留其他计划的消息
+   * 如果是同一个计划，不中断正在进行的 SSE 连接和对话状态
    */
   function resetForPlan(planId: string) {
+    if (planId === currentPlanId) {
+      // 同一计划，不重置（保留流式输出、消息、会话等状态）
+      return
+    }
     cancelSSE(currentSSE)
     currentSSE = null
     currentPlanId = planId
@@ -226,6 +244,19 @@ export const useChatStore = defineStore('chat', () => {
               content: `正在为模块 ${moduleId} 生成${type === 'quiz' ? '练习题' : type === 'code' ? '代码示例' : '资源'}...`,
             })
           },
+          onResourceGenerated(resources) {
+            lastGeneratedResources.value = resources
+            // 在对话中显示资源生成卡片
+            if (resources.length) {
+              const summary = resources.map(r => r.title).join('、')
+              messages.value.push({
+                role: 'assistant',
+                content: `已生成学习资源：${summary}`,
+                type: 'resource_generated',
+                resources,
+              })
+            }
+          },
           onDone() {
             // 用户确认后跳过模块消息推送（已在 onNeedConfirmation 中显示过）
             if (skipNextModulesPush) {
@@ -238,7 +269,11 @@ export const useChatStore = defineStore('chat', () => {
             } else if (pendingModules.value.length > 0) {
               const mods = pendingModules.value
               const hasContent = mods.some((m: any) => m.content)
-              if (hasContent) {
+              if (hasContent && lastGeneratedResources.value) {
+                // 资源已保存到数据库 — 不推送模块内容，由 resource_generated 卡片展示
+                pendingModules.value = []
+                streamBuffer.value = ''
+              } else if (hasContent) {
                 // 编排后的学习资源 — 每个模块作为独立消息显示
                 for (const mod of mods) {
                   const typeTag = mod.module_type ? `[${moduleTypeLabels[mod.module_type] || mod.module_type}]` : ''
@@ -310,10 +345,15 @@ export const useChatStore = defineStore('chat', () => {
     const breakdown = pendingTaskBreakdown.value
     pendingTaskBreakdown.value = null
     awaitingConfirmation.value = false
-    // 标记跳过下次 onDone 中的模块推送（避免重复显示学习路径）
-    skipNextModulesPush = true
-    // 将已有的任务分解结果传回后端，避免状态丢失
     const extra: Record<string, string> = {}
+    if (feedback) {
+      // 补充说明：传 task_breakdown 供后端增量优化，不跳过模块推送
+      skipNextModulesPush = false
+    } else {
+      // 确认：标记跳过模块推送
+      skipNextModulesPush = true
+    }
+    // 始终传 task_breakdown（确认时用于资源生成，反馈时用于增量优化）
     if (breakdown) {
       extra.task_breakdown = JSON.stringify(breakdown)
     }
@@ -341,6 +381,7 @@ export const useChatStore = defineStore('chat', () => {
     awaitingConfirmation,
     lastQuizResource,
     lastGradingResult,
+    lastGeneratedResources,
     loadSessions,
     loadHistoryByPlan,
     resetForPlan,

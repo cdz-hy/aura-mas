@@ -33,6 +33,13 @@ public class AiDialogueController {
         return Result.success(dialogueService.createDialogue(userId, sessionId, planId, conversationText, dialogueType, intentType));
     }
 
+    @Operation(summary = "内部接口：软删除对话记录")
+    @DeleteMapping("/api/internal/dialogue/{dialogueId}")
+    public Result<Void> deleteDialogue(@PathVariable Long dialogueId) {
+        dialogueService.deleteDialogue(dialogueId);
+        return Result.success();
+    }
+
     @Operation(summary = "内部接口：更新对话记录的资源ID")
     @PutMapping("/api/internal/dialogue/{dialogueId}/resource")
     public Result<Void> updateResourceId(

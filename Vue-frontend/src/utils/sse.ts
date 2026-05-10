@@ -10,6 +10,7 @@ export interface SSEHandlers {
   onPlan?: (plan: any) => void
   onResource?: (resource: any) => void
   onResourceTrigger?: (resourceType: string, moduleId: number) => void
+  onResourceGenerated?: (resources: Array<{ id: number; type: string; title: string }>) => void
   onRecommendations?: (data: any[]) => void
   onNeedConfirmation?: (message: string, taskBreakdown: any) => void
   onDone?: () => void
@@ -77,6 +78,9 @@ export function createSSEConnection(
           break
         case 'need_confirmation':
           handlers.onNeedConfirmation?.(data.message || '请确认', data.task_breakdown)
+          break
+        case 'resource_generated':
+          handlers.onResourceGenerated?.(data.resources || [])
           break
       }
     } catch (e) {

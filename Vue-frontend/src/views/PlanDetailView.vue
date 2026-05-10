@@ -80,7 +80,7 @@
             :key="i"
             class="rounded-lg cursor-pointer transition-all duration-200 border"
             :class="selectedModuleIndex === i ? 'border-navy-300 bg-navy-50 shadow-sm' : 'border-transparent hover:bg-navy-50/50'"
-            @click="selectedModuleIndex = selectedModuleIndex === i ? -1 : i"
+            @click="selectModule(i)"
           >
             <div class="p-3">
               <div class="flex items-center gap-2.5">
@@ -120,16 +120,6 @@
           </div>
         </div>
 
-        <!-- Bottom action -->
-        <div class="p-3 border-t border-navy-100/50">
-          <button
-            class="w-full text-xs px-3 py-2 rounded-lg bg-navy-50 text-navy-600 hover:bg-navy-100 transition-colors"
-            @click="generateAllResources"
-            :disabled="generating"
-          >
-            {{ generating ? generateProgress || '生成中...' : '生成全部资源' }}
-          </button>
-        </div>
       </div>
     </div>
 
@@ -390,6 +380,29 @@
               </div>
             </div>
 
+            <!-- 资源生成卡片 -->
+            <div v-else-if="msg.type === 'resource_generated' && msg.resources?.length" class="max-w-[85%]">
+              <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3">
+                <p class="text-navy-700 mb-3">{{ msg.content }}</p>
+                <div class="flex flex-wrap gap-2">
+                  <button
+                    v-for="r in msg.resources" :key="r.id"
+                    class="flex items-center gap-2 bg-white rounded-lg px-3 py-2 border border-navy-100 hover:border-navy-300 hover:shadow-sm transition-all cursor-pointer"
+                    @click="openResourceById(r.id, r.type)"
+                  >
+                    <span class="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs"
+                      :class="badgeClass(r.type)">
+                      {{ typeLabels[r.type]?.[0] || r.type[0]?.toUpperCase() || 'R' }}
+                    </span>
+                    <span class="text-sm text-navy-700 font-medium">{{ r.title }}</span>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full" :class="badgeClass(r.type)">
+                      {{ typeLabels[r.type] || r.type }}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <!-- 普通消息 -->
             <div v-else class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
               <div class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
@@ -444,7 +457,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { getPlan, updatePlan } from '@/api/plan'
-import { getPlanResources, dispatchTask } from '@/api/resource'
+import { getPlanResources, getResource } from '@/api/resource'
 import { parseMarkdown } from '@/utils/markdown'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
@@ -466,19 +479,12 @@ const selectedResourceId = ref<number | null>(null)
 const selectedResource = ref<LearningResource | null>(null)
 const quizData = ref<QuizData | null>(null)
 const gradingResult = ref<Record<string, any> | null>(null)
-const generating = ref(false)
-const generateProgress = ref('')
 const messagesContainer = ref<HTMLElement>()
 const inputText = ref('')
 const showModifyInput = ref(false)
 const modifyText = ref('')
-const completedCount = ref(0)
-const totalPending = ref(0)
 const sidebarCollapsed = ref(false)
 const showSessionList = ref(false)
-
-// SSE 连接
-let taskEventSource: EventSource | null = null
 
 // 标题编辑
 const editingTitle = ref(false)
@@ -522,6 +528,24 @@ function renderMd(text: string) { return parseMarkdown(text) }
 
 // ==================== 资源详情 ====================
 
+function selectModule(index: number) {
+  if (selectedModuleIndex.value === index) {
+    // 收起当前模块，清除选中状态
+    selectedModuleIndex.value = -1
+    selectedResourceId.value = null
+    selectedResource.value = null
+    quizData.value = null
+    gradingResult.value = null
+    return
+  }
+  // 展开模块并自动选中第一个资源
+  selectedModuleIndex.value = index
+  const mod = modules.value[index]
+  if (mod?.resources.length > 0) {
+    toggleResource(mod.resources[0])
+  }
+}
+
 function toggleResource(res: LearningResource) {
   // 点击已选中的资源 → 取消选中
   if (selectedResourceId.value === res.id) {
@@ -536,11 +560,42 @@ function toggleResource(res: LearningResource) {
   selectedResource.value = res
   gradingResult.value = null
 
+  // 展开侧栏中包含该资源的模块
+  const modIdx = modules.value.findIndex(m => m.resources.some(r => r.id === res.id))
+  if (modIdx >= 0) {
+    selectedModuleIndex.value = modIdx
+  }
+
   // 解析题目数据
   if (res.moduleType === 'quiz') {
     quizData.value = parseQuizData(res)
   } else {
     quizData.value = null
+  }
+}
+
+/** 通过资源 ID 打开资源（先从本地列表查找，未命中则请求后端） */
+async function openResourceById(resourceId: number, resourceType?: string) {
+  // 先从本地已加载的资源中查找
+  const local = resources.value.find(r => r.id === resourceId)
+  if (local) {
+    toggleResource(local)
+    return
+  }
+  // 本地未命中，从后端获取
+  try {
+    const res = await getResource(resourceId)
+    if (res.data) {
+      // 解析 moduleData
+      parseModuleData([res.data])
+      // 添加到本地列表（避免重复）
+      if (!resources.value.some(r => r.id === res.data.id)) {
+        resources.value.push(res.data)
+      }
+      toggleResource(res.data)
+    }
+  } catch (e) {
+    console.error('Failed to open resource by ID:', e)
   }
 }
 
@@ -639,6 +694,33 @@ watch(() => chatStore.lastGradingResult, (data) => {
   if (!data) return
   gradingResult.value = data
   chatStore.lastGradingResult = null
+})
+
+// 监听新生成的资源事件 — 从后端获取完整资源并添加到侧栏
+watch(() => chatStore.lastGeneratedResources, async (resList) => {
+  if (!resList || !resList.length) return
+  let firstNewRes: LearningResource | null = null
+  for (const r of resList) {
+    // 跳过已存在的资源
+    if (resources.value.some(existing => existing.id === r.id)) continue
+    try {
+      const res = await getResource(r.id)
+      const fullRes = res.data
+      if (fullRes) {
+        // 解析 moduleData（API 返回 JSON 字符串，需转为对象）
+        parseModuleData([fullRes])
+        resources.value.push(fullRes)
+        if (!firstNewRes) firstNewRes = fullRes
+      }
+    } catch (e) {
+      console.error('Failed to fetch generated resource:', e)
+    }
+  }
+  // 自动打开第一个新资源
+  if (firstNewRes) {
+    toggleResource(firstNewRes)
+  }
+  chatStore.lastGeneratedResources = null
 })
 
 // ==================== 滚动 ====================
@@ -763,89 +845,12 @@ async function refreshResources() {
   }
 }
 
-async function generateAllResources() {
-  generating.value = true
-  generateProgress.value = ''
-  completedCount.value = 0
-
-  try {
-    const pending = resources.value.filter(r => r.status !== 2 || !r.moduleData || Object.keys(r.moduleData).length === 0)
-    totalPending.value = pending.length
-
-    if (pending.length === 0) {
-      generateProgress.value = '所有资源已生成'
-      generating.value = false
-      return
-    }
-
-    generateProgress.value = `正在提交 ${pending.length} 个任务...`
-
-    const results = await Promise.allSettled(
-      pending.map(resource =>
-        dispatchTask({ planId: resource.planId, resourceId: resource.id })
-          .catch(err => { console.error(`提交任务失败 resourceId=${resource.id}:`, err); return null })
-      )
-    )
-
-    const submitted = results.filter(r => r.status === 'fulfilled' && r.value).length
-    if (submitted === 0) {
-      generateProgress.value = '所有任务提交失败，请检查后端服务'
-      generating.value = false
-      return
-    }
-
-    generateProgress.value = `已提交 ${submitted} 个任务，等待 AI 生成...`
-  } catch (e: any) {
-    generateProgress.value = `提交失败: ${e.message}`
-    generating.value = false
-  }
-}
-
 function parseModuleData(res: LearningResource[]) {
   res.forEach(r => {
     if (typeof r.moduleData === 'string') {
       try { r.moduleData = JSON.parse(r.moduleData) } catch { r.moduleData = {} }
     }
   })
-}
-
-// ==================== SSE 任务通知 ====================
-
-function subscribeTaskStream() {
-  const userId = authStore.user?.id
-  if (!userId) return
-
-  if (taskEventSource) {
-    taskEventSource.close()
-  }
-
-  taskEventSource = new EventSource(`/api/task/stream?userId=${userId}`)
-
-  taskEventSource.addEventListener('task_update', (event: MessageEvent) => {
-    try {
-      const data = JSON.parse(event.data)
-      if (data.status === 2) {
-        completedCount.value++
-        refreshResources()
-        const total = totalPending.value
-        if (completedCount.value >= total) {
-          generateProgress.value = `全部 ${total} 个资源生成完毕！`
-          generating.value = false
-        } else {
-          generateProgress.value = `[${completedCount.value}/${total}] 正在生成...`
-        }
-      } else if (data.status === 3) {
-        completedCount.value++
-        generateProgress.value = `任务失败 (${completedCount.value}/${totalPending.value})`
-      }
-    } catch (e) {
-      console.error('[SSE] 解析 task_update 失败:', e)
-    }
-  })
-
-  taskEventSource.onerror = () => {
-    console.warn('[SSE] 任务状态连接断开')
-  }
 }
 
 // ==================== 生命周期 ====================
@@ -865,18 +870,10 @@ onMounted(async () => {
     console.error('[PlanDetail] 加载失败:', e)
   }
 
-  // 加载会话列表，默认显示最新一个会话的对话
+  // 加载会话列表，如果已有活跃会话则不重新加载消息（避免中断流式输出）
   await chatStore.loadSessions(planIdStr)
-  if (chatStore.sessions.length > 0) {
+  if (!chatStore.activeSessionId && chatStore.sessions.length > 0) {
     await chatStore.selectSession(chatStore.sessions[0].sessionId)
-  }
-  subscribeTaskStream()
-})
-
-onUnmounted(() => {
-  if (taskEventSource) {
-    taskEventSource.close()
-    taskEventSource = null
   }
 })
 </script>
