@@ -1,6 +1,6 @@
 """
 MQ 任务消费者 - 接收 Java 分发的资源生成任务
-流程：MQ 收到任务 → 数据库查询上下文 → LangGraph 工作流 → 结果回写 MQ + DB
+流程：MQ 收到任务 → 查询上下文 → LangGraph 工作流 → HTTP 持久化到 Java 后端（内部触发 SSE 推送）
 """
 import asyncio
 import json
@@ -11,7 +11,6 @@ from app.core.config import settings
 from app.graph.learning_graph import get_learning_graph
 from app.agents.schemas import AgentState
 from app.services.db.java_client import java_client
-from app.services.mq_producer import mq_producer
 
 logger = logging.getLogger("mq.consumer")
 
@@ -197,21 +196,14 @@ class MQConsumer:
             }
             module_data_json = json.dumps(result_data, ensure_ascii=False)
 
-            # 通过 Java 内部 API 直接更新资源内容
+            # 通过 Java 内部 API 持久化资源内容并更新任务状态（内部触发 SSE 推送）
             try:
                 java_client.update_resource_content(resource_id, module_data_json, 2)
                 java_client.update_generation_task(task_id, 2)
                 logger.info("  [MQ 消费] 资源内容已通过内部 API 持久化")
             except Exception as e:
-                logger.warning("  [MQ 消费] 内部 API 落库失败，将由 MQ 结果消费者处理: %s", e)
-
-            # 发送 MQ 结果（双重保障：内部 API + MQ 结果通知）
-            await mq_producer.send_result(
-                task_id=task_id,
-                status=2,
-                user_id=user_id,
-                module_data=module_data_json,
-            )
+                logger.error("  [MQ 消费] 内部 API 落库失败: %s", e)
+                raise
 
             logger.info("  [MQ 消费] 资源生成完成！")
             logger.info("    taskId=%s, resourceId=%s, 模块数=%s",
@@ -220,16 +212,11 @@ class MQConsumer:
             raise Exception("工作流未生成有效内容")
 
     async def _fail_task(self, task_id: int, user_id: int, reason: str):
-        """任务失败处理"""
+        """任务失败处理（更新任务状态，内部触发 SSE 推送）"""
         try:
             java_client.update_generation_task(task_id, 3)
         except Exception:
             pass
-        await mq_producer.send_result(
-            task_id=task_id,
-            status=3,
-            user_id=user_id,
-        )
         logger.error("  [MQ 消费] 任务失败: taskId=%s, 原因=%s", task_id, reason)
 
 

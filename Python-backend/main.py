@@ -8,7 +8,6 @@ from app.api.v1.endpoints import upload, query, agent_chat
 from app.api.v1.endpoints import profile_builder, plan_generator, resource_chat
 from app.core.config import settings
 from app.services.mq_consumer import mq_consumer
-from app.services.mq_producer import mq_producer
 import uvicorn
 
 # ==================== 日志配置 ====================
@@ -47,7 +46,6 @@ async def lifespan(app: FastAPI):
     yield
     # 关闭时清理
     await mq_consumer.stop()
-    await mq_producer.close()
     logger.info("MQ 消费者已关闭")
 
 
