@@ -67,6 +67,7 @@ const breadcrumbMap: Record<string, string> = {
   '/plan/create': '学习计划',
   '/notes': '我的笔记',
   '/profile': '我的画像',
+  '/settings': '个人设置',
   '/admin': '管理概览',
   '/admin/kb': '知识库管理',
   '/admin/users': '用户管理',
@@ -76,6 +77,7 @@ const breadcrumb = computed(() => {
   const path = route.path
   if (breadcrumbMap[path]) return breadcrumbMap[path]
   if (path.startsWith('/plan/')) return '学习计划详情'
+  if (path.startsWith('/notes/')) return '笔记详情'
   return ''
 })
 

@@ -4,8 +4,11 @@
     :class="uiStore.sidebarCollapsed ? 'w-[72px]' : 'w-[260px]'"
   >
     <!-- Logo area -->
-    <div class="h-16 flex items-center px-5 border-b border-navy-100/50">
-      <div class="flex items-center gap-3 overflow-hidden">
+    <div
+      class="h-16 flex items-center px-5 border-b border-navy-100/50 cursor-pointer hover:bg-navy-50/50 transition-colors"
+      @click="uiStore.toggleSidebar()"
+    >
+      <div class="flex items-center gap-3 min-w-0">
         <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-navy-600 to-navy-800 flex items-center justify-center flex-shrink-0 shadow-sm">
           <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 2L2 7l10 5 10-5-10-5z" />
@@ -22,13 +25,16 @@
     </div>
 
     <!-- Navigation -->
-    <nav class="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
+    <nav class="flex-1 py-4 space-y-1 overflow-y-auto" :class="uiStore.sidebarCollapsed ? 'px-2' : 'px-3'">
       <router-link
         v-for="item in navItems"
         :key="item.path"
         :to="item.path"
         class="sidebar-link group"
-        :class="{ 'sidebar-link-active': isActive(item.path) }"
+        :class="[
+          { 'sidebar-link-active': isActive(item.path) },
+          uiStore.sidebarCollapsed ? 'justify-center px-0' : '',
+        ]"
       >
         <div class="w-5 h-5 flex-shrink-0" v-html="item.icon"></div>
         <transition name="fade">
@@ -47,7 +53,10 @@
             :key="item.path"
             :to="item.path"
             class="sidebar-link"
-            :class="{ 'sidebar-link-active': isActive(item.path) }"
+            :class="[
+              { 'sidebar-link-active': isActive(item.path) },
+              uiStore.sidebarCollapsed ? 'justify-center px-0' : '',
+            ]"
           >
             <div class="w-5 h-5 flex-shrink-0" v-html="item.icon"></div>
             <span v-if="!uiStore.sidebarCollapsed" class="whitespace-nowrap">{{ item.label }}</span>
@@ -58,9 +67,24 @@
 
     <!-- User info -->
     <div class="p-3 border-t border-navy-100/50">
-      <div class="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-navy-50 transition-colors cursor-pointer" @click="$router.push('/profile')">
-        <div class="w-8 h-8 rounded-full bg-gradient-to-br from-sage-400 to-sage-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-          {{ authStore.user?.nickname?.[0] || 'U' }}
+      <div
+        class="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-navy-50 transition-colors cursor-pointer"
+        :class="uiStore.sidebarCollapsed ? 'justify-center' : ''"
+        @click="$router.push('/settings')"
+      >
+        <div class="w-8 h-8 rounded-full overflow-hidden flex-shrink-0">
+          <img
+            v-if="authStore.user?.avatarUrl"
+            :src="authStore.user.avatarUrl"
+            alt="头像"
+            class="w-full h-full object-cover"
+          />
+          <div
+            v-else
+            class="w-full h-full bg-gradient-to-br from-sage-400 to-sage-600 flex items-center justify-center text-white text-sm font-bold"
+          >
+            {{ authStore.user?.nickname?.[0] || 'U' }}
+          </div>
         </div>
         <transition name="fade">
           <div v-if="!uiStore.sidebarCollapsed" class="overflow-hidden">

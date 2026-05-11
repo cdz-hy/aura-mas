@@ -1,6 +1,7 @@
 package com.learning.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.learning.common.ErrorCode;
 import com.learning.entity.User;
 import com.learning.entity.UserProfile;
@@ -11,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -45,6 +47,42 @@ public class UserService {
                 new LambdaQueryWrapper<UserProfile>()
                         .eq(UserProfile::getUserId, userId)
                         .eq(UserProfile::getIsCurrent, 1));
+    }
+
+    public User updateUserInfo(Long userId, Map<String, Object> updates) {
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new BusinessException(ErrorCode.USER_NOT_FOUND);
+        }
+        if (updates.containsKey("nickname") && updates.get("nickname") != null) {
+            user.setNickname((String) updates.get("nickname"));
+        }
+        if (updates.containsKey("email") && updates.get("email") != null) {
+            user.setEmail((String) updates.get("email"));
+        }
+        userMapper.updateById(user);
+        user.setPassword(null);
+        return user;
+    }
+
+    public void updateAvatar(Long userId, String avatarUrl) {
+        User user = new User();
+        user.setId(userId);
+        user.setAvatarUrl(avatarUrl);
+        userMapper.updateById(user);
+    }
+
+    public String clearAvatar(Long userId) {
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new BusinessException(ErrorCode.USER_NOT_FOUND);
+        }
+        String oldUrl = user.getAvatarUrl();
+        // MyBatis-Plus updateById 默认忽略 null 字段，必须用 LambdaUpdateWrapper 显式置空
+        userMapper.update(null, new LambdaUpdateWrapper<User>()
+                .eq(User::getId, userId)
+                .set(User::getAvatarUrl, null));
+        return oldUrl;
     }
 
     public void updateProfile(Long userId, UserProfile profile) {

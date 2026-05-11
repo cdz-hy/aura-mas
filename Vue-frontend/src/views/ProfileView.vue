@@ -7,58 +7,66 @@
       </router-link>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Radar chart -->
-      <div class="card p-6 animate-fade-in-up">
+    <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
+      <!-- Radar chart - left column -->
+      <div class="lg:col-span-2 card p-6 animate-fade-in-up">
         <h2 class="font-display text-lg font-semibold text-navy-800 mb-4">Felder-Silverman 学习风格</h2>
-        <div class="aspect-square max-w-md mx-auto">
+        <div class="aspect-square max-w-sm mx-auto">
           <ProfileRadar :dimensions="dimensions" />
         </div>
       </div>
 
-      <!-- Dimension details -->
-      <div class="space-y-4 animate-fade-in-up" style="animation-delay: 0.1s">
+      <!-- Dimension details - right column -->
+      <div class="lg:col-span-3 space-y-4 animate-fade-in-up" style="animation-delay: 0.1s">
         <!-- Felder-Silverman axes -->
-        <div v-for="axis in felderAxes" :key="axis.key" class="card p-5">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-medium text-navy-800">{{ axis.label }}</h3>
-            <span class="text-xs px-2 py-0.5 rounded-full"
-              :class="Math.abs(dimensions[axis.key] ?? 0) >= 0.2 ? 'bg-sage-100 text-sage-700' : 'bg-navy-50 text-navy-400'">
-              {{ felderAxisLabel(axis.key, dimensions[axis.key] ?? 0) }}
-            </span>
-          </div>
-          <div class="flex items-center gap-3 mt-1">
-            <span class="text-xs text-navy-400 w-14 text-right">{{ axis.negLabel }}</span>
-            <div class="flex-1 h-2 bg-navy-100 rounded-full relative">
-              <div class="absolute top-0 h-full rounded-full transition-all duration-500"
-                :class="(dimensions[axis.key] ?? 0) >= 0 ? 'bg-blue-400' : 'bg-amber-400'"
-                :style="barStyle(dimensions[axis.key] ?? 0)">
+        <div class="card p-5">
+          <h3 class="font-display font-semibold text-navy-800 mb-4">学习风格维度</h3>
+          <div class="space-y-4">
+            <div v-for="axis in felderAxes" :key="axis.key">
+              <div class="flex items-center justify-between mb-1.5">
+                <span class="text-sm font-medium text-navy-700">{{ axis.label }}</span>
+                <span class="text-xs px-2 py-0.5 rounded-full"
+                  :class="Math.abs(dimensions[axis.key] ?? 0) >= 0.2 ? 'bg-sage-100 text-sage-700' : 'bg-navy-50 text-navy-400'">
+                  {{ felderAxisLabel(axis.key, dimensions[axis.key] ?? 0) }}
+                </span>
               </div>
-              <div class="absolute top-0 left-1/2 w-0.5 h-full bg-navy-300/30"></div>
+              <div class="flex items-center gap-3">
+                <span class="text-xs text-navy-400 w-12 text-right">{{ axis.negLabel }}</span>
+                <div class="flex-1 h-2.5 bg-navy-100 rounded-full relative">
+                  <div class="absolute top-0 h-full rounded-full transition-all duration-500"
+                    :class="(dimensions[axis.key] ?? 0) >= 0 ? 'bg-blue-400' : 'bg-amber-400'"
+                    :style="barStyle(dimensions[axis.key] ?? 0)">
+                  </div>
+                  <div class="absolute top-0 left-1/2 w-0.5 h-full bg-navy-300/30"></div>
+                </div>
+                <span class="text-xs text-navy-400 w-12">{{ axis.posLabel }}</span>
+              </div>
             </div>
-            <span class="text-xs text-navy-400 w-14">{{ axis.posLabel }}</span>
           </div>
         </div>
 
         <!-- Auxiliary dimensions -->
-        <div v-for="(dim, key) in auxiliaryDetails" :key="key" class="card p-5">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-medium text-navy-800">{{ dim.label }}</h3>
-            <span class="text-xs px-2 py-0.5 rounded-full" :class="dim.filled ? 'bg-sage-100 text-sage-700' : 'bg-navy-50 text-navy-400'">
-              {{ dim.filled ? '已完善' : '待完善' }}
-            </span>
+        <div class="card p-5">
+          <h3 class="font-display font-semibold text-navy-800 mb-4">辅助维度</h3>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div v-for="(dim, key) in auxiliaryDetails" :key="key" class="p-3 rounded-lg bg-navy-50/50 border border-navy-100/50">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-sm font-medium text-navy-700">{{ dim.label }}</span>
+                <span class="text-xs px-2 py-0.5 rounded-full" :class="dim.filled ? 'bg-sage-100 text-sage-700' : 'bg-navy-50 text-navy-400'">
+                  {{ dim.filled ? '已完善' : '待完善' }}
+                </span>
+              </div>
+              <p class="text-xs text-navy-500 leading-relaxed">{{ dim.display }}</p>
+            </div>
           </div>
-          <p class="text-sm text-navy-500">{{ dim.display }}</p>
         </div>
       </div>
     </div>
 
     <!-- Profile history -->
     <div class="card p-6 mt-6 animate-fade-in-up" style="animation-delay: 0.2s">
-      <h2 class="font-display text-lg font-semibold text-navy-800 mb-4">画像演变</h2>
-      <div class="text-center py-8 text-navy-300">
-        <p class="text-sm">画像会随着你的学习过程自动更新</p>
-      </div>
+      <h2 class="font-display text-lg font-semibold text-navy-800 mb-2">画像演变</h2>
+      <p class="text-sm text-navy-400">画像会随着你的学习过程自动更新，系统会根据你的学习行为持续优化对你的理解。</p>
     </div>
   </div>
 </template>
@@ -108,7 +116,7 @@ const auxiliaryDetails = computed(() => {
 
 function barStyle(value: number) {
   const abs = Math.abs(value)
-  const width = (abs / 1) * 50 // max 50% width from center
+  const width = (abs / 1) * 50
   if (value >= 0) {
     return { left: '50%', width: `${width}%` }
   } else {

@@ -256,7 +256,7 @@ async def plan_chat(
                 # 异步触发画像维护（不阻塞流式输出）
                 asyncio.create_task(_async_profile_maintenance(
                     user_id=user_id,
-                    user_message=user_message,
+                    user_message=message,
                     chat_history=chat_history,
                     user_profile=user_profile,
                     quiz_result=None,

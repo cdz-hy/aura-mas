@@ -1,6 +1,6 @@
 <template>
   <div class="relative w-full h-full flex items-center justify-center">
-    <svg :viewBox="`0 0 ${size} ${size}`" class="w-full h-full max-w-[320px] max-h-[320px]">
+    <svg :viewBox="`0 0 ${viewBoxSize} ${viewBoxSize}`" class="w-full h-full">
       <!-- Background rings -->
       <g v-for="ring in 5" :key="ring">
         <polygon
@@ -60,9 +60,10 @@ const props = defineProps<{
   dimensions: Record<string, any>
 }>()
 
+const viewBoxSize = 360
 const size = 300
-const center = size / 2
-const maxRadius = 120
+const center = viewBoxSize / 2
+const maxRadius = 110
 
 const axisLabels = ['感知 <-> 直觉', '视觉 <-> 言语', '活跃 <-> 沉思', '循序 <-> 全局']
 
@@ -106,7 +107,7 @@ const dataPoints = computed(() => {
 
 function labelPoint(index: number) {
   const angle = (Math.PI * 2 * index) / axisLabels.length - Math.PI / 2
-  const r = maxRadius + 24
+  const r = maxRadius + 28
   return {
     x: center + r * Math.cos(angle),
     y: center + r * Math.sin(angle),

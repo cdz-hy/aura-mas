@@ -22,6 +22,7 @@
         <mybatis-plus.version>3.5.5</mybatis-plus.version>
         <jjwt.version>0.12.3</jjwt.version>
         <minio.version>8.5.7</minio.version>
+        <qiniu.version>7.17.0</qiniu.version>
         <springdoc.version>2.3.0</springdoc.version>
     </properties>
 
@@ -82,6 +83,13 @@
             <groupId>io.minio</groupId>
             <artifactId>minio</artifactId>
             <version>${minio.version}</version>
+        </dependency>
+
+        <!-- Qiniu -->
+        <dependency>
+            <groupId>com.qiniu</groupId>
+            <artifactId>qiniu-java-sdk</artifactId>
+            <version>${qiniu.version}</version>
         </dependency>
 
         <!-- SpringDoc OpenAPI -->

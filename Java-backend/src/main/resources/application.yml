@@ -48,6 +48,12 @@ minio:
   secret-key: minioadmin
   bucket-name: learning-resources
 
+qiniu:
+  access-key: ${QINIU_ACCESS_KEY:your-qiniu-access-key}
+  secret-key: ${QINIU_SECRET_KEY:your-qiniu-secret-key}
+  bucket-name: ${QINIU_BUCKET_NAME:your-bucket-name}
+  domain: ${QINIU_DOMAIN:http://your-qiniu-domain}
+
 logging:
   level:
     com.learning: debug

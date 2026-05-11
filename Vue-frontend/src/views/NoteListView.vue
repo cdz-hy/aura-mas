@@ -20,9 +20,16 @@
         v-for="note in notes"
         :key="note.id"
         class="card-hover p-5 cursor-pointer group"
-        @click="editNote(note)"
+        @click="$router.push(`/notes/${note.id}`)"
       >
-        <h3 class="font-medium text-navy-800 mb-2 group-hover:text-navy-600 transition-colors">{{ note.noteName }}</h3>
+        <div class="flex items-start justify-between mb-2">
+          <h3 class="font-medium text-navy-800 group-hover:text-navy-600 transition-colors flex-1 mr-2 line-clamp-1">
+            {{ note.noteName }}
+          </h3>
+          <svg class="w-4 h-4 text-navy-200 group-hover:text-navy-400 transition-colors flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </div>
         <p class="text-sm text-navy-400 line-clamp-3 mb-3">{{ note.content.substring(0, 150) }}</p>
         <div class="flex items-center justify-between text-xs text-navy-300">
           <span>{{ formatDate(note.updatedAt) }}</span>
@@ -32,70 +39,24 @@
         </div>
       </div>
     </div>
-
-    <!-- Edit modal -->
-    <Teleport to="body">
-      <div v-if="editingNote" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-        <div class="w-full max-w-3xl max-h-[80vh] bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-          <div class="px-6 py-4 border-b border-navy-100 flex items-center justify-between">
-            <input
-              v-model="editingNote.noteName"
-              class="text-lg font-display font-semibold text-navy-800 bg-transparent border-none outline-none w-full"
-              placeholder="笔记标题"
-            />
-            <div class="flex gap-2 flex-shrink-0 ml-4">
-              <button class="btn-ghost text-sm" @click="editingNote = null">取消</button>
-              <button class="btn-primary text-sm" @click="saveNote">保存</button>
-            </div>
-          </div>
-          <div class="flex-1 overflow-hidden">
-            <textarea
-              v-model="editingNote.content"
-              class="w-full h-full p-6 text-navy-700 leading-relaxed resize-none outline-none font-body"
-              placeholder="开始书写... (支持 Markdown)"
-            ></textarea>
-          </div>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { getNotes, createNote, updateNote, deleteNote as deleteNoteApi } from '@/api/note'
+import { useRouter } from 'vue-router'
+import { getNotes, deleteNote as deleteNoteApi } from '@/api/note'
 import type { Note } from '@/types/note'
 
+const router = useRouter()
 const notes = ref<Note[]>([])
-const editingNote = ref<Note | null>(null)
 
 function formatDate(date: string) {
   return new Date(date).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
 function createNewNote() {
-  editingNote.value = { id: 0, userId: 0, noteName: '', content: '', createdAt: '', updatedAt: '' }
-}
-
-function editNote(note: Note) {
-  editingNote.value = { ...note }
-}
-
-async function saveNote() {
-  if (!editingNote.value) return
-  try {
-    const noteName = editingNote.value.noteName.trim() || '无标题笔记'
-    const content = editingNote.value.content.trim() || ' '
-    if (editingNote.value.id) {
-      await updateNote(editingNote.value.id, { noteName, content })
-    } else {
-      await createNote({ noteName, content })
-    }
-    editingNote.value = null
-    await loadNotes()
-  } catch (e) {
-    console.error('Save note failed:', e)
-  }
+  router.push('/notes/new')
 }
 
 async function deleteNote(id: number) {
