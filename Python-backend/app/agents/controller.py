@@ -4,6 +4,7 @@
 """
 import logging
 from typing import Dict, Any
+from langgraph.graph import END
 from app.agents.schemas import (
     AgentState, NODE_CONTROLLER, NODE_TASK_DECOMPOSER, NODE_SIMPLE_ANSWER,
     NODE_RAG_RETRIEVER, NODE_QUIZ_GENERATOR, NODE_QUIZ_GRADER,
@@ -60,7 +61,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
             logger.warning(f"  [主控智能体] 未通过模块: {retry_module_ids}")
             return {
                 "intent": "retry_failed",
-                "next_node": NODE_PROFILE_MAINTAINER,  # 跳过重试，继续后续流程
+                "next_node": END,  # 直接结束（画像维护改为异步后台执行）
                 "current_step": f"已达到最大重试次数，放弃重试模块 {retry_module_ids}",
                 "retry_module_ids": [],  # 清除重试标记
                 "retry_mode": False,
@@ -126,12 +127,102 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     ]
 
     try:
-        logger.info(f"  [主控智能体] 正在调用 LLM 进行意图识别...")
-        result = llm.chat_json(messages, temperature=0.2)
-        intent = result.get("intent", INTENT_AMBIGUOUS)
-        reasoning = result.get("reasoning", "")
+        logger.info(f"  [主控智能体] 正在流式调用 LLM 进行意图识别...")
+        
+        intent = None
+        reasoning = ""
+        accumulated_text = ""
+        
+        # 使用流式输出
+        for chunk in llm.chat_stream(messages, temperature=0.2):
+            accumulated_text += chunk
+            
+            # 提前判断：检测关键词快速路由
+            if intent is None:
+                # 检测 "generate_resource" 相关关键词
+                if any(keyword in accumulated_text.lower() for keyword in [
+                    '"intent": "generate_resource"',
+                    '"intent":"generate_resource"',
+                    'generate_resource',
+                    '生成学习资源',
+                    '生成资料',
+                    '学习计划',
+                ]):
+                    intent = INTENT_GENERATE_RESOURCE
+                    logger.info(f"  [主控智能体] 流式判断: 检测到资源生成意图，提前路由!")
+                    break
+                
+                # 检测 "simple_qa" 相关关键词
+                elif any(keyword in accumulated_text.lower() for keyword in [
+                    '"intent": "simple_qa"',
+                    '"intent":"simple_qa"',
+                    'simple_qa',
+                    '简单问答',
+                    '简短提问',
+                ]):
+                    intent = INTENT_SIMPLE_QA
+                    logger.info(f"  [主控智能体] 流式判断: 检测到简单问答意图，提前路由!")
+                    break
+                
+                # 检测 "generate_quiz" 相关关键词
+                elif any(keyword in accumulated_text.lower() for keyword in [
+                    '"intent": "generate_quiz"',
+                    '"intent":"generate_quiz"',
+                    'generate_quiz',
+                    '生成题目',
+                    '出题',
+                ]):
+                    intent = INTENT_GENERATE_QUIZ
+                    logger.info(f"  [主控智能体] 流式判断: 检测到题目生成意图，提前路由!")
+                    break
+                
+                # 检测 "grade_quiz" 相关关键词
+                elif any(keyword in accumulated_text.lower() for keyword in [
+                    '"intent": "grade_quiz"',
+                    '"intent":"grade_quiz"',
+                    'grade_quiz',
+                    '批改',
+                    '评分',
+                ]):
+                    intent = INTENT_GRADE_QUIZ
+                    logger.info(f"  [主控智能体] 流式判断: 检测到题目判定意图，提前路由!")
+                    break
+                
+                # 检测 "follow_up" 相关关键词
+                elif any(keyword in accumulated_text.lower() for keyword in [
+                    '"intent": "follow_up"',
+                    '"intent":"follow_up"',
+                    'follow_up',
+                    '追问',
+                    '补充',
+                ]):
+                    intent = INTENT_FOLLOW_UP
+                    logger.info(f"  [主控智能体] 流式判断: 检测到跟随意图，提前路由!")
+                    break
+        
+        # 如果流式判断没有识别出意图，尝试解析完整 JSON
+        if intent is None:
+            try:
+                import json
+                # 尝试提取 JSON
+                if '{' in accumulated_text and '}' in accumulated_text:
+                    start = accumulated_text.find('{')
+                    end = accumulated_text.rfind('}') + 1
+                    json_str = accumulated_text[start:end]
+                    result = json.loads(json_str)
+                    intent = result.get("intent", INTENT_AMBIGUOUS)
+                    reasoning = result.get("reasoning", "")
+                else:
+                    intent = INTENT_AMBIGUOUS
+                    reasoning = "无法解析意图"
+            except:
+                intent = INTENT_AMBIGUOUS
+                reasoning = "JSON 解析失败"
+        
         logger.info(f"  [主控智能体] 意图识别结果: {intent}")
-        logger.info(f"  [主控智能体] 推理过程: {reasoning}")
+        if reasoning:
+            logger.info(f"  [主控智能体] 推理过程: {reasoning}")
+            
     except Exception as e:
         intent = INTENT_AMBIGUOUS
         reasoning = f"意图解析异常: {str(e)}"

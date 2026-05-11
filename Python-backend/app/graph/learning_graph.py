@@ -77,8 +77,9 @@ def route_after_review_orchestrate(state: AgentState) -> str:
         logger.warning(f"  [路由] 审查未通过 -> 主控智能体 (重新决策)")
         return NODE_CONTROLLER
     
-    logger.info(f"  [路由] 审查编排完成 -> 画像维护智能体")
-    return NODE_PROFILE_MAINTAINER
+    # 审查编排完成 → 直接结束（画像维护改为异步后台执行）
+    logger.info(f"  [路由] 审查编排完成 -> END (画像维护将在后台异步执行)")
+    return END
 
 
 def route_after_simple_answer(state: AgentState) -> str:
@@ -86,12 +87,18 @@ def route_after_simple_answer(state: AgentState) -> str:
     profile_update_needed = state.get("profile_update_needed", False)
     rag_sufficient = state.get("rag_sufficient", True)
     intent = state.get("intent", "")
+    
+    # 优先处理画像更新
+    if profile_update_needed:
+        logger.info(f"  [路由] 简答完成 -> 画像维护智能体")
+        return NODE_PROFILE_MAINTAINER
+    
+    # RAG 无结果 + 资源生成意图 -> 资源自主生成
     if not rag_sufficient and intent == INTENT_GENERATE_RESOURCE:
         logger.info(f"  [路由] RAG 无结果 + 资源生成意图 -> 资源自主生成智能体")
         return NODE_RESOURCE_GENERATOR
-    if profile_update_needed:
-        logger.info(f"  [路由] 需要画像更新 -> 画像维护智能体")
-        return NODE_PROFILE_MAINTAINER
+    
+    # 默认结束
     logger.info(f"  [路由] 简答完成 -> END")
     return END
 
@@ -128,6 +135,7 @@ def route_after_quiz_generator(state: AgentState) -> str:
 
 def route_after_quiz_grader(state: AgentState) -> str:
     """题目判定之后的路由"""
+    # 题目判定完成 → 路由到画像维护智能体
     logger.info(f"  [路由] 题目判定完成 -> 画像维护智能体")
     return NODE_PROFILE_MAINTAINER
 

@@ -11,13 +11,16 @@
 """
 import json
 import logging
+import asyncio
 from typing import AsyncGenerator
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from app.services.db.java_client import java_client
 from app.graph.learning_graph import get_learning_graph
 from app.agents.schemas import AgentState
+from app.agents.profile_maintainer import profile_maintainer_node
 from app.schemas.sse_bridge import graph_step_to_sse
+from app.utils.profile_utils import ensure_learning_behavior_fields
 
 logger = logging.getLogger("api.resource_chat")
 router = APIRouter()
@@ -71,6 +74,11 @@ async def plan_chat(
     user_profile = {}
     try:
         user_profile = java_client.get_user_profile(user_id)
+        # 确保 learning_behavior 字段完整
+        if "learning_behavior" in user_profile:
+            user_profile["learning_behavior"] = ensure_learning_behavior_fields(
+                user_profile["learning_behavior"]
+            )
     except Exception:
         pass
 
@@ -244,6 +252,16 @@ async def plan_chat(
                     logger.warning(f"记录资源生成对话失败: {e}")
                 # 通知前端新资源已生成
                 yield f'data: {json.dumps({"type": "resource_generated", "resources": generated_resource_info}, ensure_ascii=False)}\n\n'
+                
+                # 异步触发画像维护（不阻塞流式输出）
+                asyncio.create_task(_async_profile_maintenance(
+                    user_id=user_id,
+                    user_message=user_message,
+                    chat_history=chat_history,
+                    user_profile=user_profile,
+                    quiz_result=None,
+                ))
+                logger.info(f"[画像维护] 已触发后台异步更新任务")
 
             yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
 
@@ -313,6 +331,11 @@ async def generate_single_resource(
     user_profile = {}
     try:
         user_profile = java_client.get_user_profile(user_id)
+        # 确保 learning_behavior 字段完整
+        if "learning_behavior" in user_profile:
+            user_profile["learning_behavior"] = ensure_learning_behavior_fields(
+                user_profile["learning_behavior"]
+            )
     except Exception:
         pass
 
@@ -473,15 +496,59 @@ def _persist_profile_update(sse_data: str, user_id: int):
         if d.get("type") != "profile_update":
             return
         dimensions = d.get("dimensions", {})
-        updates = dimensions.get("updates")
-        if not updates:
+        updated_behavior = dimensions.get("updated_behavior")
+        if not updated_behavior:
             return
         reason = dimensions.get("reason", "对话分析自动更新")
         logger.info(f"[画像持久化] 保存用户 {user_id} 的画像更新: {reason}")
-        java_client.save_user_profile(user_id, updates, reason)
+        java_client.save_user_profile(user_id, updated_behavior, reason)
         logger.info(f"[画像持久化] 画像保存成功")
     except Exception as e:
         logger.warning(f"[画像持久化] 保存失败: {e}")
+
+
+async def _async_profile_maintenance(
+    user_id: int,
+    user_message: str,
+    chat_history: list,
+    user_profile: dict,
+    quiz_result: dict = None,
+):
+    """
+    异步执行画像维护，不阻塞主流程
+    
+    在资源生成完成、题目判定完成等场景下，在后台异步更新用户画像，
+    避免阻塞流式输出的结束，提升用户体验。
+    """
+    try:
+        logger.info(f"[画像维护] 开始后台异步更新用户 {user_id} 的画像")
+        
+        # 构造状态
+        state = {
+            "user_message": user_message,
+            "chat_history": chat_history,
+            "user_profile": user_profile,
+            "quiz_result": quiz_result,
+        }
+        
+        # 调用画像维护智能体
+        result = profile_maintainer_node(state)
+        
+        # 持久化画像更新
+        if result.get("stream_events"):
+            for event in result["stream_events"]:
+                if event.get("event_type") == "profile_update":
+                    updated_behavior = event.get("data", {}).get("updated_behavior", {})
+                    reason = event.get("data", {}).get("reason", "后台自动更新")
+                    confidence = event.get("data", {}).get("confidence", 0)
+                    if updated_behavior:
+                        java_client.save_user_profile(user_id, updated_behavior, reason)
+                        logger.info(f"[画像维护] 用户 {user_id} 画像更新成功 (置信度: {confidence:.2f})")
+        else:
+            logger.info(f"[画像维护] 用户 {user_id} 无需更新画像")
+        
+    except Exception as e:
+        logger.error(f"[画像维护] 异步更新失败: {str(e)}", exc_info=True)
 
 
 def _soft_delete_breakdown_dialogue(user_id: int, session_id: str, plan_id: int):
