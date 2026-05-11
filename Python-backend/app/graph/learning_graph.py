@@ -2,6 +2,7 @@
 LangGraph 多智能体工作流图 - 个性化学习资源生成系统
 """
 import logging
+import asyncio
 from typing import Dict, Any, List, AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
 from langgraph.graph import StateGraph, END
@@ -61,10 +62,21 @@ def route_after_review_orchestrate(state: AgentState) -> str:
     if error:
         logger.warning(f"  [路由] 审查编排未通过 -> 主控智能体 (重新决策)")
         return NODE_CONTROLLER
+    
     review_passed = state.get("review_passed", True)
+    failed_modules = state.get("failed_modules", [])
+    
+    # 部分模块未通过 → 标记需要重试的模块，返回主控
+    if not review_passed and failed_modules:
+        retry_ids = [m["module_order"] for m in failed_modules]
+        logger.warning(f"  [路由] {len(failed_modules)} 个模块未通过审查 -> 主控智能体 (重新生成模块: {retry_ids})")
+        return NODE_CONTROLLER
+    
+    # 全部未通过（RAG 审查失败）→ 返回主控
     if not review_passed:
         logger.warning(f"  [路由] 审查未通过 -> 主控智能体 (重新决策)")
         return NODE_CONTROLLER
+    
     logger.info(f"  [路由] 审查编排完成 -> 画像维护智能体")
     return NODE_PROFILE_MAINTAINER
 
@@ -135,18 +147,68 @@ def route_after_profile_maintainer(state: AgentState) -> str:
 # ==================== 审查编排并行节点 ====================
 
 def review_and_orchestrate_node(state: AgentState) -> Dict[str, Any]:
-    """审查与编排并行执行节点 - 两者同时启动，审查不通过则丢弃编排结果"""
+    """
+    审查与编排真正并行执行节点
+    
+    优化策略：
+    1. 使用 asyncio.gather 实现真正的并发（适合 I/O 密集型 LLM 调用）
+    2. 两个智能体同时调用 LLM API，充分利用网络等待时间
+    3. 审查不通过时丢弃编排结果（快速失败）
+    4. 相比串行执行，理论上可节省 30-50% 的时间
+    """
     logger.info(f"{'='*60}")
-    logger.info(f"  [审查编排节点] 开始并行处理")
+    logger.info(f"  [审查编排节点] 开始真正并行处理")
 
     stream_events = []
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        review_future = executor.submit(reviewer_node, state)
-        orchestrate_future = executor.submit(content_orchestrator_node, state)
+    async def run_parallel():
+        """使用 asyncio 并发执行审查和编排"""
+        import asyncio
+        
+        loop = asyncio.get_event_loop()
+        
+        # 同时启动两个任务（真正的并发）
+        tasks = [
+            loop.run_in_executor(None, reviewer_node, state),
+            loop.run_in_executor(None, content_orchestrator_node, state),
+        ]
+        
+        # 并发执行，同时等待两个任务完成
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        return results[0], results[1]  # review_result, orchestrate_result
 
-        review_result = review_future.result()
-        orchestrate_result = orchestrate_future.result()
+    # 执行并发任务
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        review_result, orchestrate_result = loop.run_until_complete(run_parallel())
+        loop.close()
+        
+        # 处理异常结果
+        if isinstance(review_result, Exception):
+            logger.error(f"  [审查编排节点] 审查任务异常: {str(review_result)}")
+            return {
+                "error": f"审查任务失败: {str(review_result)}",
+                "current_step": "审查编排节点: 审查异常",
+                "stream_events": stream_events,
+            }
+        
+        if isinstance(orchestrate_result, Exception):
+            logger.error(f"  [审查编排节点] 编排任务异常: {str(orchestrate_result)}")
+            return {
+                "error": f"编排任务失败: {str(orchestrate_result)}",
+                "current_step": "审查编排节点: 编排异常",
+                "stream_events": stream_events,
+            }
+            
+    except Exception as e:
+        logger.error(f"  [审查编排节点] 并行执行异常: {str(e)}")
+        return {
+            "error": f"审查编排并行执行失败: {str(e)}",
+            "current_step": "审查编排节点: 执行异常",
+            "stream_events": stream_events,
+        }
 
     # 收集审查事件
     review_events = review_result.get("stream_events", [])
@@ -159,11 +221,24 @@ def review_and_orchestrate_node(state: AgentState) -> Dict[str, Any]:
     # 审查未通过 → 丢弃编排结果，返回错误让主控重试
     if not review_passed:
         logger.warning(f"  [审查编排节点] 审查未通过，丢弃编排结果")
+        logger.info(f"  [性能提示] 虽然编排任务已完成，但因审查未通过而被丢弃")
+        
+        # 提取未通过的模块信息
+        failed_modules = review_result.get("failed_modules", [])
+        passed_modules = review_result.get("passed_modules", [])
+        retry_ids = [m["module_order"] for m in failed_modules] if failed_modules else []
+        
+        if retry_ids:
+            logger.warning(f"  [审查编排节点] 需要重新生成的模块: {retry_ids}")
+        
         logger.info(f"{'='*60}")
         return {
             "review_passed": False,
             "review_feedback": review_feedback,
             "review_suggestions": review_suggestions,
+            "failed_modules": failed_modules,
+            "passed_modules": passed_modules,
+            "retry_module_ids": retry_ids,  # 需要重新生成的模块编号
             "error": f"内容审查未通过: {review_feedback}",
             "current_step": f"审查编排节点: 审查未通过 - {review_feedback[:80]}",
             "stream_events": stream_events,

@@ -185,6 +185,7 @@ async def plan_chat(
                                 pass
 
             # 任务分解生成后保存到 ai_dialogue（新生成或重新生成的）
+            # 注意：任务分解时不关联 resource_id，因为此时还没有生成学习资源
             if new_breakdown and plan_id_int and not breakdown_confirmed:
                 _save_breakdown_dialogue(user_id, session_id, plan_id_int, new_breakdown)
 
@@ -198,7 +199,9 @@ async def plan_chat(
                         "type": mod.get("module_type", "document"),
                         "title": mod.get("title", f"模块 {idx + 1}"),
                     })
-                if parsed_breakdown:
+                # 如果有解析的任务分解，保存并关联资源ID（用于前端显示）
+                # 注意：这里关联的是为了前端能够找到对应的资源，但不是必须的
+                if parsed_breakdown and resource_ids:
                     _save_breakdown_dialogue(user_id, session_id, plan_id_int, parsed_breakdown, resource_ids)
 
             # 题目生成后，保存到学习资源库
@@ -220,7 +223,7 @@ async def plan_chat(
                     "resources": generated_resource_info,
                 }
                 try:
-                    java_client.create_dialogue(
+                    result = java_client.create_dialogue(
                         user_id=user_id,
                         session_id=session_id,
                         conversation_text=json.dumps(dialogue_data, ensure_ascii=False),
@@ -228,6 +231,15 @@ async def plan_chat(
                         plan_id=plan_id_int,
                         intent_type="resource_generated",
                     )
+                    # 关联最小的学习资源编号（第一个生成的资源）
+                    dialogue_id = result.get("data", {}).get("id") if isinstance(result, dict) else None
+                    if dialogue_id and generated_resource_info:
+                        min_resource_id = min(r["id"] for r in generated_resource_info if r.get("id"))
+                        try:
+                            java_client.update_dialogue_resource_id(dialogue_id, min_resource_id)
+                            logger.info(f"[资源生成对话] 已关联资源ID: {min_resource_id}")
+                        except Exception as e:
+                            logger.warning(f"[资源生成对话] 关联资源ID失败: {e}")
                 except Exception as e:
                     logger.warning(f"记录资源生成对话失败: {e}")
                 # 通知前端新资源已生成
@@ -240,9 +252,10 @@ async def plan_chat(
             yield f'data: {json.dumps({"type": "error", "content": str(e)}, ensure_ascii=False)}\n\n'
 
         # 未生成资源时，保存纯文本 AI 回复
-        if not generated_resource_info:
+        # 只有在不是资源生成场景（未确认任务分解）且没有生成资源时，才保存纯文本回复
+        if not breakdown_confirmed and not generated_resource_info:
             ai_response = "\n".join(ai_response_parts) if ai_response_parts else "处理完成"
-            if ai_response:
+            if ai_response and ai_response != "处理完成":  # 避免保存空的"处理完成"消息
                 try:
                     java_client.create_dialogue(
                         user_id=user_id,
@@ -561,32 +574,42 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
     try:
         if not module_list:
             return []
+        
+        # 确保模块列表按 module_order 排序
+        sorted_modules = sorted(module_list, key=lambda x: x.get("module_order", 0))
+        
         # 查询当前计划已有的最大 moduleOrder，避免编号重复
         existing = java_client.get_plan_resources(plan_id)
         max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
+        
         resources = []
-        for i, mod in enumerate(module_list):
+        for mod in sorted_modules:
+            # 使用模块自身的 module_order，而不是 enumerate 的索引
+            module_order_in_list = mod.get("module_order", 0)
+            
             module_type = mod.get("module_type", "document")
             module_data = {
-                "title": mod.get("title", f"模块 {i + 1}"),
+                "title": mod.get("title", f"模块 {module_order_in_list}"),
                 "content": mod.get("content", ""),
                 "description": mod.get("description", ""),
                 "key_concepts": mod.get("metadata", {}).get("key_concepts", []),
-                "module_title": mod.get("title", f"模块 {i + 1}"),
+                "module_title": mod.get("title", f"模块 {module_order_in_list}"),
                 "estimated_hours": mod.get("estimated_hours", 2),
             }
             resources.append({
                 "planId": plan_id,
                 "moduleType": module_type,
                 "moduleData": json.dumps(module_data, ensure_ascii=False),
-                "moduleOrder": max_order + i + 1,
+                "moduleOrder": max_order + module_order_in_list,  # 使用模块自身的顺序
                 "status": 2,
                 "generatedByAgent": "content_orchestrator",
             })
+        
         if resources:
             result = java_client.create_resources_bulk(resources)
             resource_ids = [r.get("id") for r in (result or []) if r.get("id")]
             logger.info(f"[资源持久化] 已保存 {len(resources)} 个学习资源到计划 {plan_id}，编号从 {max_order + 1} 开始")
+            logger.info(f"[资源持久化] 模块顺序: {[mod.get('module_order') for mod in sorted_modules]}")
             return resource_ids
     except Exception as e:
         logger.warning(f"[资源持久化] 保存模块资源失败: {e}")

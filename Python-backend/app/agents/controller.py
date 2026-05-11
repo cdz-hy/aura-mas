@@ -48,6 +48,40 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  用户输入: {user_message[:100]}")
     logger.info(f"{'='*60}")
 
+    # 检查是否有需要重试的模块（模块级别重试）
+    retry_module_ids = state.get("retry_module_ids", [])
+    retry_count = state.get("retry_count", 0)
+    max_retries = state.get("max_retries", 3)
+    
+    if retry_module_ids:
+        # 检查重试次数限制
+        if retry_count >= max_retries:
+            logger.warning(f"  [主控智能体] 已达到最大重试次数 ({max_retries})，放弃重试")
+            logger.warning(f"  [主控智能体] 未通过模块: {retry_module_ids}")
+            return {
+                "intent": "retry_failed",
+                "next_node": NODE_PROFILE_MAINTAINER,  # 跳过重试，继续后续流程
+                "current_step": f"已达到最大重试次数，放弃重试模块 {retry_module_ids}",
+                "retry_module_ids": [],  # 清除重试标记
+                "retry_mode": False,
+                "iteration_count": iteration + 1,
+            }
+        
+        logger.info(f"  [主控智能体] 检测到需要重试的模块: {retry_module_ids}")
+        logger.info(f"  [主控智能体] 当前重试次数: {retry_count}/{max_retries}")
+        logger.info(f"  [主控智能体] 只重新生成这些模块，保留其他模块")
+        
+        # 设置重试模式，让 RAG 和编排智能体只处理这些模块
+        return {
+            "intent": "retry_modules",
+            "next_node": NODE_RAG_RETRIEVER,
+            "retry_mode": True,
+            "target_module_ids": retry_module_ids,
+            "retry_count": retry_count + 1,
+            "current_step": f"主控智能体: 模块级别重试 (第 {retry_count + 1} 次)，重新生成模块 {retry_module_ids}",
+            "iteration_count": iteration + 1,
+        }
+
     # 快速路径：如果前端已确认任务分解，直接进入 RAG 检索，无需 LLM 分类
     if state.get("task_breakdown_confirmed") and state.get("task_breakdown"):
         logger.info(f"  [主控智能体] 任务分解已确认，快速路由 -> RAG 检索")

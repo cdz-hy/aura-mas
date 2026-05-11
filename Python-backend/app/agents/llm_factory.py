@@ -99,15 +99,55 @@ class MIMOClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """对话并解析 JSON 返回"""
+        """对话并解析 JSON 返回，带容错处理"""
         raw = self.chat(messages, temperature=temperature, max_tokens=max_tokens)
+        
         # 尝试提取 JSON
         raw = raw.strip()
+        
+        # 去掉 markdown 代码块标记
         if raw.startswith("```"):
-            # 去掉 markdown 代码块标记
             lines = raw.split("\n")
-            raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-        return json.loads(raw)
+            # 去掉第一行（```json 或 ```）和最后一行（```）
+            if lines[-1].strip() == "```":
+                raw = "\n".join(lines[1:-1])
+            else:
+                raw = "\n".join(lines[1:])
+            raw = raw.strip()
+        
+        # 尝试多种 JSON 解析策略
+        try:
+            # 策略1: 直接解析
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            # 策略2: 尝试修复常见问题
+            try:
+                # 移除可能的 BOM 和其他不可见字符
+                raw_cleaned = raw.encode('utf-8').decode('utf-8-sig').strip()
+                return json.loads(raw_cleaned)
+            except json.JSONDecodeError:
+                # 策略3: 尝试提取 JSON 对象（查找第一个 { 到最后一个 }）
+                try:
+                    start = raw.find('{')
+                    end = raw.rfind('}')
+                    if start != -1 and end != -1 and end > start:
+                        json_str = raw[start:end+1]
+                        return json.loads(json_str)
+                except json.JSONDecodeError:
+                    pass
+                
+                # 策略4: 尝试提取 JSON 数组（查找第一个 [ 到最后一个 ]）
+                try:
+                    start = raw.find('[')
+                    end = raw.rfind(']')
+                    if start != -1 and end != -1 and end > start:
+                        json_str = raw[start:end+1]
+                        return json.loads(json_str)
+                except json.JSONDecodeError:
+                    pass
+                
+                # 所有策略都失败，抛出原始错误
+                raise Exception(f"JSON 解析失败: {str(e)}\n原始内容前500字符: {raw[:500]}")
 
 
 def get_controller_llm() -> MIMOClient:
@@ -132,7 +172,7 @@ def get_rag_retriever_llm() -> MIMOClient:
 
 def get_content_orchestrator_llm() -> MIMOClient:
     """内容编排智能体 - 标准模型（唯一使用 mimo-v2.5 的智能体）"""
-    return MIMOClient(model=MIMOClient.MODEL_STANDARD, temperature=0.5, max_tokens=8192)
+    return MIMOClient(model=MIMOClient.MODEL_STANDARD, temperature=0.5, max_tokens=32678)
 
 
 def get_reviewer_llm() -> MIMOClient:
@@ -142,7 +182,7 @@ def get_reviewer_llm() -> MIMOClient:
 
 def get_resource_generator_llm() -> MIMOClient:
     """多模态资源自主生成智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=8192)
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=16384)
 
 
 def get_quiz_generator_llm() -> MIMOClient:

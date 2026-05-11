@@ -126,15 +126,38 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
     user_profile = state.get("user_profile", {})
     modules = task_breakdown.get("modules", [])
     chat_history = state.get("chat_history", [])
+    
+    # 检查是否为重试模式（只检索指定模块）
+    retry_mode = state.get("retry_mode", False)
+    target_module_ids = state.get("target_module_ids", [])
 
     logger.info(f"{'='*60}")
     logger.info(f"  [RAG检索智能体] 开始处理")
     logger.info(f"  用户输入: {user_message[:100]}")
-    logger.info(f"  待检索模块数: {len(modules)}")
+    
+    # 重试模式：只检索未通过的模块
+    if retry_mode and target_module_ids:
+        logger.info(f"  [RAG检索智能体] 🔄 重试模式：只检索模块 {target_module_ids}")
+        
+        # 筛选出需要重新检索的模块
+        target_modules = []
+        for module_id in target_module_ids:
+            if 1 <= module_id <= len(modules):
+                target_modules.append(modules[module_id - 1])
+        
+        if not target_modules:
+            logger.warning(f"  [RAG检索智能体] 未找到目标模块，使用全部模块")
+            target_modules = modules
+        
+        logger.info(f"  [RAG检索智能体] 待检索模块数: {len(target_modules)} (总共 {len(modules)} 个)")
+        modules_to_retrieve = target_modules
+    else:
+        logger.info(f"  [RAG检索智能体] 待检索模块数: {len(modules)}")
+        modules_to_retrieve = modules
 
     llm = get_rag_retriever_llm()
     retrieval_config = _compute_retrieval_config(user_profile)
-    search_queries = _optimize_search_queries(modules, user_message, llm, chat_history)
+    search_queries = _optimize_search_queries(modules_to_retrieve, user_message, llm, chat_history)
 
     all_results = []
     all_context_chunks = []

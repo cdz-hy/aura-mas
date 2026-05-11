@@ -68,10 +68,19 @@ class AgentState(TypedDict, total=False):
     review_passed: bool  # 审查是否通过
     review_feedback: str  # 审查反馈
     review_suggestions: List[str]  # 优化建议
+    failed_modules: List[Dict[str, Any]]  # 未通过审查的模块列表
+    passed_modules: List[int]  # 通过审查的模块编号列表
+    module_review_results: List[Dict[str, Any]]  # 所有模块的详细审查结果
+    retry_module_ids: List[int]  # 需要重新生成的模块编号列表
+    retry_mode: bool  # 是否为重试模式
+    target_module_ids: List[int]  # 重试模式下的目标模块编号列表
+    retry_count: int  # 当前重试次数
+    max_retries: int  # 最大重试次数（默认3次）
 
     # ==================== 内容编排 ====================
     orchestrated_content: Optional[Dict[str, Any]]  # 编排后的模块化内容
     module_list: List[Dict[str, Any]]  # 生成的学习资源模块列表
+    use_parallel_orchestration: bool  # 是否使用并行编排模式（默认 True）
 
     # ==================== 自主生成 ====================
     generated_content: Optional[Dict[str, Any]]  # 自主生成的内容
