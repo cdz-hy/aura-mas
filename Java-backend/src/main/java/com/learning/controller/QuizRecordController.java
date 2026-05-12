@@ -43,10 +43,12 @@ public class QuizRecordController {
     public Result<List<QuizRecord>> getUserQuizRecords(
             @PathVariable Long userId,
             @RequestParam(required = false) Long planId,
+            @RequestParam(required = false) Long resourceId,
             @RequestParam(defaultValue = "50") int limit) {
         LambdaQueryWrapper<QuizRecord> wrapper = new LambdaQueryWrapper<QuizRecord>()
                 .eq(QuizRecord::getUserId, userId)
                 .eq(planId != null, QuizRecord::getPlanId, planId)
+                .eq(resourceId != null, QuizRecord::getResourceId, resourceId)
                 .orderByDesc(QuizRecord::getAnswerTime)
                 .last("LIMIT " + limit);
         return Result.success(quizRecordMapper.selectList(wrapper));
