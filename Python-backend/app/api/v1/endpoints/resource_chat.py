@@ -180,6 +180,9 @@ async def plan_chat(
                         tb = node_output.get("task_breakdown")
                         if tb and node_name == "task_decomposer":
                             new_breakdown = tb
+                        # 任务分解节点自动确认时（单模块），同步 breakdown_confirmed
+                        if "task_breakdown_confirmed" in node_output:
+                            breakdown_confirmed = node_output["task_breakdown_confirmed"]
                         # 检查是否为部分审查失败 → 立即保存已通过模块
                         if (node_name == "review_orchestrate"
                                 and not node_output.get("review_passed")

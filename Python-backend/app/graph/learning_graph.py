@@ -104,9 +104,18 @@ def route_after_simple_answer(state: AgentState) -> str:
 
 
 def route_after_task_decomposer(state: AgentState) -> str:
-    """任务分解之后的路由 - 需要用户确认"""
-    logger.info(f"  [路由] 任务分解完成 -> 用户确认")
-    return NODE_HUMAN_CONFIRM
+    """任务分解之后的路由 - 根据是否需要分解决定是否走确认流程"""
+    task_breakdown = state.get("task_breakdown", {})
+    needs_decomposition = task_breakdown.get("needs_decomposition", True)
+
+    if needs_decomposition:
+        # 多模块 → 需要用户确认
+        logger.info(f"  [路由] 多模块分解完成 -> 用户确认")
+        return NODE_HUMAN_CONFIRM
+    else:
+        # 单模块 → 自动确认，跳过人工确认，直接进入 RAG 检索
+        logger.info(f"  [路由] 单模块主题，跳过确认 -> RAG 检索")
+        return NODE_RAG_RETRIEVER
 
 
 def route_after_human_confirm(state: AgentState) -> str:
@@ -349,11 +358,14 @@ def build_learning_graph() -> StateGraph:
         }
     )
 
-    # 任务分解 -> 用户确认
+    # 任务分解 -> 用户确认（多模块）或直接 RAG 检索（单模块）
     graph.add_conditional_edges(
         NODE_TASK_DECOMPOSER,
         route_after_task_decomposer,
-        {NODE_HUMAN_CONFIRM: NODE_HUMAN_CONFIRM}
+        {
+            NODE_HUMAN_CONFIRM: NODE_HUMAN_CONFIRM,
+            NODE_RAG_RETRIEVER: NODE_RAG_RETRIEVER,
+        }
     )
 
     # 用户确认 -> 主控或结束（等待用户通过 /confirm 接口重新进入图）

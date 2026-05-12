@@ -19,20 +19,36 @@ logger = logging.getLogger("agents.controller")
 SYSTEM_PROMPT = """你是一个多智能体学习系统的主控调度器。你的职责是准确识别用户意图并决定下一步操作。
 
 ## 可用意图类型
-1. **generate_resource** - 用户明确要求生成学习资源、学习材料、学习计划，或要学习某个主题
-2. **simple_qa** - 用户只是简短提问、闲聊、打招呼，或不需要生成学习资源的简单问答
+1. **generate_resource** - 用户想了解、学习、掌握某个知识/概念/技术，需要生成结构化学习资料
+2. **simple_qa** - 闲聊、打招呼、日常对话、或答案极简短的事实性问答（不需学习资料）
 3. **generate_quiz** - 用户要求生成题目、练习题、测试题、模拟考试等
 4. **grade_quiz** - 用户提交了答案要求批改、评分、判断对错
-5. **follow_up** - 用户对之前的内容进行追问、补充说明、要求修改，或者回复确认/否定
+5. **follow_up** - 用户对之前的内容进行追问、补充说明、要求修改，或回复确认/否定
 6. **ambiguous** - 用户意图不明确，需要进一步询问
 
-## 判断规则
-- 如果用户说"学习XX"、"帮我生成XX的学习资料"、"创建学习计划" -> generate_resource
-- 如果用户问了一个简单知识点问题、打招呼、或不需要资源生成 -> simple_qa
-- 如果用户说"出几道题"、"给我出题"、"测试一下" -> generate_quiz
-- 如果用户提交了答案要求批改 -> grade_quiz
-- 如果用户在已有对话基础上补充说明、确认或否定之前的方案 -> follow_up
-- 如果无法判断意图 -> ambiguous
+## 判断规则 (核心)
+
+### generate_resource（生成学习资料）
+以下情况应归类为 generate_resource，因为用户需要的是结构化的学习内容而非简单的问答：
+- "学习XX"、"了解XX"、"XX是什么"、"XX的原理"、"XX的过程"
+- "我想知道XX"、"我想了解XX"、"XX相关知识点"
+- "XX怎么工作"、"XX的实现"、"XX的概念"
+- "帮我生成XX"、"给我讲讲XX"
+- 任何涉及知识/技术/学科领域的查询，即使语气上像提问
+
+### simple_qa（简答）
+以下情况才归类为 simple_qa，因为不需要生成学习资料：
+- 打招呼："你好"、"嗨"
+- 闲聊："今天心情好"、"谢谢"
+- 极简短的事实问答："1+1等于几"、"现在几点了"
+- 系统操作类："你能做什么"、"怎么用"
+- 注意：涉及知识学习的问题 NOT simple_qa
+
+### 其他意图
+- generate_quiz：用户说"出几道题"、"测试一下"、"给我出题"
+- grade_quiz：用户提交了答案要求批改
+- follow_up：在已有对话基础上补充说明、确认或否定
+- ambiguous：完全无法判断意图
 
 ## 输出格式
 严格输出 JSON，不要输出其他内容：
@@ -138,64 +154,42 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
             accumulated_text += chunk
             
             # 提前判断：检测关键词快速路由
+            # 注意：只用 JSON key 匹配，不用中文短语，避免 LLM 推理文本中的否定句式误匹配
+            # 例如 "这不是简单问答" 不应匹配 simple_qa
             if intent is None:
-                # 检测 "generate_resource" 相关关键词
-                if any(keyword in accumulated_text.lower() for keyword in [
-                    '"intent": "generate_resource"',
-                    '"intent":"generate_resource"',
-                    'generate_resource',
-                    '生成学习资源',
-                    '生成资料',
-                    '学习计划',
-                ]):
+                acc = accumulated_text.lower()
+
+                # generate_resource: JSON 中的 intent 字段值
+                if ('"intent":"generate_resource"' in acc
+                        or '"intent": "generate_resource"' in acc):
                     intent = INTENT_GENERATE_RESOURCE
                     logger.info(f"  [主控智能体] 流式判断: 检测到资源生成意图，提前路由!")
                     break
-                
-                # 检测 "simple_qa" 相关关键词
-                elif any(keyword in accumulated_text.lower() for keyword in [
-                    '"intent": "simple_qa"',
-                    '"intent":"simple_qa"',
-                    'simple_qa',
-                    '简单问答',
-                    '简短提问',
-                ]):
+
+                # simple_qa: 只匹配 JSON key，避免 "不是简单问答" 误匹配
+                if ('"intent":"simple_qa"' in acc
+                        or '"intent": "simple_qa"' in acc):
                     intent = INTENT_SIMPLE_QA
                     logger.info(f"  [主控智能体] 流式判断: 检测到简单问答意图，提前路由!")
                     break
-                
-                # 检测 "generate_quiz" 相关关键词
-                elif any(keyword in accumulated_text.lower() for keyword in [
-                    '"intent": "generate_quiz"',
-                    '"intent":"generate_quiz"',
-                    'generate_quiz',
-                    '生成题目',
-                    '出题',
-                ]):
+
+                # generate_quiz
+                if ('"intent":"generate_quiz"' in acc
+                        or '"intent": "generate_quiz"' in acc):
                     intent = INTENT_GENERATE_QUIZ
                     logger.info(f"  [主控智能体] 流式判断: 检测到题目生成意图，提前路由!")
                     break
-                
-                # 检测 "grade_quiz" 相关关键词
-                elif any(keyword in accumulated_text.lower() for keyword in [
-                    '"intent": "grade_quiz"',
-                    '"intent":"grade_quiz"',
-                    'grade_quiz',
-                    '批改',
-                    '评分',
-                ]):
+
+                # grade_quiz
+                if ('"intent":"grade_quiz"' in acc
+                        or '"intent": "grade_quiz"' in acc):
                     intent = INTENT_GRADE_QUIZ
                     logger.info(f"  [主控智能体] 流式判断: 检测到题目判定意图，提前路由!")
                     break
-                
-                # 检测 "follow_up" 相关关键词
-                elif any(keyword in accumulated_text.lower() for keyword in [
-                    '"intent": "follow_up"',
-                    '"intent":"follow_up"',
-                    'follow_up',
-                    '追问',
-                    '补充',
-                ]):
+
+                # follow_up
+                if ('"intent":"follow_up"' in acc
+                        or '"intent": "follow_up"' in acc):
                     intent = INTENT_FOLLOW_UP
                     logger.info(f"  [主控智能体] 流式判断: 检测到跟随意图，提前路由!")
                     break
