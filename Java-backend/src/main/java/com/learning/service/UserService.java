@@ -90,6 +90,11 @@ public class UserService {
         if (existing != null) {
             existing.setIsCurrent(0);
             userProfileMapper.updateById(existing);
+
+            // 从旧版本继承未被本次更新的字段（age/gender/domain 由前端管理，Python 只更新 learningBehavior）
+            if (profile.getAge() == null) profile.setAge(existing.getAge());
+            if (profile.getGender() == null) profile.setGender(existing.getGender());
+            if (profile.getDomain() == null) profile.setDomain(existing.getDomain());
         }
 
         UserProfile latest = userProfileMapper.selectOne(
