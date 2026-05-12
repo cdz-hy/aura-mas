@@ -32,6 +32,9 @@ export const useChatStore = defineStore('chat', () => {
   // 生成的资源事件（供 PlanDetailView 将资源添加到侧栏并打开）
   const lastGeneratedResources = ref<Array<{ id: number; type: string; title: string }> | null>(null)
 
+  // 当前选中的模块上下文（供补充资源生成）
+  const selectedModuleContext = ref<{ title: string; description: string; moduleId: number; planId: number } | null>(null)
+
   let currentSSE: EventSource | null = null
   let currentPlanId = ''
 
@@ -123,6 +126,7 @@ export const useChatStore = defineStore('chat', () => {
     awaitingConfirmation.value = false
     lastQuizResource.value = null
     lastGradingResult.value = null
+    selectedModuleContext.value = null
     skipNextModulesPush = false
   }
 
@@ -150,6 +154,7 @@ export const useChatStore = defineStore('chat', () => {
     awaitingConfirmation.value = false
     lastQuizResource.value = null
     lastGradingResult.value = null
+    selectedModuleContext.value = null
     skipNextModulesPush = false
     activeSessionId.value = sessionId
 
@@ -258,15 +263,20 @@ export const useChatStore = defineStore('chat', () => {
             }
           },
           onDone() {
-            // 用户确认后跳过模块消息推送（已在 onNeedConfirmation 中显示过）
+            // 用户确认后：如果资源已通过 onResourceGenerated 显示，跳过模块消息推送
             if (skipNextModulesPush) {
               skipNextModulesPush = false
-              pendingModules.value = []
-              streamBuffer.value = ''
-              streaming.value = false
-              loadSessions(planId)
-              return
-            } else if (pendingModules.value.length > 0) {
+              if (lastGeneratedResources.value) {
+                // 资源已生成并显示，清理缓冲
+                pendingModules.value = []
+                streamBuffer.value = ''
+                streaming.value = false
+                loadSessions(planId)
+                return
+              }
+              // 资源未生成（resource_generated 未收到），回退显示模块内容
+            }
+            if (pendingModules.value.length > 0) {
               const mods = pendingModules.value
               const hasContent = mods.some((m: any) => m.content)
               if (hasContent && lastGeneratedResources.value) {
@@ -370,6 +380,95 @@ export const useChatStore = defineStore('chat', () => {
     streaming.value = false
   }
 
+  /**
+   * 补充资源生成 - 直接调用 /resource/generate 端点
+   * 结合当前选中模块的上下文，生成指定类型的补充资源
+   */
+  async function requestSupplementaryResource(
+    planId: string,
+    moduleContext: { title: string; description: string; moduleId: number },
+    resourceType: string,
+  ) {
+    if (streaming.value) return
+
+    const typeLabels: Record<string, string> = {
+      quiz: '测验', mindmap: '思维导图', code: '代码示例', summary: '总结',
+    }
+    const typeLabel = typeLabels[resourceType] || resourceType
+
+    // 推入用户请求消息
+    messages.value.push({ role: 'user', content: `请为「${moduleContext.title}」生成${typeLabel}` })
+    streaming.value = true
+    streamBuffer.value = ''
+
+    try {
+      const ticketRes = await issueTicket()
+      const ticket = ticketRes.data.ticket
+
+      currentSSE = createSSEConnection(
+        '/api/ai/resource/generate',
+        ticket,
+        {
+          plan_id: planId,
+          module_id: String(moduleContext.moduleId),
+          type: resourceType,
+          title: moduleContext.title,
+          description: moduleContext.description || '',
+        },
+        {
+          onProgress(content) {
+            streamBuffer.value += content + '\n'
+          },
+          onChunk(content) {
+            streamBuffer.value += content
+          },
+          onModules(modules) {
+            pendingModules.value = [...pendingModules.value, ...modules]
+          },
+          onResourceGenerated(resources) {
+            lastGeneratedResources.value = resources
+            if (resources.length) {
+              const summary = resources.map(r => r.title).join('、')
+              messages.value.push({
+                role: 'assistant',
+                content: `已为「${moduleContext.title}」生成${typeLabel}：${summary}`,
+                type: 'resource_generated',
+                resources,
+              })
+            }
+          },
+          onDone() {
+            if (pendingModules.value.length > 0 && !lastGeneratedResources.value) {
+              // 没有 resource_generated 事件，直接显示模块内容
+              for (const mod of pendingModules.value) {
+                const body = mod.content || ''
+                messages.value.push({ role: 'assistant', content: body })
+              }
+              pendingModules.value = []
+            }
+            if (streamBuffer.value) {
+              messages.value.push({ role: 'assistant', content: streamBuffer.value })
+              streamBuffer.value = ''
+            }
+            streaming.value = false
+            loadSessions(planId)
+          },
+          onError(err) {
+            if (streamBuffer.value) {
+              messages.value.push({ role: 'assistant', content: streamBuffer.value })
+              streamBuffer.value = ''
+            }
+            messages.value.push({ role: 'assistant', content: `${typeLabel}生成失败：${err}` })
+            streaming.value = false
+          },
+        }
+      )
+    } catch (e: any) {
+      messages.value.push({ role: 'assistant', content: `连接失败：${e.message}` })
+      streaming.value = false
+    }
+  }
+
   return {
     sessions,
     activeSessionId,
@@ -382,6 +481,7 @@ export const useChatStore = defineStore('chat', () => {
     lastQuizResource,
     lastGradingResult,
     lastGeneratedResources,
+    selectedModuleContext,
     loadSessions,
     loadHistoryByPlan,
     resetForPlan,
@@ -391,5 +491,6 @@ export const useChatStore = defineStore('chat', () => {
     sendMessage,
     confirmBreakdown,
     stopGeneration,
+    requestSupplementaryResource,
   }
 })

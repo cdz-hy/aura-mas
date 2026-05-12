@@ -8,13 +8,16 @@
     <div class="flex items-center justify-between mb-6">
       <div>
         <h3 class="font-display text-lg font-semibold text-navy-800">{{ data.title || '练习题' }}</h3>
-        <p class="text-sm text-navy-400 mt-0.5">共 {{ data.questions.length }} 题 · {{ data.totalPoints || 100 }} 分</p>
+        <p class="text-sm text-navy-400 mt-0.5">共 {{ data.questions.length }} 题 · 每题 1 分</p>
       </div>
-      <div v-if="!submitted" class="text-sm text-navy-500">
+      <div v-if="grading" class="text-sm text-amber-500 animate-pulse">
+        批改中...
+      </div>
+      <div v-else-if="!submitted" class="text-sm text-navy-500">
         已答 {{ answeredCount }} / {{ data.questions.length }}
       </div>
-      <div v-else class="text-sm font-medium" :class="score >= 80 ? 'text-emerald-600' : score >= 60 ? 'text-amber-600' : 'text-red-500'">
-        得分：{{ score }}分
+      <div v-else class="text-sm font-medium" :class="(displayScore ?? 0) >= (data.questions.length * 0.8) ? 'text-emerald-600' : (displayScore ?? 0) >= (data.questions.length * 0.6) ? 'text-amber-600' : 'text-red-500'">
+        {{ displayScore ?? '—' }} / {{ data.questions.length }} 正确
       </div>
     </div>
 
@@ -75,10 +78,44 @@
           ></textarea>
         </div>
 
-        <!-- Explanation (after submit) -->
-        <div v-if="submitted && q.explanation" class="mt-4 ml-10 p-3 rounded-lg bg-navy-50/50 border border-navy-100/50">
-          <p class="text-xs font-medium text-navy-500 mb-1">解析</p>
-          <p class="text-sm text-navy-600 leading-relaxed">{{ q.explanation }}</p>
+        <!-- 批改结果（每题内联显示） -->
+        <div v-if="submitted && questionResults?.[qi]" class="mt-3 ml-10 space-y-2">
+          <!-- 批改反馈 -->
+          <div class="p-2 rounded-lg text-xs" :class="questionResults[qi].is_correct ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'">
+            <p :class="questionResults[qi].is_correct ? 'text-emerald-700' : 'text-red-700'">
+              {{ questionResults[qi].feedback || (questionResults[qi].is_correct ? '回答正确' : '回答错误') }}
+            </p>
+          </div>
+          <!-- 展开详情按钮 -->
+          <button class="text-xs text-navy-400 hover:text-navy-600 transition-colors"
+            @click="toggleDetail(qi)">
+            {{ expandedDetails.has(qi) ? '收起详情 ▲' : '查看详情 ▼' }}
+          </button>
+          <!-- 展开的详情 -->
+          <div v-if="expandedDetails.has(qi)" class="space-y-2">
+            <div v-if="q.explanation" class="p-2 rounded-lg bg-navy-50/50 border border-navy-100/50">
+              <p class="text-xs font-medium text-navy-500 mb-0.5">解析</p>
+              <p class="text-xs text-navy-600 leading-relaxed">{{ q.explanation }}</p>
+            </div>
+            <div v-if="questionResults[qi].key_points_hit?.length" class="p-2 rounded-lg bg-emerald-50/50 border border-emerald-100/50">
+              <p class="text-xs font-medium text-emerald-600 mb-0.5">命中的知识点</p>
+              <div class="flex flex-wrap gap-1">
+                <span v-for="p in questionResults[qi].key_points_hit" :key="p" class="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-600">{{ p }}</span>
+              </div>
+            </div>
+            <div v-if="questionResults[qi].key_points_missed?.length" class="p-2 rounded-lg bg-red-50/50 border border-red-100/50">
+              <p class="text-xs font-medium text-red-500 mb-0.5">遗漏的知识点</p>
+              <div class="flex flex-wrap gap-1">
+                <span v-for="p in questionResults[qi].key_points_missed" :key="p" class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-500">{{ p }}</span>
+              </div>
+            </div>
+            <div v-if="questionResults[qi].improvement_suggestions?.length" class="p-2 rounded-lg bg-amber-50/50 border border-amber-100/50">
+              <p class="text-xs font-medium text-amber-600 mb-0.5">改进建议</p>
+              <ul class="text-xs text-navy-500 space-y-0.5">
+                <li v-for="(s, si) in questionResults[qi].improvement_suggestions" :key="si">{{ s }}</li>
+              </ul>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -96,16 +133,55 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { QuizData } from '@/types/quiz'
 import { QUESTION_TYPE_LABELS } from '@/types/quiz'
 
-const props = defineProps<{ data: QuizData | null }>()
-const emit = defineEmits<{ submit: [answers: Record<number, any>] }>()
+const props = defineProps<{
+  data: QuizData | null
+  initialAnswers?: Record<number, any>
+  initialSubmitted?: boolean
+  grading?: boolean
+  resultScore?: number | null
+  questionResults?: Record<number, any> | null
+}>()
+const emit = defineEmits<{
+  submit: [answers: Record<number, any>]
+  retake: []
+}>()
 
 const answers = ref<Record<number, any>>({})
 const submitted = ref(false)
-const score = ref(0)
+const expandedDetails = ref<Set<number>>(new Set())
+
+// 显示分数：优先使用后端批改结果，否则本地计算
+const displayScore = computed(() => {
+  if (props.resultScore != null) return props.resultScore
+  if (!submitted.value || !props.data) return null
+  let correct = 0
+  props.data.questions.forEach((_, i) => {
+    if (isCorrect(i)) correct++
+  })
+  return correct
+})
+
+// 当外部传入历史答案时，自动恢复已提交状态
+function applyInitial() {
+  if (props.initialSubmitted && props.initialAnswers) {
+    answers.value = { ...props.initialAnswers }
+    submitted.value = true
+  }
+}
+
+// 仅在 data 变化时（切换题目资源）应用初始状态，避免与本地 reset 冲突
+watch(() => props.data, () => {
+  if (props.initialSubmitted && props.initialAnswers) {
+    applyInitial()
+  } else {
+    answers.value = {}
+    submitted.value = false
+  }
+}, { immediate: true })
 
 const answeredCount = computed(() => {
   return Object.keys(answers.value).filter(k => {
@@ -149,7 +225,19 @@ function optionClass(qi: number, oi: number) {
   }
   const q = props.data?.questions[qi]
   if (!q) return ''
-  const correct = Array.isArray(q.correctAnswer) ? (q.correctAnswer as unknown as number[]).includes(oi) : q.correctAnswer === String(oi)
+  let correct = false
+  if (Array.isArray(q.correctAnswer)) {
+    correct = (q.correctAnswer as unknown as number[]).includes(oi)
+  } else {
+    const s = String(q.correctAnswer).trim()
+    // "A,C" 格式: 将选项索引转为字母比对
+    const letter = 'ABCDE'[oi]
+    if (/^[A-E](,[A-E])*$/.test(s)) {
+      correct = s.split(',').map(c => c.trim()).includes(letter)
+    } else {
+      correct = s === String(oi)
+    }
+  }
   if (correct) return 'border-emerald-300 bg-emerald-50'
   if (isSelected(qi, oi)) return 'border-red-300 bg-red-50'
   return 'border-transparent bg-navy-50/30'
@@ -161,7 +249,19 @@ function isCorrect(qi: number) {
   const a = answers.value[qi]
   if (q.type === 'single_choice') return String(a) === String(q.correctAnswer)
   if (q.type === 'multiple_choice') {
-    const correct = (q.correctAnswer as unknown as number[]).slice().sort()
+    // correctAnswer 可能是数组 [0,2] 或字符串 "A,C" / "0,2"
+    let correct: number[] = []
+    if (Array.isArray(q.correctAnswer)) {
+      correct = (q.correctAnswer as unknown as number[]).slice().sort()
+    } else {
+      const s = String(q.correctAnswer).trim()
+      // "A,C" 格式 -> 索引
+      if (/^[A-E](,[A-E])*$/.test(s)) {
+        correct = s.split(',').map(c => ' ABCDE'.indexOf(c.trim())).sort()
+      } else {
+        correct = s.split(',').map(c => parseInt(c.trim())).filter(n => !isNaN(n)).sort()
+      }
+    }
     const given = ((a as unknown as number[]) || []).slice().sort()
     return JSON.stringify(correct) === JSON.stringify(given)
   }
@@ -171,18 +271,21 @@ function isCorrect(qi: number) {
 
 function submitQuiz() {
   if (!props.data) return
-  let correct = 0
-  props.data.questions.forEach((_, i) => {
-    if (isCorrect(i)) correct++
-  })
-  score.value = Math.round((correct / props.data!.questions.length) * 100)
   submitted.value = true
   emit('submit', { ...answers.value })
+}
+
+function toggleDetail(qi: number) {
+  const s = new Set(expandedDetails.value)
+  if (s.has(qi)) s.delete(qi)
+  else s.add(qi)
+  expandedDetails.value = s
 }
 
 function resetQuiz() {
   answers.value = {}
   submitted.value = false
-  score.value = 0
+  expandedDetails.value = new Set()
+  emit('retake')
 }
 </script>

@@ -149,7 +149,7 @@
           </div>
           <button
             class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors flex-shrink-0"
-            @click="selectedResourceId = null; selectedResource = null; quizData = null; gradingResult = null"
+            @click="selectedResourceId = null; selectedResource = null; quizData = null; gradingResult = null; quizSubmittedAnswers = null; showExplanations = false"
             title="关闭"
           >
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -162,38 +162,27 @@
         <div class="flex-1 overflow-y-auto p-4">
           <!-- 题目类型 -->
           <template v-if="selectedResource.moduleType === 'quiz'">
-            <QuizPlayer v-if="quizData" :data="quizData" @submit="onQuizSubmit" />
+            <QuizPlayer
+              v-if="quizData"
+              :data="quizData"
+              :initial-answers="quizSubmittedAnswers"
+              :initial-submitted="!!quizSubmittedAnswers"
+              :grading="quizSubmitting"
+              :result-score="gradingResult?.correct ?? null"
+              :question-results="questionResults"
+              @submit="onQuizSubmit"
+              @retake="retakeQuiz"
+            />
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>题目数据加载中...</p>
             </div>
 
-            <!-- 批改结果 -->
-            <div v-if="gradingResult" class="mt-4 p-4 rounded-xl border border-navy-100/50">
-              <h4 class="font-display text-sm font-semibold text-navy-800 mb-2">批改结果</h4>
-              <div class="text-2xl font-bold mb-2" :class="(gradingResult.score || 0) >= 80 ? 'text-emerald-600' : (gradingResult.score || 0) >= 60 ? 'text-amber-600' : 'text-red-500'">
-                {{ gradingResult.score ?? '—' }}分
+            <!-- 批改总分 -->
+            <div v-if="gradingResult" class="mt-4 p-4 rounded-xl border border-navy-100/50 text-center">
+              <div class="text-3xl font-bold" :class="(gradingResult.correct || 0) >= (gradingResult.total || 1) * 0.8 ? 'text-emerald-600' : (gradingResult.correct || 0) >= (gradingResult.total || 1) * 0.6 ? 'text-amber-600' : 'text-red-500'">
+                {{ gradingResult.correct ?? 0 }} / {{ gradingResult.total ?? 0 }}
               </div>
-              <p v-if="gradingResult.feedback" class="text-sm text-navy-600 leading-relaxed">{{ gradingResult.feedback }}</p>
-              <div v-if="gradingResult.key_points_hit?.length" class="mt-2">
-                <p class="text-xs font-medium text-emerald-600 mb-1">掌握的知识点:</p>
-                <div class="flex flex-wrap gap-1">
-                  <span v-for="p in gradingResult.key_points_hit" :key="p" class="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600">{{ p }}</span>
-                </div>
-              </div>
-              <div v-if="gradingResult.key_points_missed?.length" class="mt-2">
-                <p class="text-xs font-medium text-red-500 mb-1">需巩固的知识点:</p>
-                <div class="flex flex-wrap gap-1">
-                  <span v-for="p in gradingResult.key_points_missed" :key="p" class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-500">{{ p }}</span>
-                </div>
-              </div>
-              <div v-if="gradingResult.improvement_suggestions?.length" class="mt-2">
-                <p class="text-xs font-medium text-navy-500 mb-1">改进建议:</p>
-                <ul class="text-xs text-navy-600 space-y-1">
-                  <li v-for="(s, i) in gradingResult.improvement_suggestions" :key="i" class="flex gap-1.5">
-                    <span class="text-navy-300">{{ i + 1 }}.</span><span>{{ s }}</span>
-                  </li>
-                </ul>
-              </div>
+              <p class="text-sm text-navy-500 mt-1">答对 {{ gradingResult.correct ?? 0 }} 题，共 {{ gradingResult.total ?? 0 }} 题</p>
             </div>
           </template>
 
@@ -432,6 +421,28 @@
             </div>
           </div>
         </div>
+
+        <!-- 模块上下文提示（固定在对话底部） -->
+        <div v-if="moduleContextMessage && !chatStore.streaming" class="flex items-start gap-3">
+          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-navy-500 to-navy-700 flex items-center justify-center flex-shrink-0">
+            <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
+            </svg>
+          </div>
+          <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
+            <p class="text-navy-700">你正在查看「<span class="font-medium">{{ moduleContextMessage.title }}</span>」，如需为该模块生成补充资源，请点击：</p>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <button
+                v-for="opt in resourceOptions" :key="opt.type"
+                class="text-xs px-3 py-1.5 rounded-full border transition-colors"
+                :class="generatingType === opt.type ? 'bg-navy-600 text-white border-navy-600' : 'bg-white text-navy-600 border-navy-200 hover:bg-navy-50'"
+                :disabled="!!generatingType"
+                @click="generateResource(opt.type)">
+                {{ opt.label }}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Input -->
@@ -459,6 +470,8 @@ import { useRoute } from 'vue-router'
 import { getPlan, updatePlan } from '@/api/plan'
 import { getPlanResources, getResource } from '@/api/resource'
 import { parseMarkdown } from '@/utils/markdown'
+import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
+import { issueTicket } from '@/api/auth'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
@@ -479,11 +492,31 @@ const selectedResourceId = ref<number | null>(null)
 const selectedResource = ref<LearningResource | null>(null)
 const quizData = ref<QuizData | null>(null)
 const gradingResult = ref<Record<string, any> | null>(null)
+const quizSubmittedAnswers = ref<Record<number, any> | null>(null)
+const showExplanations = ref(false)
+
+// 逐题批改结果（按 index 索引，供 QuizPlayer 使用）
+const questionResults = computed(() => {
+  const details = gradingResult.value?.details
+  if (!details?.length) return null
+  const map: Record<number, any> = {}
+  details.forEach((d: any, i: number) => { map[d.index ?? i] = d })
+  return map
+})
+const quizSubmitting = ref(false)
 const messagesContainer = ref<HTMLElement>()
 const inputText = ref('')
 const showModifyInput = ref(false)
 const modifyText = ref('')
 const sidebarCollapsed = ref(false)
+const moduleContextMessage = ref<{ title: string } | null>(null)
+const generatingType = ref<string | null>(null)
+const resourceOptions = [
+  { type: 'quiz', label: '生成测验' },
+  { type: 'mindmap', label: '生成思维导图' },
+  { type: 'code', label: '生成代码示例' },
+  { type: 'summary', label: '生成总结' },
+]
 const showSessionList = ref(false)
 
 // 标题编辑
@@ -497,7 +530,7 @@ const quickQuestions = [
 ]
 
 const typeLabels: Record<string, string> = {
-  document: '文档', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读',
+  document: '文档', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结',
 }
 
 // ==================== 计算属性 ====================
@@ -536,6 +569,8 @@ function selectModule(index: number) {
     selectedResource.value = null
     quizData.value = null
     gradingResult.value = null
+    quizSubmittedAnswers.value = null
+    showExplanations.value = false
     return
   }
   // 展开模块并自动选中第一个资源
@@ -553,12 +588,18 @@ function toggleResource(res: LearningResource) {
     selectedResource.value = null
     quizData.value = null
     gradingResult.value = null
+    quizSubmittedAnswers.value = null
+    showExplanations.value = false
+    moduleContextMessage.value = null
+    chatStore.selectedModuleContext = null
     return
   }
 
   selectedResourceId.value = res.id
   selectedResource.value = res
   gradingResult.value = null
+  quizSubmittedAnswers.value = null
+  showExplanations.value = false
 
   // 展开侧栏中包含该资源的模块
   const modIdx = modules.value.findIndex(m => m.resources.some(r => r.id === res.id))
@@ -569,8 +610,36 @@ function toggleResource(res: LearningResource) {
   // 解析题目数据
   if (res.moduleType === 'quiz') {
     quizData.value = parseQuizData(res)
+    // 优先从 module_data.latestResult 恢复批改结果，否则从 quiz_record 表加载
+    const lr = res.moduleData?.latestResult
+    if (lr && lr.details) {
+      quizSubmittedAnswers.value = lr.answers || {}
+      gradingResult.value = {
+        total: lr.total,
+        correct: lr.correct,
+        details: lr.details,
+      }
+    } else {
+      loadQuizRecords(res.id)
+    }
   } else {
     quizData.value = null
+  }
+
+  // 设置模块上下文并提示用户可以生成补充资源
+  const moduleTitle = res.moduleData?.module_title || res.moduleData?.title || `模块 ${res.moduleOrder}`
+  const moduleDesc = res.moduleData?.description || res.moduleData?.module_description || ''
+  chatStore.selectedModuleContext = {
+    title: moduleTitle,
+    description: moduleDesc,
+    moduleId: res.id,
+    planId: res.planId || planId,
+  }
+  // 仅在非 quiz 资源时提示（quiz 本身已是补充资源）
+  if (res.moduleType !== 'quiz') {
+    moduleContextMessage.value = { title: moduleTitle }
+  } else {
+    moduleContextMessage.value = null
   }
 }
 
@@ -622,7 +691,7 @@ function parseQuizData(res: LearningResource): QuizData | null {
       correctAnswer: '',
       explanation: '',
       difficulty: 3,
-      points: 20,
+      points: 1,
     }]
   }
 
@@ -634,14 +703,14 @@ function parseQuizData(res: LearningResource): QuizData | null {
     correctAnswer: q.correctAnswer ?? q.correct_answer ?? '',
     explanation: q.explanation || '',
     difficulty: q.difficulty || 3,
-    points: q.points || 20,
+    points: q.points || 1,
   }))
 
   return {
     title: md.title || md.quiz_title || '练习题',
     description: md.description || '',
     questions,
-    totalPoints: md.totalPoints || md.total_points || questions.length * 20,
+    totalPoints: md.totalPoints || md.total_points || questions.length,
     estimatedMinutes: md.estimatedMinutes || questions.length * 2,
   }
 }
@@ -649,17 +718,130 @@ function parseQuizData(res: LearningResource): QuizData | null {
 // ==================== 答题提交 ====================
 
 function onQuizSubmit(userAnswers: Record<number, any>) {
-  if (!quizData.value) return
+  if (!selectedResource.value || quizSubmitting.value) return
+  quizSubmitting.value = true
+  gradingResult.value = null
+  quizSubmittedAnswers.value = userAnswers
+  showExplanations.value = false
 
-  const gradingMessage = quizData.value.questions.map((q, i) => {
-    const ua = userAnswers[i]
-    const userAns = Array.isArray(ua) ? ua.map((idx: number) => q.options?.[idx] ?? String(idx)).join(', ') : (q.options?.[ua] ?? String(ua ?? '未作答'))
-    const correctAns = Array.isArray(q.correctAnswer) ? q.correctAnswer.join(', ') : String(q.correctAnswer)
-    return `${i + 1}. ${q.question}\n   用户答案: ${userAns}\n   正确答案: ${correctAns}`
-  }).join('\n\n')
+  issueTicket().then(ticketRes => {
+    const ticket = ticketRes.data.ticket
+    submitQuizSSE(
+      ticket,
+      selectedResource.value!.id,
+      planId,
+      userAnswers,
+      {
+        onProgress(content) {
+          // 可选：在对话区显示进度
+          console.debug('[Quiz] progress:', content)
+        },
+        onQuestionResult(index, result) {
+          console.debug(`[Quiz] Q${index + 1}:`, result.is_correct ? 'correct' : 'incorrect')
+        },
+        onQuizResult(result) {
+          gradingResult.value = {
+            total: result.total,
+            correct: result.correct,
+            details: result.details,
+          }
+          // 同步更新本地资源的 moduleData.latestResult，避免重新打开时再请求
+          const res = selectedResource.value
+          if (res && res.moduleData) {
+            res.moduleData.latestResult = {
+              answers: userAnswers,
+              score: result.score,
+              total: result.total,
+              correct: result.correct,
+              details: result.details,
+            }
+          }
+        },
+        onDone() {
+          quizSubmitting.value = false
+        },
+        onError(err) {
+          quizSubmitting.value = false
+          gradingResult.value = { total: 0, correct: 0, details: [], error: `批改失败: ${err}` }
+        },
+      }
+    )
+  }).catch(() => {
+    quizSubmitting.value = false
+  })
+}
 
-  const message = `请批改以下答题结果，给出分数和详细分析：\n\n${gradingMessage}`
-  chatStore.sendMessage(message, planIdStr)
+// 加载指定资源的最新答题记录
+async function loadQuizRecords(resourceId: number) {
+  try {
+    const userId = authStore.user?.id
+    if (!userId) return
+    const res = await getQuizRecords(userId, resourceId)
+    const records = res.data || []
+    if (records.length === 0) return
+
+    // quiz_record 中每条记录对应一道题的作答
+    // 由于每条记录的 answerTime 是各自 LocalDateTime.now()，同一提交批次内
+    // 时间戳会有几秒差异，因此使用 120 秒时间窗口来识别同一批次
+    const expectedCount = quizData.value?.questions.length || 0
+
+    // 按时间窗口分组：从最新记录开始，收集 120 秒内的所有记录
+    const latestTime = new Date(records[0].answerTime).getTime()
+    const WINDOW_MS = 120_000
+    const latestBatch = records.filter(r => {
+      const t = new Date(r.answerTime).getTime()
+      return latestTime - t <= WINDOW_MS
+    })
+
+    // 还原用户答案
+    const answers: Record<number, any> = {}
+    const details: any[] = []
+    let correctCount = 0
+
+    latestBatch.forEach((record, i) => {
+      answers[i] = record.userAnswer
+      const isCorrect = record.isCorrect === 1
+      if (isCorrect) correctCount++
+      details.push({
+        index: i,
+        question_type: record.questionType,
+        user_answer: record.userAnswer,
+        correct_answer: record.correctAnswer,
+        is_correct: isCorrect,
+        score: isCorrect ? 1 : 0,
+        feedback: isCorrect ? '回答正确' : `回答错误，正确答案: ${record.correctAnswer}`,
+        key_points_hit: isCorrect ? [] : [],
+        key_points_missed: isCorrect ? [] : [],
+        improvement_suggestions: isCorrect ? [] : [`正确答案: ${record.correctAnswer}`],
+        explanation: '',
+      })
+    })
+
+    quizSubmittedAnswers.value = answers
+    gradingResult.value = {
+      total: expectedCount || latestBatch.length,
+      correct: correctCount,
+      details,
+    }
+  } catch (e) {
+    console.error('Failed to load quiz records:', e)
+  }
+}
+
+// 重新作答
+function retakeQuiz() {
+  quizSubmittedAnswers.value = null
+  gradingResult.value = null
+  showExplanations.value = false
+  // 清除本地资源的 latestResult，避免切回时恢复旧结果
+  if (selectedResource.value?.moduleData) {
+    delete selectedResource.value.moduleData.latestResult
+  }
+}
+
+// 切换解析显示
+function toggleExplanations() {
+  showExplanations.value = !showExplanations.value
 }
 
 // 监听聊天中的新题目资源事件
@@ -735,6 +917,11 @@ function scrollToBottom() {
 
 watch(() => chatStore.messages.length + chatStore.streamBuffer.length, scrollToBottom)
 
+// 生成完成后重置按钮状态
+watch(() => chatStore.streaming, (val) => {
+  if (!val) generatingType.value = null
+})
+
 // ==================== 消息发送 ====================
 
 function sendMessage(text?: string) {
@@ -742,7 +929,38 @@ function sendMessage(text?: string) {
   if (!msg) return
   inputText.value = ''
   showModifyInput.value = false
+
+  // 检测是否为补充资源生成请求
+  const ctx = chatStore.selectedModuleContext
+  if (ctx) {
+    const resourceType = detectResourceType(msg)
+    if (resourceType) {
+      chatStore.requestSupplementaryResource(planIdStr, ctx, resourceType)
+      return
+    }
+  }
+
   chatStore.sendMessage(msg, planIdStr)
+}
+
+/** 快捷按钮生成补充资源 */
+function generateResource(type: string) {
+  const ctx = chatStore.selectedModuleContext
+  if (!ctx || generatingType.value) return
+  generatingType.value = type
+  chatStore.requestSupplementaryResource(planIdStr, ctx, type)
+  // 生成开始后清除上下文消息
+  moduleContextMessage.value = null
+}
+
+/** 从用户消息中检测补充资源类型 */
+function detectResourceType(msg: string): string | null {
+  const lower = msg.toLowerCase()
+  if (/测验|题目|练习|quiz|做题|出题/.test(lower)) return 'quiz'
+  if (/思维导图|导图|mindmap|脑图/.test(lower)) return 'mindmap'
+  if (/代码|code|示例代码|编程/.test(lower)) return 'code'
+  if (/总结|摘要|summary|复习|要点/.test(lower)) return 'summary'
+  return null
 }
 
 function confirmBreakdown() {

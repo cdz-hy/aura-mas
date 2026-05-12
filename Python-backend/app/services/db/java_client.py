@@ -230,6 +230,11 @@ class JavaBackendClient:
         """获取用户答题统计"""
         return self._request("GET", f"/api/quiz/internal/stats/{plan_id}", params={"userId": user_id})
 
+    def get_quiz_records_by_resource(self, user_id: int, resource_id: int) -> list:
+        """获取用户对指定资源的答题记录"""
+        result = self._request("GET", f"/api/quiz/internal/user/{user_id}", params={"resourceId": resource_id})
+        return result if isinstance(result, list) else []
+
     # ==================== 用户画像 ====================
 
     def get_user_profile(self, user_id: int) -> Dict[str, Any]:
