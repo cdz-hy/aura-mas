@@ -84,30 +84,32 @@ def _optimize_search_queries(modules: List[Dict[str, Any]], user_message: str, l
 
     messages = [
         {"role": "system", "content": """你是检索词优化专家。根据学习模块的描述和对话上下文，为每个模块生成最有效的搜索查询词。
-输出 JSON 数组，每个元素是一个优化后的检索查询字符串。
+严格输出 JSON 对象，格式如下：
+{"queries": ["查询词1", "查询词2", "查询词3"]}
 规则：
 1. 查询词要精炼、具体，适合向量检索
 2. 包含核心概念和关键词
 3. 适合搜索教学资料
 4. 结合对话历史理解用户的真实学习需求
-严禁使用 emoji。"""},
+5. queries 数组的元素个数必须与模块数相同
+严禁使用 emoji。严禁输出 JSON 以外的任何内容。"""},
         {"role": "user", "content": f"""用户学习目标: {user_message}
 
 对话历史（请结合上下文理解用户需求）:
 {history_text if history_text else "无历史记录"}
 
-学习模块:
+学习模块（共{len(modules)}个）:
 {chr(10).join(module_summaries)}
 
-请为每个模块生成优化的检索查询词，输出 JSON 数组:"""}
+请为每个模块生成优化的检索查询词，严格输出 JSON 对象:"""}
     ]
 
     try:
         result = llm.chat_json(messages)
-        if isinstance(result, list):
-            queries = result
-        elif isinstance(result, dict) and "queries" in result:
+        if isinstance(result, dict) and "queries" in result:
             queries = result["queries"]
+        elif isinstance(result, list):
+            queries = result
         else:
             queries = [user_message]
 

@@ -152,6 +152,7 @@ async def plan_chat(
     }
 
     async def stream():
+        nonlocal breakdown_confirmed
         ai_response_parts = []
         module_list = []
         orchestrated_content = None

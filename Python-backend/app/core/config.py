@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     MIMO_BASE_URL: str = "https://token-plan-cn.xiaomimimo.com/v1"
     MIMO_MODEL_NAME: str = "mimo-v2.5"
 
+    # Tavily 搜索 API
+    TAVILY_API_KEY: str = ""
+
     # RabbitMQ 设置 (异步任务队列)
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
 

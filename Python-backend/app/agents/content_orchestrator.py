@@ -379,7 +379,7 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                 mtitle = m.get("title", "")
                 module_order = m.get("module_order", i + 1)
                 is_new = module_order in target_module_ids
-                status = "🔄 重新生成" if is_new else "✅ 保留"
+                status = " 重新生成" if is_new else " 保留"
                 logger.info(f"      模块{module_order} [{mtype}] {status}: {mtitle}")
             logger.info(f"{'='*60}")
             
@@ -484,7 +484,7 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                 mtitle = m.get("title", "")
                 concepts = m.get("metadata", {}).get("key_concepts", [])
                 has_error = "error" in m.get("metadata", {})
-                status = "❌ 失败" if has_error else "✅ 成功"
+                status = " 失败" if has_error else " 成功"
                 logger.info(f"      模块{i+1} [{mtype}] {status}: {mtitle} (概念: {', '.join(concepts[:3])})")
             logger.info(f"{'='*60}")
             

@@ -67,35 +67,173 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
 
     # 检查是否有需要重试的模块（模块级别重试）
     retry_module_ids = state.get("retry_module_ids", [])
-    retry_count = state.get("retry_count", 0)
-    max_retries = state.get("max_retries", 3)
-    
+    rag_retry_count = state.get("rag_retry_count", 0)
+    gen_retry_count = state.get("gen_retry_count", 0)
+    max_rag_retries = 1    # RAG 最多重试 1 次
+    max_gen_retries = 2    # 自主生成最多重试 2 次
+
+    # 兼容旧的 retry_count 字段
+    old_retry_count = state.get("retry_count", 0)
+    if old_retry_count > 0 and rag_retry_count == 0 and gen_retry_count == 0:
+        rag_retry_count = old_retry_count
+
     if retry_module_ids:
-        # 检查重试次数限制
-        if retry_count >= max_retries:
-            logger.warning(f"  [主控智能体] 已达到最大重试次数 ({max_retries})，放弃重试")
-            logger.warning(f"  [主控智能体] 未通过模块: {retry_module_ids}")
+        # ===== 自主生成阶段：已经走过自主生成但审查仍不通过 =====
+        if gen_retry_count > 0:
+            if gen_retry_count >= max_gen_retries:
+                logger.warning(f"  [主控智能体] 自主生成已重试 {gen_retry_count} 次仍不通过，放弃重试")
+                # 收集已通过的模块和最后一次生成的内容，尽量返回给用户
+                passed_modules = state.get("passed_modules", [])
+                module_list = state.get("module_list", [])
+                last_generated = state.get("generated_content")
+                available = module_list or []
+                if not available and last_generated:
+                    # 没有已通过的模块，但有最后一次自主生成的原始内容，直接返回
+                    return {
+                        "intent": "retry_failed",
+                        "next_node": END,
+                        "generated_content": last_generated,
+                        "current_step": f"审查未通过（已重试 {gen_retry_count} 次），以下为最后一次生成的内容供参考",
+                        "retry_module_ids": [],
+                        "retry_mode": False,
+                        "iteration_count": iteration + 1,
+                        "stream_events": [{
+                            "event_type": "warning",
+                            "agent": "controller",
+                            "data": {"message": f"内容审查未通过（已重试 {gen_retry_count} 次），返回最后一次生成结果供参考"},
+                            "step_description": "审查未通过，返回最后生成内容"
+                        }],
+                    }
+                if available:
+                    return {
+                        "intent": "retry_failed",
+                        "next_node": END,
+                        "module_list": available,
+                        "current_step": f"部分模块审查未通过（已重试 {gen_retry_count} 次），已通过的模块已返回",
+                        "retry_module_ids": [],
+                        "retry_mode": False,
+                        "iteration_count": iteration + 1,
+                        "stream_events": [{
+                            "event_type": "warning",
+                            "agent": "controller",
+                            "data": {"message": f"有 {len(retry_module_ids)} 个模块审查始终未通过（已重试 {gen_retry_count} 次），已返回 {len(available)} 个通过的模块"},
+                            "step_description": "部分模块放弃，返回已通过模块"
+                        }],
+                    }
+                # 什么都没有
+                return {
+                    "intent": "retry_failed",
+                    "next_node": END,
+                    "current_step": f"自主生成重试 {gen_retry_count} 次仍未通过审查，且无可用内容",
+                    "retry_module_ids": [],
+                    "retry_mode": False,
+                    "iteration_count": iteration + 1,
+                    "stream_events": [{
+                        "event_type": "error",
+                        "agent": "controller",
+                        "data": {"message": "内容生成失败，多次审查均未通过"},
+                        "step_description": "内容生成失败"
+                    }],
+                }
+            logger.info(f"  [主控智能体] 自主生成第 {gen_retry_count} 次审查未通过 -> 再次自主生成 (第 {gen_retry_count + 1} 次)")
             return {
-                "intent": "retry_failed",
-                "next_node": END,  # 直接结束（画像维护改为异步后台执行）
-                "current_step": f"已达到最大重试次数，放弃重试模块 {retry_module_ids}",
-                "retry_module_ids": [],  # 清除重试标记
-                "retry_mode": False,
+                "intent": INTENT_GENERATE_RESOURCE,
+                "next_node": NODE_RESOURCE_GENERATOR,
+                "retry_mode": True,
+                "target_module_ids": retry_module_ids,
+                "gen_retry_count": gen_retry_count + 1,
+                "current_step": f"主控智能体: 自主生成重试 (第 {gen_retry_count + 1}/{max_gen_retries} 次)",
                 "iteration_count": iteration + 1,
             }
-        
+
+        # ===== RAG 阶段：分析审查反馈，判断是否值得重试 RAG =====
+        failed_modules = state.get("failed_modules", [])
+        total_modules = len(state.get("module_list", [])) + len(failed_modules)
+        all_failed = len(retry_module_ids) == total_modules and total_modules > 0
+
+        # 计算未通过模块的平均分和审查反馈
+        failed_scores = [m.get("score", 0) for m in failed_modules if "score" in m]
+        avg_score = sum(failed_scores) / len(failed_scores) if failed_scores else 0
+        failed_feedbacks = [m.get("feedback", "") for m in failed_modules if m.get("feedback")]
+
+        logger.info(f"  [主控智能体] 审查分析: 全部失败={all_failed}, 平均分={avg_score:.1f}, "
+                     f"未通过模块数={len(retry_module_ids)}/{total_modules}")
+
+        # 判断 RAG 是否值得重试
+        rag_worth_retry = True
+        reason = ""
+
+        if all_failed and avg_score < 30:
+            rag_worth_retry = False
+            reason = f"所有模块均未通过且平均分仅 {avg_score:.1f}，RAG 检索内容与主题完全不相关"
+        elif all_failed and avg_score < 50:
+            combined_feedback = " ".join(failed_feedbacks).lower()
+            irrelevance_keywords = ["不相关", "无关", "不匹配", "缺失", "没有涉及", "未涉及", "完全偏离", "缺乏"]
+            match_count = sum(1 for kw in irrelevance_keywords if kw in combined_feedback)
+            if match_count >= 2:
+                rag_worth_retry = False
+                reason = f"审查反馈多次提及内容不相关/缺失（匹配 {match_count} 个关键词），向量库可能无对应知识"
+            else:
+                reason = f"所有模块失败但平均分 {avg_score:.1f}，内容部分相关，尝试优化检索词重试"
+        else:
+            reason = f"部分模块未通过或分数尚可（均分 {avg_score:.1f}），RAG 检索可能命中更优结果"
+
+        # 不值得重试 RAG → 直接走自主生成
+        if not rag_worth_retry:
+            logger.info(f"  [主控智能体] 跳过 RAG 重试: {reason}")
+            logger.info(f"  [主控智能体] -> 直接切换到自主生成+网络搜索")
+            return {
+                "intent": INTENT_GENERATE_RESOURCE,
+                "next_node": NODE_RESOURCE_GENERATOR,
+                "retry_mode": True,
+                "target_module_ids": retry_module_ids,
+                "gen_retry_count": 1,
+                "current_step": f"主控智能体: {reason}，跳过 RAG 直接自主生成",
+                "iteration_count": iteration + 1,
+            }
+
+        # 已经重试过 RAG → 切换到自主生成
+        if rag_retry_count >= max_rag_retries:
+            logger.info(f"  [主控智能体] RAG 已重试 {rag_retry_count} 次仍不通过 -> 切换到自主生成")
+            return {
+                "intent": INTENT_GENERATE_RESOURCE,
+                "next_node": NODE_RESOURCE_GENERATOR,
+                "retry_mode": True,
+                "target_module_ids": retry_module_ids,
+                "gen_retry_count": 1,
+                "current_step": f"主控智能体: RAG 重试无效，切换到自主生成模式",
+                "iteration_count": iteration + 1,
+            }
+
         logger.info(f"  [主控智能体] 检测到需要重试的模块: {retry_module_ids}")
-        logger.info(f"  [主控智能体] 当前重试次数: {retry_count}/{max_retries}")
-        logger.info(f"  [主控智能体] 只重新生成这些模块，保留其他模块")
-        
-        # 设置重试模式，让 RAG 和编排智能体只处理这些模块
+        logger.info(f"  [主控智能体] RAG 重试次数: {rag_retry_count}/{max_rag_retries}")
+        logger.info(f"  [主控智能体] 决策: {reason}")
+
+        # 值得重试 RAG
         return {
             "intent": "retry_modules",
             "next_node": NODE_RAG_RETRIEVER,
             "retry_mode": True,
             "target_module_ids": retry_module_ids,
-            "retry_count": retry_count + 1,
-            "current_step": f"主控智能体: 模块级别重试 (第 {retry_count + 1} 次)，重新生成模块 {retry_module_ids}",
+            "rag_retry_count": rag_retry_count + 1,
+            "current_step": f"主控智能体: RAG 重试 (第 {rag_retry_count + 1}/{max_rag_retries} 次)，模块 {retry_module_ids}",
+            "iteration_count": iteration + 1,
+        }
+
+    # 检测 RAG 批量审查失败
+    review_passed = state.get("review_passed", True)
+    rag_error = state.get("error")
+    if (not review_passed
+            and rag_error
+            and state.get("task_breakdown")
+            and state.get("task_breakdown_confirmed")):
+        # 批量审查不通过 → 向量库大概率无相关内容，直接自主生成
+        logger.info(f"  [主控智能体] RAG 批量审查未通过({rag_error[:60]}) -> 直接自主生成+网络搜索")
+        return {
+            "intent": INTENT_GENERATE_RESOURCE,
+            "next_node": NODE_RESOURCE_GENERATOR,
+            "gen_retry_count": 1,
+            "current_step": f"RAG 批量审查未通过，直接启动自主生成（含网络搜索）",
             "iteration_count": iteration + 1,
         }
 

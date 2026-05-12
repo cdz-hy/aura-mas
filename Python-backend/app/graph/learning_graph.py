@@ -165,18 +165,25 @@ def route_after_profile_maintainer(state: AgentState) -> str:
 
 def review_and_orchestrate_node(state: AgentState) -> Dict[str, Any]:
     """
-    审查与编排真正并行执行节点
-    
+    审查与编排节点
+
     优化策略：
-    1. 使用 asyncio.gather 实现真正的并发（适合 I/O 密集型 LLM 调用）
-    2. 两个智能体同时调用 LLM API，充分利用网络等待时间
+    1. 正常模式：审查与编排并行（asyncio.gather），节省 I/O 时间
+    2. 自主生成模式（有 generated_content）：先编排再审查，确保审查看到的是编排后的模块
     3. 审查不通过时丢弃编排结果（快速失败）
-    4. 相比串行执行，理论上可节省 30-50% 的时间
     """
     logger.info(f"{'='*60}")
-    logger.info(f"  [审查编排节点] 开始真正并行处理")
 
     stream_events = []
+    generated_content = state.get("generated_content")
+
+    # 有自主生成内容时，编排器需要用 generated_content 生成模块，
+    # 审查器需要看到编排后的模块 → 改为串行：先编排，再审查
+    if generated_content:
+        logger.info(f"  [审查编排节点] 自主生成模式: 先编排(含网络搜索内容) → 再审查")
+        return _sequential_review_orchestrate(state, generated_content)
+
+    logger.info(f"  [审查编排节点] 正常模式: 审查与编排并行")
 
     async def run_parallel():
         """使用 asyncio 并发执行审查和编排"""
@@ -313,6 +320,112 @@ def review_and_orchestrate_node(state: AgentState) -> Dict[str, Any]:
         "review_feedback": review_feedback,
         "review_suggestions": review_suggestions,
         "error": None,  # 显式清除 error，防止上一次迭代的残留值导致路由误判
+        "current_step": orchestrate_result.get("current_step", "审查编排完成"),
+        "stream_events": stream_events,
+    }
+
+
+# ==================== 串行审查编排（自主生成模式） ====================
+
+def _sequential_review_orchestrate(state: AgentState, generated_content: dict) -> Dict[str, Any]:
+    """
+    自主生成模式：先编排(含网络搜索内容) → 再审查
+
+    与正常并行模式不同，自主生成内容的模块需要由编排器从 generated_content 中
+    提取生成，审查器必须看到编排后的 module_list 才能进行模块级别审查。
+    """
+    stream_events = []
+
+    # Phase 1: 编排 — 使用 generated_content + RAG chunks 生成模块
+    logger.info(f"  [审查编排节点] Phase 1: 编排(含自主生成内容)...")
+    orchestrate_result = content_orchestrator_node(state)
+
+    orchestrate_error = orchestrate_result.get("error")
+    if orchestrate_error:
+        logger.error(f"  [审查编排节点] 编排出错: {orchestrate_error}")
+        logger.info(f"{'='*60}")
+        stream_events.extend(orchestrate_result.get("stream_events", []))
+        return {
+            "error": orchestrate_error,
+            "current_step": f"审查编排节点: 编排出错",
+            "stream_events": stream_events,
+        }
+
+    stream_events.extend(orchestrate_result.get("stream_events", []))
+    module_list = orchestrate_result.get("module_list", [])
+
+    logger.info(f"  [审查编排节点] 编排完成: {len(module_list)} 个模块")
+    logger.info(f"  [审查编排节点] Phase 2: 审查编排后的模块...")
+
+    # Phase 2: 审查 — 在编排后的模块上进行模块级别审查
+    review_state = {**state}
+    review_state["module_list"] = module_list
+
+    review_result = reviewer_node(review_state)
+
+    stream_events.extend(review_result.get("stream_events", []))
+
+    review_passed = review_result.get("review_passed", True)
+    review_feedback = review_result.get("review_feedback", "")
+    review_suggestions = review_result.get("review_suggestions", [])
+
+    # 审查未通过 → 保留已通过模块，标记未通过的供重试
+    if not review_passed:
+        logger.warning(f"  [审查编排节点] 审查未通过")
+
+        failed_modules = review_result.get("failed_modules", [])
+        passed_modules = review_result.get("passed_modules", [])
+        retry_ids = [m["module_order"] for m in failed_modules] if failed_modules else []
+
+        passed_orchestrated = [
+            m for m in module_list
+            if m.get("module_order") not in retry_ids
+        ]
+
+        if retry_ids:
+            logger.warning(f"  [审查编排节点] 需要重新生成的模块: {retry_ids}")
+            logger.info(f"  [审查编排节点] 保留已通过模块 {len(passed_orchestrated)} 个，重试 {len(retry_ids)} 个")
+
+        logger.info(f"{'='*60}")
+        return {
+            "review_passed": False,
+            "review_feedback": review_feedback,
+            "review_suggestions": review_suggestions,
+            "failed_modules": failed_modules,
+            "passed_modules": passed_modules,
+            "retry_module_ids": retry_ids,
+            "module_list": passed_orchestrated,
+            "orchestrated_content": {
+                "title": orchestrate_result.get("orchestrated_content", {}).get("title", ""),
+                "modules": passed_orchestrated,
+            } if passed_orchestrated else None,
+            "passed_module_list": passed_orchestrated,
+            "error": f"内容审查未通过: {review_feedback}",
+            "current_step": f"审查编排节点: 审查未通过 - {review_feedback[:80]} (重试 {len(retry_ids)} 个模块)",
+            "stream_events": stream_events + ([{
+                "event_type": "module",
+                "agent": "content_orchestrator",
+                "data": {
+                    "modules": passed_orchestrated,
+                    "title": orchestrate_result.get("orchestrated_content", {}).get("title", ""),
+                },
+                "step_description": f"审查通过 {len(passed_orchestrated)} 个模块，重试 {len(retry_ids)} 个模块"
+            }] if passed_orchestrated else []),
+        }
+
+    # 审查通过 + 编排成功 → 合并结果
+    logger.info(f"  [审查编排节点] 审查通过，编排完成")
+    logger.info(f"    编排标题: {orchestrate_result.get('orchestrated_content', {}).get('title', '未命名')}")
+    logger.info(f"    模块数: {len(module_list)}")
+    logger.info(f"{'='*60}")
+
+    return {
+        "orchestrated_content": orchestrate_result.get("orchestrated_content"),
+        "module_list": module_list,
+        "review_passed": True,
+        "review_feedback": review_feedback,
+        "review_suggestions": review_suggestions,
+        "error": None,
         "current_step": orchestrate_result.get("current_step", "审查编排完成"),
         "stream_events": stream_events,
     }
