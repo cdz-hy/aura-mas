@@ -15,10 +15,10 @@ class MIMOClient:
     MODEL_STANDARD = "mimo-v2.5"       # 编排智能体
     MODEL_PRO = "mimo-v2.5-pro"        # 其余智能体
 
-    # 各模型的上下文窗口上限（输入 + 输出总和）
+    # 各模型的上下文窗口上限（max_completion_tokens 默认值）
     CONTEXT_WINDOWS = {
         "mimo-v2.5": 32768,
-        "mimo-v2.5-pro": 32768,
+        "mimo-v2.5-pro": 131072,
     }
 
     # 为输出预留的默认比例（占上下文窗口的 25%），避免输入大时溢出
@@ -27,12 +27,15 @@ class MIMOClient:
     # 为特殊标记、系统提示词等预留的安全边界
     SAFETY_MARGIN = 1024
 
-    def __init__(self, model: str = MODEL_PRO, temperature: float = 0.7, max_tokens: int = 4096):
+    def __init__(self, model: str = MODEL_PRO, temperature: float = 0.7, max_tokens: int = 4096,
+                 thinking: Optional[Dict[str, str]] = None):
         self.api_key = settings.MIMO_API_KEY
         self.base_url = settings.MIMO_BASE_URL
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        # 思维链配置：None 表示使用模型默认值（mimo-v2.5-pro 默认 enabled）
+        self.thinking = thinking
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
@@ -67,27 +70,51 @@ class MIMOClient:
             )
         return clamped
 
+    def _build_payload(self, messages: list, stream: bool = False,
+                       temperature: Optional[float] = None,
+                       max_tokens: Optional[int] = None,
+                       response_format: Optional[Dict[str, str]] = None) -> dict:
+        """构造 API 请求体"""
+        requested = max_tokens or self.max_tokens
+        safe_max_tokens = self._clamp_max_tokens(messages, requested)
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_completion_tokens": safe_max_tokens,
+            "stream": stream,
+        }
+
+        # 思维链：启用时 API 强制 temperature=1.0，无需手动设置
+        thinking = self.thinking
+        if thinking:
+            payload["thinking"] = thinking
+            # 思维链模式下 temperature 由 API 控制，不发送
+        else:
+            payload["temperature"] = temperature or self.temperature
+
+        if response_format:
+            payload["response_format"] = response_format
+
+        return payload, safe_max_tokens
+
     def chat(
         self,
         messages: list,
         stream: bool = False,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
     ) -> str:
         """同步对话"""
-        requested = max_tokens or self.max_tokens
-        safe_max_tokens = self._clamp_max_tokens(messages, requested)
+        payload, safe_max_tokens = self._build_payload(
+            messages, stream=stream, temperature=temperature,
+            max_tokens=max_tokens, response_format=response_format,
+        )
 
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
-        }
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature or self.temperature,
-            "max_tokens": safe_max_tokens,
-            "stream": stream,
         }
 
         url = f"{self.base_url.rstrip('/')}/chat/completions"
@@ -110,17 +137,25 @@ class MIMOClient:
                 raise Exception(f"MIMO API 返回空 choices: {str(result)[:300]}")
             
             content = choices[0].get("message", {}).get("content")
-            if content is None:
-                # 检查是否有 finish_reason 提示
-                finish_reason = choices[0].get("finish_reason", "")
+            finish_reason = choices[0].get("finish_reason", "")
+
+            if content is None or content.strip() == "":
+                # 记录完整响应以便排查
+                import logging
+                logger = logging.getLogger("llm_factory")
+                logger.warning(
+                    f"MIMO API 返回空内容 (finish_reason={finish_reason}, "
+                    f"model={self.model}, max_completion_tokens={safe_max_tokens}): "
+                    f"{str(choices[0])[:500]}"
+                )
                 if finish_reason == "content_filter":
                     raise Exception("MIMO API 触发内容安全过滤，请检查输入内容是否包含敏感词")
                 elif finish_reason == "length":
-                    raise Exception(f"MIMO API 输出被截断（max_tokens={safe_max_tokens} 不足），请增加 max_tokens 或减少输入长度")
-                else:
-                    raise Exception(f"MIMO API 返回 content 为 null (finish_reason: {finish_reason}): {str(choices[0])[:300]}")
-            
-            return content.strip()
+                    raise Exception(f"MIMO API 输出被截断（max_completion_tokens={safe_max_tokens} 不足）")
+                elif content is None:
+                    raise Exception(f"MIMO API 返回 content 为 null (finish_reason: {finish_reason})")
+
+            return (content or "").strip()
         elif resp.status_code == 400:
             # 解析 400 错误的具体原因
             try:
@@ -142,20 +177,14 @@ class MIMOClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> Generator[str, None, None]:
-        """流式对话 - 返回增量文本"""
-        requested = max_tokens or self.max_tokens
-        safe_max_tokens = self._clamp_max_tokens(messages, requested)
+        """流式对话 - 返回增量文本（含思维链 reasoning_content）"""
+        payload, _ = self._build_payload(
+            messages, stream=True, temperature=temperature, max_tokens=max_tokens,
+        )
 
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
-        }
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature or self.temperature,
-            "max_tokens": safe_max_tokens,
-            "stream": True,
         }
 
         url = f"{self.base_url.rstrip('/')}/chat/completions"
@@ -175,6 +204,12 @@ class MIMOClient:
                 try:
                     chunk = json.loads(data)
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    # 思维链内容（reasoning_content）不对外输出，仅调试时记录
+                    reasoning = delta.get("reasoning_content", "")
+                    if reasoning:
+                        import logging
+                        logging.getLogger("llm_factory").debug(f"[思维链] {reasoning[:100]}")
+                    # 只输出正式内容
                     content = delta.get("content", "")
                     if content:
                         yield content
@@ -187,56 +222,47 @@ class MIMOClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """对话并解析 JSON 返回，带容错处理和一次重试"""
+        """对话并解析 JSON 返回，使用 response_format 强制 JSON 输出"""
         logger = __import__('logging').getLogger("llm_factory")
-        
+        json_format = {"type": "json_object"}
+
         try:
-            raw = self.chat(messages, temperature=temperature, max_tokens=max_tokens)
+            raw = self.chat(messages, temperature=temperature, max_tokens=max_tokens,
+                            response_format=json_format)
         except Exception as e:
             logger.error(f"LLM API 调用失败: {str(e)[:300]}")
             raise Exception(f"LLM API 调用失败: {str(e)[:200]}")
 
-        # 空内容直接进入重试，不做无意义的解析
+        # 空内容重试
         if not raw or not raw.strip():
-            logger.warning(f"LLM 返回空内容，重试... (模型: {self.model}, max_tokens: {max_tokens})")
+            logger.warning(f"LLM 返回空内容，重试... (模型: {self.model})")
             retry_messages = list(messages) + [
-                {"role": "user", "content": "你上次的回复为空。请重新回答，严格只输出合法的 JSON，不要输出其他内容。"}
+                {"role": "user", "content": "你上次的回复为空。请重新回答，严格只输出合法的 JSON。"}
             ]
             try:
-                raw = self.chat(retry_messages, temperature=0.0, max_tokens=max_tokens)
+                raw = self.chat(retry_messages, temperature=0.0, max_tokens=max_tokens,
+                                response_format=json_format)
             except Exception as e:
-                logger.error(f"LLM 重试调用失败: {str(e)[:300]}")
                 raise Exception(f"LLM 重试调用失败: {str(e)[:200]}")
-            
             if not raw or not raw.strip():
-                logger.error(f"LLM 连续返回空内容 (模型: {self.model}, 输入约 {sum(self._estimate_tokens(m.get('content', '')) for m in messages)} tokens)")
-                raise Exception("LLM 连续返回空内容，可能是模型服务异常、请求被限流或触发内容过滤")
+                raise Exception("LLM 连续返回空内容，可能是模型服务异常或触发内容过滤")
 
         result = self._parse_json(raw)
         if result is not None:
             return result
 
-        # JSON 解析失败，重试一次：追加系统消息强调 JSON 格式
-        logger.warning(f"JSON 解析失败，重试一次... 原始内容前200字符: {raw[:200]}")
+        # response_format=json_object 仍解析失败（极少发生），重试一次
+        logger.warning(f"JSON 解析失败（尽管使用了 response_format），重试... 原始内容前200字符: {raw[:200]}")
         retry_messages = list(messages) + [
-            {"role": "user", "content": "你上次的回复不是合法的 JSON 格式。请严格只输出合法的 JSON，确保所有字符串正确转义，不要输出其他内容。"}
+            {"role": "user", "content": "你上次的回复不是合法的 JSON。请严格只输出合法的 JSON。"}
         ]
-        try:
-            raw_retry = self.chat(retry_messages, temperature=0.0, max_tokens=max_tokens)
-        except Exception as e:
-            logger.error(f"JSON 重试调用失败: {str(e)[:300]}")
-            raise Exception(f"JSON 解析失败且重试调用失败: {str(e)[:200]}")
-        
+        raw_retry = self.chat(retry_messages, temperature=0.0, max_tokens=max_tokens,
+                              response_format=json_format)
         result = self._parse_json(raw_retry)
         if result is not None:
             return result
 
-        # 记录完整的失败信息
-        logger.error(f"JSON 解析失败（重试后仍失败）")
-        logger.error(f"  模型: {self.model}, max_tokens: {max_tokens}")
-        logger.error(f"  输入约 {sum(self._estimate_tokens(m.get('content', '')) for m in messages)} tokens")
-        logger.error(f"  原始内容前500字符: {raw[:500]}")
-        logger.error(f"  重试内容前500字符: {raw_retry[:500]}")
+        logger.error(f"JSON 解析失败（重试后仍失败）模型: {self.model}, 原始: {raw[:500]}")
         raise Exception(f"JSON 解析失败（重试后仍失败）\n原始内容前500字符: {raw[:500]}")
 
     def _parse_json(self, raw: str) -> Optional[Dict[str, Any]]:
@@ -335,51 +361,65 @@ class MIMOClient:
         return ''.join(result)
 
 
+THINKING_DISABLED = {"type": "disabled"}
+THINKING_ENABLED = {"type": "enabled"}
+
+
 def get_controller_llm() -> MIMOClient:
-    """主控智能体 - pro 模型，较低温度确保路由准确"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=1536)
+    """主控智能体 - pro 模型，关闭思维链 + 低温度，确保路由快速准确"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=1536,
+                      thinking=THINKING_DISABLED)
 
 
 def get_task_decomposer_llm() -> MIMOClient:
-    """任务分解智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=3072)
+    """任务分解智能体 - pro 模型，启用思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=3072,
+                      thinking=THINKING_ENABLED)
 
 
 def get_simple_answer_llm() -> MIMOClient:
-    """简答智能体 - pro 模型，降低温度提高稳定性"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=2048)
+    """简答智能体 - pro 模型，关闭思维链，快速响应"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=2048,
+                      thinking=THINKING_DISABLED)
 
 
 def get_rag_retriever_llm() -> MIMOClient:
-    """RAG 检索智能体 - pro 模型，用于检索词优化"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=1536)
+    """RAG 检索智能体 - pro 模型，关闭思维链，只需生成检索词"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=1536,
+                      thinking=THINKING_DISABLED)
 
 
 def get_content_orchestrator_llm() -> MIMOClient:
-    """内容编排智能体 - 标准模型（唯一使用 mimo-v2.5 的智能体），降低 max_tokens 避免超限"""
-    return MIMOClient(model=MIMOClient.MODEL_STANDARD, temperature=0.5, max_tokens=8192)
+    """内容编排智能体 - 标准模型（唯一使用 mimo-v2.5 的智能体），启用思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_STANDARD, temperature=0.5, max_tokens=8192,
+                      thinking=THINKING_ENABLED)
 
 
 def get_reviewer_llm() -> MIMOClient:
-    """审查智能体 - pro 模型，低温度确保判断准确"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=3072)
+    """审查智能体 - pro 模型，关闭思维链，只需判断和评分"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=3072,
+                      thinking=THINKING_DISABLED)
 
 
 def get_resource_generator_llm() -> MIMOClient:
-    """多模态资源自主生成智能体 - pro 模型，降低温度和 max_tokens"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=6144)
+    """多模态资源自主生成智能体 - pro 模型，启用思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=6144,
+                      thinking=THINKING_ENABLED)
 
 
 def get_quiz_generator_llm() -> MIMOClient:
-    """题目生成智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=3072)
+    """题目生成智能体 - pro 模型，启用思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=3072,
+                      thinking=THINKING_ENABLED)
 
 
 def get_quiz_grader_llm() -> MIMOClient:
-    """题目判定智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=1536)
+    """题目判定智能体 - pro 模型，关闭思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=1536,
+                      thinking=THINKING_DISABLED)
 
 
 def get_profile_maintainer_llm() -> MIMOClient:
-    """画像维护智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=2048)
+    """画像维护智能体 - pro 模型，关闭思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=2048,
+                      thinking=THINKING_DISABLED)
