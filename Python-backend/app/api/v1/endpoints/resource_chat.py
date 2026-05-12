@@ -159,6 +159,7 @@ async def plan_chat(
         quiz_config = None
         new_breakdown = None
         generated_resource_info = []  # 收集生成的资源信息 [{id, type, title}]
+        saved_module_orders = set()  # 已增量保存的 module_order（防重复）
         try:
             graph = get_learning_graph()
             async for event in graph.astream(initial_state, stream_mode="updates"):
@@ -179,6 +180,25 @@ async def plan_chat(
                         tb = node_output.get("task_breakdown")
                         if tb and node_name == "task_decomposer":
                             new_breakdown = tb
+                        # 检查是否为部分审查失败 → 立即保存已通过模块
+                        if (node_name == "review_orchestrate"
+                                and not node_output.get("review_passed")
+                                and node_output.get("retry_module_ids")
+                                and node_output.get("passed_module_list")
+                                and plan_id_int
+                                and breakdown_confirmed):
+                            passed_modules = node_output["passed_module_list"]
+                            if passed_modules:
+                                new_ids = _save_modules_as_resources(plan_id_int, passed_modules, None)
+                                for idx, rid in enumerate(new_ids):
+                                    mod = passed_modules[idx] if idx < len(passed_modules) else {}
+                                    generated_resource_info.append({
+                                        "id": rid,
+                                        "type": mod.get("module_type", "document"),
+                                        "title": mod.get("title", f"模块 {idx + 1}"),
+                                    })
+                                    saved_module_orders.add(mod.get("module_order"))
+                                logger.info(f"[增量保存] 已保存 {len(passed_modules)} 个通过审查的模块，ID: {new_ids} (orders: {saved_module_orders})")
                     # 使用 sse_bridge 翻译 graph 事件为前端格式
                     for sse_data in graph_step_to_sse(node_name, node_output):
                         yield sse_data
@@ -198,19 +218,27 @@ async def plan_chat(
                 _save_breakdown_dialogue(user_id, session_id, plan_id_int, new_breakdown)
 
             # 用户确认后，将生成的学习资源保存到数据库
+            # 已增量保存过的模块跳过，只保存新增的
             if breakdown_confirmed and plan_id_int:
-                resource_ids = _save_modules_as_resources(plan_id_int, module_list, orchestrated_content)
-                for idx, rid in enumerate(resource_ids):
-                    mod = module_list[idx] if idx < len(module_list) else {}
-                    generated_resource_info.append({
-                        "id": rid,
-                        "type": mod.get("module_type", "document"),
-                        "title": mod.get("title", f"模块 {idx + 1}"),
-                    })
+                new_modules = [m for m in module_list
+                               if m.get("module_order") not in saved_module_orders]
+                if new_modules:
+                    new_ids = _save_modules_as_resources(plan_id_int, new_modules, orchestrated_content)
+                    for idx, rid in enumerate(new_ids):
+                        mod = new_modules[idx] if idx < len(new_modules) else {}
+                        generated_resource_info.append({
+                            "id": rid,
+                            "type": mod.get("module_type", "document"),
+                            "title": mod.get("title", f"模块 {idx + 1}"),
+                        })
+                        saved_module_orders.add(mod.get("module_order"))
+                    logger.info(f"[资源持久化] 保存 {len(new_modules)} 个新增模块 (已跳过 {len(saved_module_orders) - len(new_modules)} 个已保存的)")
                 # 如果有解析的任务分解，保存并关联资源ID（用于前端显示）
                 # 注意：这里关联的是为了前端能够找到对应的资源，但不是必须的
-                if parsed_breakdown and resource_ids:
-                    _save_breakdown_dialogue(user_id, session_id, plan_id_int, parsed_breakdown, resource_ids)
+                if parsed_breakdown and generated_resource_info:
+                    all_ids = [r["id"] for r in generated_resource_info if r.get("id")]
+                    if all_ids:
+                        _save_breakdown_dialogue(user_id, session_id, plan_id_int, parsed_breakdown, all_ids)
 
             # 题目生成后，保存到学习资源库
             if quiz_questions and plan_id_int:

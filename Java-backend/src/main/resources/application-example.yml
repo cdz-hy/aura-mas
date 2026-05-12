@@ -17,6 +17,9 @@ spring:
     password: guest
     virtual-host: /
 
+jwt:
+  secret: your-jwt-secret-base64-encoded
+
 internal:
   secret: your-internal-service-secret
 

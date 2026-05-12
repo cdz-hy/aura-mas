@@ -226,19 +226,28 @@ def review_and_orchestrate_node(state: AgentState) -> Dict[str, Any]:
     review_feedback = review_result.get("review_feedback", "")
     review_suggestions = review_result.get("review_suggestions", [])
 
-    # 审查未通过 → 丢弃编排结果，返回错误让主控重试
+    # 审查未通过 → 保留已通过模块的编排结果，只重试未通过的模块
     if not review_passed:
-        logger.warning(f"  [审查编排节点] 审查未通过，丢弃编排结果")
-        logger.info(f"  [性能提示] 虽然编排任务已完成，但因审查未通过而被丢弃")
-        
-        # 提取未通过的模块信息
+        logger.warning(f"  [审查编排节点] 审查未通过")
+
+        # 提取未通过/已通过的模块信息
         failed_modules = review_result.get("failed_modules", [])
         passed_modules = review_result.get("passed_modules", [])
         retry_ids = [m["module_order"] for m in failed_modules] if failed_modules else []
-        
+
+        # 从编排结果中提取已通过模块的内容（保留下来，不走重试）
+        all_orchestrated_modules = orchestrate_result.get("module_list", [])
+        passed_orchestrated = [
+            m for m in all_orchestrated_modules
+            if m.get("module_order") not in retry_ids
+        ]
+
         if retry_ids:
             logger.warning(f"  [审查编排节点] 需要重新生成的模块: {retry_ids}")
-        
+            logger.info(f"  [审查编排节点] 保留已通过模块 {len(passed_orchestrated)} 个，只重试 {len(retry_ids)} 个")
+            for m in passed_orchestrated:
+                logger.info(f"      模块{m.get('module_order')} [{m.get('module_type', '')}]: {m.get('title', '')}")
+
         logger.info(f"{'='*60}")
         return {
             "review_passed": False,
@@ -246,10 +255,26 @@ def review_and_orchestrate_node(state: AgentState) -> Dict[str, Any]:
             "review_suggestions": review_suggestions,
             "failed_modules": failed_modules,
             "passed_modules": passed_modules,
-            "retry_module_ids": retry_ids,  # 需要重新生成的模块编号
+            "retry_module_ids": retry_ids,
+            # 保留已通过模块的编排结果，供重试时合并
+            "module_list": passed_orchestrated,
+            "orchestrated_content": {
+                "title": orchestrate_result.get("orchestrated_content", {}).get("title", ""),
+                "modules": passed_orchestrated,
+            } if passed_orchestrated else None,
+            # 立即通知前端已通过的模块（可提前展示）
+            "passed_module_list": passed_orchestrated,
             "error": f"内容审查未通过: {review_feedback}",
-            "current_step": f"审查编排节点: 审查未通过 - {review_feedback[:80]}",
-            "stream_events": stream_events,
+            "current_step": f"审查编排节点: 审查未通过 - {review_feedback[:80]} (重试 {len(retry_ids)} 个模块)",
+            "stream_events": stream_events + ([{
+                "event_type": "module",
+                "agent": "content_orchestrator",
+                "data": {
+                    "modules": passed_orchestrated,
+                    "title": orchestrate_result.get("orchestrated_content", {}).get("title", ""),
+                },
+                "step_description": f"审查通过 {len(passed_orchestrated)} 个模块，重试 {len(retry_ids)} 个模块"
+            }] if passed_orchestrated else []),
         }
 
     # 编排出错 → 返回错误
@@ -352,13 +377,14 @@ def build_learning_graph() -> StateGraph:
         }
     )
 
-    # 审查编排并行 -> 画像维护或回到主控
+    # 审查编排并行 -> 画像维护、回到主控或结束
     graph.add_conditional_edges(
         NODE_REVIEW_ORCHESTRATE,
         route_after_review_orchestrate,
         {
             NODE_PROFILE_MAINTAINER: NODE_PROFILE_MAINTAINER,
             NODE_CONTROLLER: NODE_CONTROLLER,
+            END: END,
         }
     )
 

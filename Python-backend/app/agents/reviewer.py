@@ -241,13 +241,13 @@ def _review_modules(
                     "feedback": feedback,
                     "missing_points": missing_points,
                 })
-                logger.warning(f"  [模块{module_order}] ❌ 未通过 (评分: {score}/100)")
+                logger.warning(f"  [模块{module_order}] 未通过 (评分: {score}/100)")
                 logger.warning(f"    反馈: {feedback[:100]}")
                 if missing_points:
                     logger.warning(f"    缺失要点: {', '.join(missing_points)}")
             else:
                 passed_modules.append(module_order)
-                logger.info(f"  [模块{module_order}] ✅ 通过 (评分: {score}/100)")
+                logger.info(f"  [模块{module_order}] 通过 (评分: {score}/100)")
             
             all_issues.extend(issues)
         
