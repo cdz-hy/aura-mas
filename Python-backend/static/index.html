@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AURA-MAS 多模态 RAG 测试终端</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        pre { background: #1e293b; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; margin: 1rem 0; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header class="p-6 border-b border-white/10 flex justify-between items-center glass z-10">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                <span class="text-xl font-bold">A</span>
+            </div>
+            <h1 class="text-xl font-semibold tracking-tight">AURA-MAS <span class="text-blue-400 text-sm font-normal ml-2">v1.0 Test Terminal</span></h1>
+        </div>
+        <div class="flex items-center space-x-4">
+            <span class="flex items-center text-xs text-green-400 bg-green-400/10 px-2 py-1 rounded-full">
+                <span class="w-2 h-2 bg-green-400 rounded-full mr-2 animate-pulse"></span> 系统就绪
+            </span>
+        </div>
+    </header>
+
+    <main class="flex-1 flex overflow-hidden">
+        <!-- Sidebar: Retrieval Results -->
+        <aside class="w-96 border-r border-white/10 flex flex-col glass overflow-hidden">
+            <div class="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">检索溯源 (Top 5)</h2>
+            <button onclick="toggleUploadModal(true)" class="p-1.5 hover:bg-white/10 rounded-lg transition-colors text-blue-400" title="上传新文档">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            </button>
+        </div>
+        <div id="results-list" class="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+            <div class="text-slate-500 text-sm text-center mt-10">等待查询指令...</div>
+        </div>
+    </aside>
+
+    <!-- Upload Modal -->
+    <div id="upload-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div class="glass w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+            <div class="p-6 border-b border-white/10 flex justify-between items-center bg-white/5">
+                <h3 class="text-lg font-semibold">上传新文档</h3>
+                <button onclick="toggleUploadModal(false)" class="text-slate-400 hover:text-white">&times;</button>
+            </div>
+            <form id="upload-form" class="p-6 space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="space-y-1">
+                        <label class="text-xs text-slate-400">文档 ID (整数)</label>
+                        <input type="number" id="up-doc-id" required class="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-xs text-slate-400">文档标题</label>
+                        <input type="text" id="up-doc-title" required class="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                </div>
+                <div class="space-y-1">
+                    <label class="text-xs text-slate-400">MD 文件本地路径 (绝对路径)</label>
+                    <input type="text" id="up-md-path" required placeholder="例如: E:\\docs\\算法导论.md" class="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                    <p class="text-[10px] text-slate-500">图片会根据 MD 中的相对路径，在该文件同级目录下自动查找</p>
+                </div>
+                <div id="upload-status" class="text-xs text-center hidden pt-2"></div>
+                <button type="submit" id="upload-submit-btn" class="w-full bg-blue-600 hover:bg-blue-500 py-3 rounded-xl font-semibold transition-all mt-4">开始处理文档</button>
+            </form>
+        </div>
+    </div>
+
+        <!-- Main Chat Area -->
+        <section class="flex-1 flex flex-col relative bg-slate-900/50">
+            <div id="chat-container" class="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
+                <!-- Welcome Message -->
+                <div class="max-w-3xl mx-auto bg-blue-600/10 border border-blue-500/20 p-6 rounded-2xl">
+                    <h3 class="text-lg font-semibold mb-2 text-blue-400">欢迎来到多模态测试终端</h3>
+                    <p class="text-slate-400 leading-relaxed text-sm">
+                        你可以询问有关已上传文档的任何问题。系统将通过 **Qwen3-VL 稠密向量 + BM25 稀疏向量** 进行混合检索，
+                        并调用 **Qwen-VL-Reranker** 进行精排，最后由 **Qwen-Plus** 结合 1200 字大切块上下文生成回答。
+                    </p>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="p-6 border-t border-white/10 glass">
+                <div class="max-w-4xl mx-auto relative">
+                    <input type="text" id="query-input" 
+                        placeholder="输入你的问题，例如：‘红黑树的旋转操作是如何实现的？’" 
+                        class="w-full bg-slate-800/50 border border-white/10 rounded-2xl py-4 pl-6 pr-16 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-slate-200">
+                    <button id="send-btn" class="absolute right-3 top-2.5 p-2 bg-blue-600 hover:bg-blue-500 rounded-xl transition-colors shadow-lg shadow-blue-600/20">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg>
+                    </button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const chatContainer = document.getElementById('chat-container');
+        const resultsList = document.getElementById('results-list');
+        const queryInput = document.getElementById('query-input');
+        const sendBtn = document.getElementById('send-btn');
+
+        async function sendQuery() {
+            const query = queryInput.value.trim();
+            if (!query) return;
+
+            queryInput.value = '';
+            
+            // 添加用户消息
+            appendMessage('user', query);
+
+            // 清理并准备结果列表
+            resultsList.innerHTML = '<div class="flex items-center justify-center p-8"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div></div>';
+
+            try {
+                const response = await fetch('/api/v1/query/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+
+                if (!response.ok) throw new Error('网络请求失败');
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let aiMessageDiv = null;
+                let fullAiContent = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const event = JSON.parse(line.slice(6));
+                            
+                            if (event.type === 'search_results') {
+                                renderSearchResults(event.data);
+                            } else if (event.type === 'start') {
+                                aiMessageDiv = appendMessage('ai', '');
+                            } else if (event.type === 'content') {
+                                fullAiContent += event.delta;
+                                aiMessageDiv.querySelector('.content-body').innerHTML = marked.parse(fullAiContent);
+                                chatContainer.scrollTop = chatContainer.scrollHeight;
+                            } else if (event.type === 'error') {
+                                appendMessage('system', '错误: ' + event.message);
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                appendMessage('system', '发生异常: ' + err.message);
+            }
+        }
+
+        function appendMessage(role, content) {
+            const div = document.createElement('div');
+            div.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-4 duration-300`;
+            
+            const inner = document.createElement('div');
+            inner.className = `max-w-[80%] p-5 rounded-2xl ${
+                role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'glass text-slate-200 rounded-tl-none'
+            }`;
+            
+            if (role === 'system') inner.className = 'max-w-full w-full bg-red-500/10 text-red-400 border border-red-500/20 p-3 rounded-lg text-center text-xs';
+
+            const body = document.createElement('div');
+            body.className = 'content-body prose prose-invert max-w-none text-sm leading-relaxed';
+            body.innerHTML = marked.parse(content);
+            
+            inner.appendChild(body);
+            div.appendChild(inner);
+            chatContainer.appendChild(div);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            return div;
+        }
+
+        function renderSearchResults(data) {
+            resultsList.innerHTML = '';
+            if (data.length === 0) {
+                resultsList.innerHTML = '<div class="text-slate-500 text-xs text-center py-4">未找到相关匹配项</div>';
+                return;
+            }
+
+            data.forEach((res, index) => {
+                const payload = res.payload;
+                const div = document.createElement('div');
+                div.className = 'glass p-4 rounded-xl space-y-3 border-l-4 border-blue-500/50 hover:bg-white/5 transition-all cursor-default';
+                
+                let contentHtml = '';
+                if (payload.type === 'image') {
+                    contentHtml = `
+                        <div class="relative group">
+                            <img src="${payload.image_path}" class="w-full h-32 object-cover rounded-lg bg-slate-800 border border-white/10">
+                            <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-lg">
+                                <a href="${payload.image_path}" target="_blank" class="text-xs bg-white/20 px-2 py-1 rounded">查看原图</a>
+                            </div>
+                        </div>
+                        <p class="text-[10px] text-slate-400 italic">“${payload.image_caption.slice(0, 50)}...”</p>
+                    `;
+                } else {
+                    contentHtml = `<p class="text-xs text-slate-300 line-clamp-4 leading-relaxed">${payload.content}</p>`;
+                }
+
+                div.innerHTML = `
+                    <div class="flex justify-between items-start">
+                        <span class="text-[10px] font-bold text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded">#${index + 1}</span>
+                        <span class="text-[10px] text-slate-500">${payload.doc_title}</span>
+                    </div>
+                    ${contentHtml}
+                    <div class="flex flex-wrap gap-1">
+                        ${payload.heading.map(h => `<span class="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">${h}</span>`).join('')}
+                    </div>
+                `;
+                resultsList.appendChild(div);
+            });
+        }
+
+        sendBtn.onclick = sendQuery;
+        queryInput.onkeypress = (e) => e.key === 'Enter' && sendQuery();
+
+        // --- Upload Logic ---
+        const uploadModal = document.getElementById('upload-modal');
+        const uploadForm = document.getElementById('upload-form');
+        const uploadStatus = document.getElementById('upload-status');
+        const uploadBtn = document.getElementById('upload-submit-btn');
+
+        function toggleUploadModal(show) {
+            uploadModal.classList.toggle('hidden', !show);
+            if (!show) {
+                uploadForm.reset();
+                uploadStatus.classList.add('hidden');
+            }
+        }
+
+        uploadForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const payload = {
+                doc_id: parseInt(document.getElementById('up-doc-id').value),
+                doc_title: document.getElementById('up-doc-title').value,
+                md_path: document.getElementById('up-md-path').value
+            };
+            
+            uploadBtn.disabled = true;
+            uploadBtn.innerText = '正在处理中，请稍候...';
+            uploadStatus.classList.remove('hidden');
+            uploadStatus.className = 'text-xs text-center pt-2 text-blue-400';
+            uploadStatus.innerText = '正在解析文档并分析图片，这可能需要几十秒...';
+
+            try {
+                const response = await fetch('/api/v1/upload/process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    uploadStatus.className = 'text-xs text-center pt-2 text-green-400';
+                    uploadStatus.innerText = `处理完成！共导入 ${result.chunks_processed} 个数据点。`;
+                    setTimeout(() => toggleUploadModal(false), 2000);
+                } else {
+                    throw new Error(result.detail || '处理失败');
+                }
+            } catch (err) {
+                uploadStatus.className = 'text-xs text-center pt-2 text-red-400';
+                uploadStatus.innerText = '处理失败: ' + err.message;
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.innerText = '开始处理文档';
+            }
+        };
+    </script>
+</body>
+</html>

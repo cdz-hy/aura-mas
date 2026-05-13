@@ -1,0 +1,90 @@
+package com.learning.controller;
+
+import com.learning.common.PageResult;
+import com.learning.common.Result;
+import com.learning.dto.PlanCreateRequest;
+import com.learning.entity.LearningPlan;
+import com.learning.service.LearningPlanService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.*;
+
+@Tag(name = "学习计划管理")
+@RestController
+@RequestMapping("/api/plan")
+@RequiredArgsConstructor
+public class LearningPlanController {
+
+    private final LearningPlanService planService;
+
+    @Operation(summary = "创建学习计划")
+    @PostMapping
+    public Result<LearningPlan> createPlan(Authentication authentication,
+                                            @Valid @RequestBody PlanCreateRequest request) {
+        Long userId = (Long) authentication.getPrincipal();
+        return Result.success(planService.createPlan(userId, request));
+    }
+
+    @Operation(summary = "获取学习计划详情")
+    @GetMapping("/{planId}")
+    public Result<LearningPlan> getPlan(Authentication authentication,
+                                         @PathVariable Long planId) {
+        Long userId = (Long) authentication.getPrincipal();
+        return Result.success(planService.getPlanById(planId, userId));
+    }
+
+    @Operation(summary = "获取用户学习计划列表")
+    @GetMapping("/list")
+    public Result<PageResult<LearningPlan>> getPlans(Authentication authentication,
+                                                      @RequestParam(defaultValue = "1") int page,
+                                                      @RequestParam(defaultValue = "10") int size) {
+        Long userId = (Long) authentication.getPrincipal();
+        return Result.success(planService.getUserPlans(userId, page, size));
+    }
+
+    @Operation(summary = "更新学习计划")
+    @PutMapping("/{planId}")
+    public Result<LearningPlan> updatePlan(Authentication authentication,
+                                            @PathVariable Long planId,
+                                            @Valid @RequestBody PlanCreateRequest request) {
+        Long userId = (Long) authentication.getPrincipal();
+        return Result.success(planService.updatePlan(planId, userId, request));
+    }
+
+    @Operation(summary = "删除学习计划")
+    @DeleteMapping("/{planId}")
+    public Result<Void> deletePlan(Authentication authentication,
+                                    @PathVariable Long planId) {
+        Long userId = (Long) authentication.getPrincipal();
+        planService.deletePlan(planId, userId);
+        return Result.success();
+    }
+
+    @Operation(summary = "更新计划状态")
+    @PutMapping("/{planId}/status")
+    public Result<Void> updatePlanStatus(@PathVariable Long planId,
+                                          @RequestParam Integer status) {
+        planService.updatePlanStatus(planId, status);
+        return Result.success();
+    }
+
+    @Operation(summary = "内部接口：创建学习计划")
+    @PostMapping("/internal/create")
+    public Result<LearningPlan> createPlanInternal(@RequestBody java.util.Map<String, Object> body) {
+        Long userId = Long.valueOf(body.get("userId").toString());
+        String title = (String) body.get("title");
+        Object learningGoal = body.get("learningGoal");
+        Object planConfig = body.get("planConfig");
+        Integer status = body.get("status") != null ? Integer.valueOf(body.get("status").toString()) : null;
+        return Result.success(planService.createPlanInternal(userId, title, learningGoal, planConfig, status));
+    }
+
+    @Operation(summary = "内部接口：获取计划详情")
+    @GetMapping("/internal/{planId}")
+    public Result<LearningPlan> getPlanInternal(@PathVariable Long planId) {
+        return Result.success(planService.getPlanByIdInternal(planId));
+    }
+}

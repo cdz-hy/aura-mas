@@ -1,0 +1,33 @@
+# ==================== Dependencies ====================
+node_modules/
+
+# ==================== Build ====================
+dist/
+dist-ssr/
+*.local
+
+# ==================== IDE ====================
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ==================== Logs ====================
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ==================== Environment ====================
+.env
+.env.local
+.env.*.local
+
+# ==================== Editor ====================
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
