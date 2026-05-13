@@ -15,9 +15,9 @@ class MIMOClient:
     MODEL_STANDARD = "mimo-v2.5"       # 编排智能体
     MODEL_PRO = "mimo-v2.5-pro"        # 其余智能体
 
-    # 各模型的上下文窗口上限（max_completion_tokens 默认值）
+    # 各模型的上下文窗口上限（max_completion_tokens 上限）
     CONTEXT_WINDOWS = {
-        "mimo-v2.5": 32768,
+        "mimo-v2.5": 131072,
         "mimo-v2.5-pro": 131072,
     }
 
@@ -390,8 +390,8 @@ def get_rag_retriever_llm() -> MIMOClient:
 
 
 def get_content_orchestrator_llm() -> MIMOClient:
-    """内容编排智能体 - 标准模型（唯一使用 mimo-v2.5 的智能体），启用思维链"""
-    return MIMOClient(model=MIMOClient.MODEL_STANDARD, temperature=0.5, max_tokens=8192,
+    """内容编排智能体 - 标准模型（mimo-v2.5，131K 上下文），启用思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_STANDARD, temperature=0.5, max_tokens=16384,
                       thinking=THINKING_ENABLED)
 
 

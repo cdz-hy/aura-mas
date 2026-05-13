@@ -224,7 +224,7 @@ def _generate_single_module(
     ]
     
     try:
-        result = llm.chat_json(messages, max_tokens=8192)
+        result = llm.chat_json(messages, max_tokens=16384)
         result["module_order"] = module_order
         result["module_id"] = module_info.get("module_id", module_order)
         return result
@@ -610,7 +610,7 @@ def _batch_orchestration(
 
     try:
         logger.info(f"  [内容编排智能体] 正在调用 LLM 进行批量编排...")
-        result = llm.chat_json(messages, max_tokens=8192)
+        result = llm.chat_json(messages, max_tokens=16384)
         modules_list = result.get("modules", [])
 
         logger.info(f"  [内容编排智能体] 批量编排完成!")

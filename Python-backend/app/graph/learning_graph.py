@@ -11,7 +11,7 @@ from app.agents.schemas import (
     NODE_CONTROLLER, NODE_TASK_DECOMPOSER, NODE_SIMPLE_ANSWER,
     NODE_RAG_RETRIEVER, NODE_RESOURCE_GENERATOR, NODE_QUIZ_GENERATOR,
     NODE_QUIZ_GRADER, NODE_PROFILE_MAINTAINER, NODE_HUMAN_CONFIRM,
-    NODE_REVIEW_ORCHESTRATE,
+    NODE_REVIEW_ORCHESTRATE, NODE_REVIEW_ONLY,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
     INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP,
 )
@@ -150,9 +150,92 @@ def route_after_quiz_grader(state: AgentState) -> str:
 
 
 def route_after_resource_generator(state: AgentState) -> str:
-    """自主生成之后的路由"""
-    logger.info(f"  [路由] 资源自主生成完成 -> 审查编排并行节点")
-    return NODE_REVIEW_ORCHESTRATE
+    """自主生成之后的路由 -> 仅审查（不编排）"""
+    logger.info(f"  [路由] 资源自主生成完成 -> 审查节点")
+    return NODE_REVIEW_ONLY
+
+
+def review_only_node(state: AgentState) -> Dict[str, Any]:
+    """自主生成内容的审查节点 - 直接审查，不经过编排"""
+    generated_content = state.get("generated_content", {})
+    task_breakdown = state.get("task_breakdown", {})
+    learning_goal = state.get("learning_goal", state.get("user_message", ""))
+
+    logger.info(f"{'='*60}")
+    logger.info(f"  [审查节点] 自主生成内容审查")
+
+    # 将 generated_content 包装为单个模块
+    module = {
+        "module_order": 1,
+        "module_id": generated_content.get("module_id", 1),
+        "title": generated_content.get("title", "自主生成内容"),
+        "content": generated_content.get("content", ""),
+        "module_type": generated_content.get("content_type", "text"),
+        "key_points": generated_content.get("key_points", []),
+        "description": learning_goal,
+    }
+    module_list = [module]
+
+    logger.info(f"  [审查节点] 模块: {module['title']} ({len(module['content'])} 字符)")
+
+    # 直接审查
+    review_state = {**state}
+    review_state["module_list"] = module_list
+    review_result = reviewer_node(review_state)
+
+    review_passed = review_result.get("review_passed", True)
+    review_feedback = review_result.get("review_feedback", "")
+    failed_modules = review_result.get("failed_modules", [])
+
+    stream_events = review_result.get("stream_events", [])
+
+    if not review_passed:
+        retry_ids = [m["module_order"] for m in failed_modules] if failed_modules else [1]
+        logger.warning(f"  [审查节点] 审查未通过: {review_feedback[:100]}")
+        logger.info(f"{'='*60}")
+        return {
+            "review_passed": False,
+            "review_feedback": review_feedback,
+            "failed_modules": failed_modules,
+            "passed_modules": [],
+            "retry_module_ids": retry_ids,
+            "module_list": [],
+            "error": f"自主生成内容审查未通过: {review_feedback}",
+            "current_step": f"审查节点: 未通过 - {review_feedback[:80]}",
+            "stream_events": stream_events,
+        }
+
+    logger.info(f"  [审查节点] 审查通过")
+    logger.info(f"{'='*60}")
+    return {
+        "review_passed": True,
+        "module_list": module_list,
+        "orchestrated_content": {
+            "title": generated_content.get("title", ""),
+            "modules": module_list,
+        },
+        "error": None,
+        "current_step": f"审查节点: 审查通过 [{module['title']}]",
+        "stream_events": stream_events,
+    }
+
+
+def route_after_review_only(state: AgentState) -> str:
+    """自主生成审查之后的路由"""
+    review_passed = state.get("review_passed", True)
+    failed_modules = state.get("failed_modules", [])
+
+    if not review_passed and failed_modules:
+        retry_ids = [m["module_order"] for m in failed_modules]
+        logger.warning(f"  [路由] 自主生成审查未通过 -> 主控智能体 (重试模块: {retry_ids})")
+        return NODE_CONTROLLER
+
+    if not review_passed:
+        logger.warning(f"  [路由] 自主生成审查未通过 -> 主控智能体")
+        return NODE_CONTROLLER
+
+    logger.info(f"  [路由] 自主生成审查通过 -> END")
+    return END
 
 
 def route_after_profile_maintainer(state: AgentState) -> str:
@@ -445,12 +528,13 @@ def build_learning_graph() -> StateGraph:
     graph.add_node(NODE_SIMPLE_ANSWER, simple_answer_node)
     graph.add_node(NODE_RAG_RETRIEVER, rag_retriever_node)
     graph.add_node(NODE_REVIEW_ORCHESTRATE, review_and_orchestrate_node)
+    graph.add_node(NODE_REVIEW_ONLY, review_only_node)
     graph.add_node(NODE_RESOURCE_GENERATOR, resource_generator_node)
     graph.add_node(NODE_QUIZ_GENERATOR, quiz_generator_node)
     graph.add_node(NODE_QUIZ_GRADER, quiz_grader_node)
     graph.add_node(NODE_PROFILE_MAINTAINER, profile_maintainer_node)
     graph.add_node(NODE_HUMAN_CONFIRM, _human_confirm_node)
-    logger.info("已注册 10 个节点")
+    logger.info("已注册 11 个节点")
 
     # 设置入口
     graph.set_entry_point(NODE_CONTROLLER)
@@ -538,11 +622,21 @@ def build_learning_graph() -> StateGraph:
         {NODE_PROFILE_MAINTAINER: NODE_PROFILE_MAINTAINER}
     )
 
-    # 自主生成 -> 审查编排并行节点
+    # 自主生成 -> 仅审查（不编排）
     graph.add_conditional_edges(
         NODE_RESOURCE_GENERATOR,
         route_after_resource_generator,
-        {NODE_REVIEW_ORCHESTRATE: NODE_REVIEW_ORCHESTRATE}
+        {NODE_REVIEW_ONLY: NODE_REVIEW_ONLY}
+    )
+
+    # 自主生成审查 -> 主控（重试）或结束
+    graph.add_conditional_edges(
+        NODE_REVIEW_ONLY,
+        route_after_review_only,
+        {
+            NODE_CONTROLLER: NODE_CONTROLLER,
+            END: END,
+        }
     )
 
     # 画像维护 -> 结束
