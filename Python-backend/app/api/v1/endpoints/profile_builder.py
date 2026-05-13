@@ -190,12 +190,13 @@ def _persist_profile_update(sse_data: str, user_id: int):
         if d.get("type") != "profile_update":
             return
         dimensions = d.get("dimensions", {})
-        updates = dimensions.get("updates")
-        if not updates:
+        # 使用 updated_behavior（完整合并后的画像），而非 updates（原始增量，会导致数据丢失）
+        updated_behavior = dimensions.get("updated_behavior")
+        if not updated_behavior:
             return
         reason = dimensions.get("reason", "画像构建自动更新")
         logger.info(f"[画像持久化] 保存用户 {user_id} 的画像更新: {reason}")
-        java_client.save_user_profile(user_id, updates, reason)
+        java_client.save_user_profile(user_id, updated_behavior, reason)
         logger.info(f"[画像持久化] 画像保存成功")
     except Exception as e:
         logger.warning(f"[画像持久化] 保存失败: {e}")

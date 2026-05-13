@@ -681,19 +681,10 @@ def _human_confirm_node(state: AgentState) -> Dict[str, Any]:
             }
 
     logger.info(f"  [人工确认节点] 等待用户确认，流程暂停")
+    # 注意：不返回 needs_human_confirm，避免 SSE bridge 兜底逻辑重复发送 need_confirmation
+    # task_decomposer_node 已发送过 confirm_needed，路由逻辑通过 state 中已有的值判断
     return {
-        "needs_human_confirm": True,
         "current_step": "等待用户确认学习路径",
-        "stream_events": [{
-            "event_type": "confirm_needed",
-            "agent": "system",
-            "data": {
-                "message": "学习路径已生成，请确认或补充说明",
-                "task_breakdown": task_breakdown,
-            },
-            "step_description": "请确认学习路径规划"
-        }],
-        # 增加迭代计数，防止 max_iterations 检查失效
         "iteration_count": state.get("iteration_count", 0) + 1,
     }
 

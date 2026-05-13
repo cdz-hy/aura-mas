@@ -106,12 +106,14 @@ def update_learning_behavior(
 ) -> Dict[str, Any]:
     """
     更新用户画像的 learning_behavior
-    
+
     Args:
         current: 当前的 learning_behavior
         updates: 需要更新的字段和值
+            - 学习风格维度: 增量调整（累加到当前值）
+            - 列表字段: 期望的最终状态（直接替换）
         confidence: 更新的置信度 (0-1)，用于调整学习风格维度的变化幅度
-        
+
     Returns:
         更新后的 learning_behavior
     """
@@ -135,18 +137,12 @@ def update_learning_behavior(
                 # 限制在 [-1, 1] 范围内
                 current[key] = max(-1.0, min(1.0, new_value))
         
-        # 列表字段：累积式更新（去重）
+        # 列表字段：直接替换为 LLM 输出的期望最终状态
         elif key in ["knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types"]:
             if isinstance(value, list):
-                current_list = current.get(key, [])
-                # 合并并去重
-                combined = list(set(current_list + value))
-                current[key] = combined
+                current[key] = value
             elif isinstance(value, str):
-                current_list = current.get(key, [])
-                if value not in current_list:
-                    current_list.append(value)
-                current[key] = current_list
+                current[key] = [value]
         
         # 其他字段：直接更新
         else:
