@@ -157,6 +157,7 @@ class MQConsumer:
             "rag_results": [],
             "rag_context_chunks": [],
             "rag_sufficient": False,
+            "rag_poor_module_ids": [],
             "retrieval_config": {},
             "review_passed": True,
             "review_feedback": "",

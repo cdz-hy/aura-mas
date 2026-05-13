@@ -223,7 +223,7 @@ def resource_generator_node(state: AgentState) -> Dict[str, Any]:
 {prev_summary}
 
 ## 当前已收集的资料摘要
-{_summarize_existing_results(all_search_results, max_items=15)}
+{_summarize_existing_results(all_search_results, max_items=30)}
 
 请审视现有资料是否充分覆盖了学习主题的各个方面。如果还有信息缺口，规划补充搜索；如果资料充足，输出 decision=sufficient。输出 JSON:"""
 
@@ -231,7 +231,7 @@ def resource_generator_node(state: AgentState) -> Dict[str, Any]:
                 {"role": "system", "content": SEARCH_PLANNING_PROMPT},
                 {"role": "user", "content": context_prompt}
             ]
-            plan_result = llm.chat_json(plan_messages, max_tokens=1024)
+            plan_result = llm.chat_json(plan_messages, max_tokens=4096)
             decision = plan_result.get("decision", "search")
             reasoning = plan_result.get("reasoning", "")
 

@@ -62,6 +62,7 @@ class AgentState(TypedDict, total=False):
     rag_results: List[Dict[str, Any]]  # RAG 检索结果
     rag_context_chunks: List[Dict[str, Any]]  # 去重后的上下文块
     rag_sufficient: bool  # RAG 检索结果是否充足
+    rag_poor_module_ids: List[int]  # RAG 检索结果不足的模块 ID 列表（需自主生成）
     retrieval_config: Dict[str, Any]  # 检索配置（召回数、精排数等）
 
     # ==================== 审查 ====================

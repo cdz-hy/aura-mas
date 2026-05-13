@@ -224,7 +224,7 @@ def _generate_single_module(
     ]
     
     try:
-        result = llm.chat_json(messages, max_tokens=4096)
+        result = llm.chat_json(messages, max_tokens=8192)
         result["module_order"] = module_order
         result["module_id"] = module_info.get("module_id", module_order)
         return result

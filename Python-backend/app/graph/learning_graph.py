@@ -50,8 +50,8 @@ def route_after_rag(state: AgentState) -> str:
     """RAG 检索之后的路由 - 审查与编排并行"""
     rag_sufficient = state.get("rag_sufficient", False)
     if not rag_sufficient:
-        logger.info(f"  [路由] RAG 检索不足 -> 简答智能体")
-        return NODE_SIMPLE_ANSWER
+        logger.info(f"  [路由] RAG 检索不足 (低分/无关内容已过滤) -> 资源自主生成智能体")
+        return NODE_RESOURCE_GENERATOR
     logger.info(f"  [路由] RAG 检索完成 -> 审查编排并行节点")
     return NODE_REVIEW_ORCHESTRATE
 
@@ -492,13 +492,13 @@ def build_learning_graph() -> StateGraph:
         }
     )
 
-    # RAG 检索 -> 审查编排并行节点（或简答）
+    # RAG 检索 -> 审查编排并行节点（或资源自主生成）
     graph.add_conditional_edges(
         NODE_RAG_RETRIEVER,
         route_after_rag,
         {
             NODE_REVIEW_ORCHESTRATE: NODE_REVIEW_ORCHESTRATE,
-            NODE_SIMPLE_ANSWER: NODE_SIMPLE_ANSWER,
+            NODE_RESOURCE_GENERATOR: NODE_RESOURCE_GENERATOR,
         }
     )
 

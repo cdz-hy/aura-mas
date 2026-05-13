@@ -37,7 +37,7 @@ class HybridRetrievalService:
                 return ""
         return self.parents_cache[doc_id].get(parent_id, "")
 
-    async def search(self, query: str, limit: int = 20, rerank_top_n: int = 5) -> Dict[str, Any]:
+    async def search(self, query: str, limit: int = 20, rerank_top_n: int = 5, min_rerank_score: float = 0.0) -> Dict[str, Any]:
         """
         混合检索流程：
         1. 获取查询向量。
@@ -65,19 +65,19 @@ class HybridRetrievalService:
         # 反而因图片在 Sparse 通道排名极低而影响 DBSF 融合质量
         text_filter = models.Filter(must=[models.FieldCondition(key="type", match=models.MatchValue(value="text"))])
         image_filter = models.Filter(must=[models.FieldCondition(key="type", match=models.MatchValue(value="image"))])
-        # 先放入绝对安全的 Dense 通道
+        # 先放入绝对安全的 Dense 通道（score_threshold 过滤低分噪声，防止拉低 DBSF 融合质量）
         prefetch_list = [
             # 文本 Dense 通道
-            models.Prefetch(query=dense_vec, using="text-dense", filter=text_filter, limit=limit),
+            models.Prefetch(query=dense_vec, using="text-dense", filter=text_filter, limit=limit, score_threshold=0.6),
             # 图片 Dense 通道（仅 Dense，BM25 对图片 caption 检索无显著增益）
-            models.Prefetch(query=dense_vec, using="text-dense", filter=image_filter, limit=limit),
+            models.Prefetch(query=dense_vec, using="text-dense", filter=image_filter, limit=limit, score_threshold=0.7),
         ]
         # 护栏：只有查询词 Sparse 向量非空时，才开启 BM25 并联通道，防止空 indices 送入 DBSF 引发崩溃
         if sparse_vec.get("indices") and len(sparse_vec["indices"]) > 0:
             prefetch_list.append(
                 models.Prefetch(
                     query=models.SparseVector(indices=sparse_vec["indices"], values=sparse_vec["values"]),
-                    using="text-sparse", filter=text_filter, limit=limit
+                    using="text-sparse", filter=text_filter, limit=limit, score_threshold=6.0
                 )
             )
         else:
@@ -140,6 +140,14 @@ class HybridRetrievalService:
             top_n=rerank_top_n
         )
         reranked_results = await loop.run_in_executor(_executor, rerank_func)
+
+        # 4.5 过滤低分结果：移除 rerank_score 低于阈值的结果
+        if min_rerank_score > 0 and reranked_results:
+            before_count = len(reranked_results)
+            reranked_results = [r for r in reranked_results if r.get("rerank_score", 0) >= min_rerank_score]
+            filtered_count = before_count - len(reranked_results)
+            if filtered_count > 0:
+                print(f"  [过滤] rerank_score < {min_rerank_score} 的结果已移除: {filtered_count} 条, 剩余 {len(reranked_results)} 条")
 
         # 5. 仅针对精排后的 Top N 结果进行大切块回溯与去重
         print(f"\n  [阶段 4/4] 开始父块内容回溯与上下文去重...")

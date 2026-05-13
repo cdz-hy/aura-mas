@@ -10,6 +10,9 @@ from app.services.retrieval import HybridRetrievalService
 
 logger = logging.getLogger("agents.rag_retriever")
 
+# rerank 相关性阈值：低于此分数的结果视为无关，直接过滤
+RERANK_SCORE_THRESHOLD = 0.5
+
 _retrieval_service: HybridRetrievalService = None
 
 
@@ -30,6 +33,7 @@ def _compute_retrieval_config(profile: Dict[str, Any]) -> Dict[str, Any]:
         "rerank_top_n": 15,
         "image_bias": 0.5,
         "text_bias": 0.5,
+        "min_rerank_score": RERANK_SCORE_THRESHOLD,
     }
 
     vv = fs.get("visual_verbal", 0)
@@ -52,6 +56,7 @@ async def _retrieve_for_module(query: str, retrieval_config: Dict[str, Any]) -> 
         query=query,
         limit=retrieval_config["total_recall"],
         rerank_top_n=retrieval_config["rerank_top_n"],
+        min_rerank_score=retrieval_config.get("min_rerank_score", RERANK_SCORE_THRESHOLD),
     )
     return result
 
@@ -163,6 +168,7 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
 
     all_results = []
     all_context_chunks = []
+    poor_module_ids = []  # RAG 结果不足的模块 ID
 
     async def run_retrievals():
         tasks = []
@@ -178,14 +184,22 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
         loop.close()
 
         for i, result in enumerate(results):
+            module_id = i + 1
             if isinstance(result, Exception):
                 logger.error(f"    检索任务{i+1} 失败: {str(result)}")
+                poor_module_ids.append(module_id)
                 continue
             final_results = result.get("final_results", [])
             context_chunks = result.get("context_chunks", [])
             logger.info(f"    检索任务{i+1}: 召回 {len(final_results)} 条, 上下文 {len(context_chunks)} 块")
-            all_results.extend(final_results)
-            all_context_chunks.extend(context_chunks)
+
+            # 检查单个模块的检索质量
+            if not context_chunks:
+                poor_module_ids.append(module_id)
+                logger.warning(f"    模块{module_id} 无有效上下文，标记为需自主生成")
+            else:
+                all_results.extend(final_results)
+                all_context_chunks.extend(context_chunks)
 
         # 去重
         seen_ids = set()
@@ -204,16 +218,19 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
                 seen_content.add(content_key)
                 deduped_chunks.append(chunk)
 
-        rag_sufficient = len(deduped_chunks) > 0
-
         # 统计文本和图片数量
         text_count = sum(1 for c in deduped_chunks if c.get("type") == "text")
         image_count = sum(1 for c in deduped_chunks if c.get("type") == "image")
 
+        # 检索充足判断：过滤后仍有上下文块即为充足
+        rag_sufficient = len(deduped_chunks) > 0
+
         logger.info(f"  [RAG检索智能体] 检索完成!")
-        logger.info(f"    去重后结果: {len(deduped_results)} 条")
+        logger.info(f"    去重后结果: {len(deduped_results)} 条 (rerank 阈值: {RERANK_SCORE_THRESHOLD})")
         logger.info(f"    上下文块: {len(deduped_chunks)} 个 (文本: {text_count}, 图片: {image_count})")
-        logger.info(f"    检索充足: {'是' if rag_sufficient else '否'}")
+        logger.info(f"    检索充足: {'是' if rag_sufficient else '否 (结果不足或均为低分无关内容)'}")
+        if poor_module_ids:
+            logger.info(f"    需自主生成的模块: {poor_module_ids}")
         logger.info(f"{'='*60}")
 
         return {
@@ -221,6 +238,7 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
             "rag_results": deduped_results,
             "rag_context_chunks": deduped_chunks,
             "rag_sufficient": rag_sufficient,
+            "rag_poor_module_ids": poor_module_ids,
             "retrieval_config": retrieval_config,
             "current_step": f"RAG检索智能体: 完成检索，共 {len(deduped_results)} 条结果，{len(deduped_chunks)} 个上下文块",
             "stream_events": [{
@@ -232,8 +250,9 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
                     "total_chunks": len(deduped_chunks),
                     "config": retrieval_config,
                     "sufficient": rag_sufficient,
+                    "poor_module_ids": poor_module_ids,
                 },
-                "step_description": f"检索完成，共召回 {len(deduped_results)} 条结果"
+                "step_description": f"检索完成，共召回 {len(deduped_results)} 条结果" + (f"，{len(poor_module_ids)} 个模块需自主生成" if poor_module_ids else "")
             }],
         }
 
