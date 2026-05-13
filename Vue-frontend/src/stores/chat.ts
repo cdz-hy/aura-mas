@@ -7,7 +7,7 @@ import type { ChatSession, ChatMessage } from '@/types/chat'
 
 const moduleTypeLabels: Record<string, string> = {
   text: '文本', image: '图片', diagram: '导图', code: '代码', quiz: '题目', summary: '总结',
-  document: '文档', mindmap: '导图', reading: '阅读',
+  document: '文档', mindmap: '导图', reading: '阅读', video: '教学视频',
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -162,6 +162,13 @@ export const useChatStore = defineStore('chat', () => {
       const res = await getSessionMessages(sessionId, 100)
       const dbMessages: ChatMessage[] = res.data || []
       messages.value = dbMessages.map(dbMessageToChatMessage)
+
+      // 恢复确认状态：如果最后一条消息是 confirm 卡片，恢复按钮
+      const lastMsg = messages.value[messages.value.length - 1]
+      if (lastMsg?.type === 'confirm' && lastMsg.breakdown) {
+        awaitingConfirmation.value = true
+        pendingTaskBreakdown.value = lastMsg.breakdown
+      }
     } catch (e) {
       console.error('Failed to load session messages:', e)
       messages.value = []

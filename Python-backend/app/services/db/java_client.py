@@ -239,7 +239,20 @@ class JavaBackendClient:
 
     def get_user_profile(self, user_id: int) -> Dict[str, Any]:
         """获取用户当前画像"""
-        return self._request("GET", f"/api/internal/profile/current", params={"userId": user_id})
+        profile = self._request("GET", f"/api/internal/profile/current", params={"userId": user_id})
+        # Java 返回 learningBehavior (camelCase, JSON 字符串)，统一转为 learning_behavior (snake_case, dict)
+        if isinstance(profile, dict):
+            lb = profile.get("learningBehavior")
+            if isinstance(lb, str):
+                try:
+                    profile["learning_behavior"] = json.loads(lb)
+                except Exception:
+                    profile["learning_behavior"] = {}
+            elif isinstance(lb, dict):
+                profile["learning_behavior"] = lb
+            elif "learning_behavior" not in profile:
+                profile["learning_behavior"] = {}
+        return profile
 
     def get_resource_by_id(self, resource_id: int) -> Dict[str, Any]:
         """获取单个学习资源"""

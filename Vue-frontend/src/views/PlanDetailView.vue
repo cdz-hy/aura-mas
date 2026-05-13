@@ -210,6 +210,41 @@
             </div>
           </template>
 
+          <!-- 视频类型 -->
+          <template v-else-if="selectedResource.moduleType === 'video'">
+            <div v-if="selectedResource.moduleData?.videos?.length" class="space-y-3">
+              <a
+                v-for="(v, vi) in selectedResource.moduleData.videos"
+                :key="vi"
+                :href="v.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="block p-4 rounded-xl border border-navy-100/50 hover:border-red-200 hover:bg-red-50/30 transition-colors group"
+              >
+                <div class="flex items-start gap-3">
+                  <div class="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center flex-shrink-0 group-hover:bg-red-100 transition-colors">
+                    <svg class="w-5 h-5 text-red-500" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z"/>
+                    </svg>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-navy-800 group-hover:text-red-600 transition-colors line-clamp-2">{{ v.title }}</p>
+                    <div class="flex items-center gap-2 mt-1.5">
+                      <span v-if="v.platform" class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-500">{{ v.platform }}</span>
+                      <span v-if="v.snippet" class="text-xs text-navy-400 line-clamp-1">{{ v.snippet }}</span>
+                    </div>
+                  </div>
+                  <svg class="w-4 h-4 text-navy-300 group-hover:text-red-400 flex-shrink-0 mt-1 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                  </svg>
+                </div>
+              </a>
+            </div>
+            <div v-else class="text-center py-8 text-navy-300 text-sm">
+              <p>暂无视频资源</p>
+            </div>
+          </template>
+
           <!-- 其他类型 -->
           <template v-else>
             <div v-if="selectedResource.moduleData?.content" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(selectedResource.moduleData.content)"></div>
@@ -516,6 +551,7 @@ const resourceOptions = [
   { type: 'mindmap', label: '生成思维导图' },
   { type: 'code', label: '生成代码示例' },
   { type: 'summary', label: '生成总结' },
+  { type: 'video', label: '生成教学视频' },
 ]
 const showSessionList = ref(false)
 
@@ -530,7 +566,7 @@ const quickQuestions = [
 ]
 
 const typeLabels: Record<string, string> = {
-  document: '文档', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结',
+  document: '文档', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频',
 }
 
 // ==================== 计算属性 ====================
@@ -960,6 +996,7 @@ function detectResourceType(msg: string): string | null {
   if (/思维导图|导图|mindmap|脑图/.test(lower)) return 'mindmap'
   if (/代码|code|示例代码|编程/.test(lower)) return 'code'
   if (/总结|摘要|summary|复习|要点/.test(lower)) return 'summary'
+  if (/视频|video|教程|教学视频/.test(lower)) return 'video'
   return null
 }
 
@@ -1048,7 +1085,7 @@ function statusClass(s: number) {
   return ['bg-gray-100 text-gray-600', 'bg-blue-100 text-blue-600', 'bg-amber-100 text-amber-600', 'bg-emerald-100 text-emerald-600', 'bg-sage-100 text-sage-700'][s] || 'bg-gray-100 text-gray-600'
 }
 function badgeClass(type: string) {
-  return { document: 'bg-blue-50 text-blue-500', mindmap: 'bg-purple-50 text-purple-500', quiz: 'bg-amber-50 text-amber-500', code: 'bg-emerald-50 text-emerald-500', reading: 'bg-rose-50 text-rose-500' }[type] || 'bg-navy-50 text-navy-500'
+  return { document: 'bg-blue-50 text-blue-500', mindmap: 'bg-purple-50 text-purple-500', quiz: 'bg-amber-50 text-amber-500', code: 'bg-emerald-50 text-emerald-500', reading: 'bg-rose-50 text-rose-500', video: 'bg-red-50 text-red-500' }[type] || 'bg-navy-50 text-navy-500'
 }
 
 // ==================== 资源生成 ====================

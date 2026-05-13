@@ -290,7 +290,7 @@ def _should_ask_profile(chat_history: List[Dict[str, str]], profile: Dict[str, A
             return False
 
     # 低频率随机触发
-    return random.random() < 0.2
+    return random.random() < 0.3
 
 
 def _pick_profile_question(profile: Dict[str, Any]) -> tuple:
