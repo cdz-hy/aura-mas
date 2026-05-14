@@ -6,7 +6,7 @@ import { getSessions, getSessionMessages, getDialogueHistoryByPlan, deleteSessio
 import type { ChatSession, ChatMessage } from '@/types/chat'
 
 const moduleTypeLabels: Record<string, string> = {
-  text: '文本', image: '图片', diagram: '导图', code: '代码', quiz: '题目', summary: '总结',
+  text: '图文', image: '图片', diagram: '导图', code: '代码', quiz: '题目', summary: '总结',
   document: '文档', mindmap: '导图', reading: '阅读', video: '教学视频',
 }
 
@@ -421,6 +421,7 @@ export const useChatStore = defineStore('chat', () => {
           type: resourceType,
           title: moduleContext.title,
           description: moduleContext.description || '',
+          session_id: activeSessionId.value,
         },
         {
           onProgress(content) {

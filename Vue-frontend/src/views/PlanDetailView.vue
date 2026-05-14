@@ -136,7 +136,7 @@
 
     <!-- ==================== 中间栏：资源详情 ==================== -->
     <transition name="slide-fade">
-      <div v-if="selectedResource" class="w-[400px] flex-shrink-0 flex flex-col card overflow-hidden animate-fade-in-up mx-2">
+      <div v-if="selectedResource" class="flex flex-col card overflow-hidden animate-fade-in-up mx-2" :style="{ width: panelWidth + 'px', minWidth: '280px' }">
         <!-- 标题栏 -->
         <div class="px-4 py-3 border-b border-navy-100/50 flex items-center justify-between">
           <div class="flex items-center gap-2 min-w-0">
@@ -260,8 +260,18 @@
       </div>
     </transition>
 
+    <!-- 拖拽分隔线 -->
+    <div
+      v-if="selectedResource"
+      class="flex-shrink-0 flex items-center justify-center cursor-col-resize group"
+      :class="isDragging ? 'w-2' : 'w-1.5'"
+      @mousedown="onDividerMouseDown"
+    >
+      <div class="w-0.5 h-8 rounded-full transition-colors" :class="isDragging ? 'bg-navy-400' : 'bg-navy-200 group-hover:bg-navy-400'"></div>
+    </div>
+
     <!-- ==================== 右侧栏：对话界面 ==================== -->
-    <div class="flex-1 flex flex-col card overflow-hidden animate-fade-in-up" style="animation-delay: 0.1s">
+    <div class="flex-1 flex flex-col card overflow-hidden animate-fade-in-up min-w-[300px]" style="animation-delay: 0.1s">
       <!-- Chat header -->
       <div class="px-6 py-3 border-b border-navy-100/50 flex items-center justify-between">
         <div class="flex items-center gap-3 min-w-0">
@@ -525,6 +535,50 @@ const planIdStr = String(planId)
 const chatStore = useChatStore()
 const authStore = useAuthStore()
 
+// ==================== 面板拖拽调整 ====================
+const panelWidth = ref(400)
+const isDragging = ref(false)
+
+function onDividerMouseDown(e: MouseEvent) {
+  e.preventDefault()
+  isDragging.value = true
+  document.addEventListener('mousemove', onDividerMouseMove)
+  document.addEventListener('mouseup', onDividerMouseUp)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+function onDividerMouseMove(e: MouseEvent) {
+  if (!isDragging.value) return
+  // 计算鼠标相对于容器左边缘的位置
+  const container = document.querySelector('.flex.gap-0')
+  if (!container) return
+  const rect = container.getBoundingClientRect()
+  // 左侧栏宽度
+  const sidebarEl = container.children[0] as HTMLElement
+  const sidebarW = sidebarEl?.offsetWidth || 280
+  // 折叠按钮宽度
+  const collapseBtn = container.children[1] as HTMLElement
+  const collapseW = collapseBtn?.offsetWidth || 24
+  // 分隔线的左右偏移（约 8px）
+  const offset = 8
+  const newWidth = e.clientX - rect.left - sidebarW - collapseW - offset
+  panelWidth.value = Math.max(280, Math.min(800, newWidth))
+}
+
+function onDividerMouseUp() {
+  isDragging.value = false
+  document.removeEventListener('mousemove', onDividerMouseMove)
+  document.removeEventListener('mouseup', onDividerMouseUp)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
+onUnmounted(() => {
+  document.removeEventListener('mousemove', onDividerMouseMove)
+  document.removeEventListener('mouseup', onDividerMouseUp)
+})
+
 // ==================== 状态 ====================
 const plan = ref<LearningPlan | null>(null)
 const resources = ref<LearningResource[]>([])
@@ -573,7 +627,7 @@ const quickQuestions = [
 ]
 
 const typeLabels: Record<string, string> = {
-  document: '文档', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频',
+  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频',
 }
 
 // ==================== 计算属性 ====================

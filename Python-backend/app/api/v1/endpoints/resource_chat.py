@@ -357,6 +357,7 @@ async def generate_single_resource(
     type: str = Query("document", description="资源类型: document/mindmap/quiz/code/summary"),
     title: str = Query("", description="模块标题"),
     description: str = Query("", description="模块描述"),
+    session_id: str = Query("", description="会话 ID（前端传入，为空时自动生成）"),
 ):
     """
     单资源生成 - SSE 流式输出
@@ -453,10 +454,13 @@ async def generate_single_resource(
         intent = "generate_resource"
         next_node = "rag_retriever"
 
+    # 优先使用前端传入的 session_id，保持会话连续性
+    effective_session_id = session_id if session_id else f"resource-{plan_id_int}-{module_id_int}"
+
     initial_state: AgentState = {
         "user_id": user_id,
         "plan_id": plan_id_int,
-        "session_id": f"resource-{plan_id_int}-{module_id_int}",
+        "session_id": effective_session_id,
         "user_message": resource_message,
         "human_feedback": None,
         "chat_history": chat_history,
@@ -500,7 +504,7 @@ async def generate_single_resource(
         "source_resource_content": source_resource_content,
     }
 
-    session_id = f"resource-{plan_id_int}-{module_id_int}"
+    session_id = effective_session_id
 
     # 后台任务与 SSE 流共享的状态
     bg_state = {
