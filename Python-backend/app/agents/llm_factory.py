@@ -413,6 +413,12 @@ def get_quiz_generator_llm() -> MIMOClient:
                       thinking=THINKING_ENABLED)
 
 
+def get_resource_type_generator_llm() -> MIMOClient:
+    """多模态类型资源生成智能体 - pro 模型，关闭思维链加速生成，支持 mindmap/summary/code 等结构化输出"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=8192,
+                      thinking=THINKING_DISABLED)
+
+
 def get_quiz_grader_llm() -> MIMOClient:
     """题目判定智能体 - pro 模型，关闭思维链"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=1536,

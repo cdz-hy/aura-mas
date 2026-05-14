@@ -18,7 +18,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from app.services.db.java_client import java_client
 from app.graph.learning_graph import get_learning_graph
-from app.agents.schemas import AgentState
+from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR
 from app.agents.profile_maintainer import profile_maintainer_node
 from app.schemas.sse_bridge import graph_step_to_sse
 from app.utils.profile_utils import ensure_learning_behavior_fields
@@ -412,14 +412,46 @@ async def generate_single_resource(
     except Exception:
         pass
 
+    # 获取当前资源的 moduleOrder 和内容全文，补充资源使用相同编号
+    current_module_order = 0
+    source_resource_content = ""
+    try:
+        current_resource = java_client.get_resource_by_id(module_id_int)
+        if isinstance(current_resource, dict):
+            current_module_order = current_resource.get("moduleOrder", 0)
+            # 提取资源内容全文（moduleData 可能是 JSON 字符串或 dict）
+            md = current_resource.get("moduleData")
+            if isinstance(md, str):
+                try:
+                    md = json.loads(md)
+                except Exception:
+                    md = {}
+            if isinstance(md, dict):
+                source_resource_content = md.get("content", "")
+        logger.info(f"[资源生成] 当前资源 moduleOrder={current_module_order}, 内容长度={len(source_resource_content)}")
+    except Exception as e:
+        logger.warning(f"[资源生成] 获取当前资源信息失败: {e}")
+
     # 构造以资源生成为目标的初始状态
     resource_message = f"请为以下模块生成{type}类型的学习资源: {title}"
     if description:
         resource_message += f"\n模块描述: {description}"
 
-    # quiz 和 video 走独立流程，其他类型走 RAG + 编排流程
+    # quiz 和 video 走独立流程，mindmap/summary/code 走类型资源生成，其他走 RAG + 编排
     is_quiz = (type == "quiz")
     is_video = (type == "video")
+    is_type_resource = type in ("mindmap", "summary", "code")
+
+    # 路由决策
+    if is_quiz:
+        intent = "generate_quiz"
+        next_node = "quiz_generator"
+    elif is_type_resource:
+        intent = "generate_type_resource"
+        next_node = NODE_RESOURCE_TYPE_GENERATOR
+    else:
+        intent = "generate_resource"
+        next_node = "rag_retriever"
 
     initial_state: AgentState = {
         "user_id": user_id,
@@ -429,8 +461,8 @@ async def generate_single_resource(
         "human_feedback": None,
         "chat_history": chat_history,
         "user_profile": user_profile,
-        "intent": "generate_quiz" if is_quiz else "generate_resource",
-        "next_node": "quiz_generator" if is_quiz else "rag_retriever",
+        "intent": intent,
+        "next_node": next_node,
         "needs_human_confirm": False,
         "profile_update_needed": False,
         "learning_goal": resource_message,
@@ -465,17 +497,8 @@ async def generate_single_resource(
         "iteration_count": 0,
         "max_iterations": 10,
         "accumulated_context": "",
+        "source_resource_content": source_resource_content,
     }
-
-    # 获取当前资源的 moduleOrder，补充资源使用相同编号
-    current_module_order = 0
-    try:
-        current_resource = java_client.get_resource_by_id(module_id_int)
-        if isinstance(current_resource, dict):
-            current_module_order = current_resource.get("moduleOrder", 0)
-        logger.info(f"[资源生成] 当前资源 moduleOrder={current_module_order}")
-    except Exception as e:
-        logger.warning(f"[资源生成] 获取当前资源信息失败: {e}")
 
     session_id = f"resource-{plan_id_int}-{module_id_int}"
 
@@ -488,6 +511,7 @@ async def generate_single_resource(
         "module_list": [],
         "quiz_questions": None,
         "quiz_config": None,
+        "generated_content": None,
     }
 
     async def _run_graph_background():
@@ -530,6 +554,8 @@ async def generate_single_resource(
                             bg_state["quiz_questions"] = node_output["quiz_questions"]
                         if node_output.get("quiz_config"):
                             bg_state["quiz_config"] = node_output["quiz_config"]
+                        if node_output.get("generated_content"):
+                            bg_state["generated_content"] = node_output["generated_content"]
                     for sse_data in graph_step_to_sse(node_name, node_output):
                         bg_state["events"].append(sse_data)
                         _persist_profile_update(sse_data, user_id)
@@ -539,6 +565,7 @@ async def generate_single_resource(
                 plan_id_int, user_id, is_quiz, type, title, description,
                 bg_state["module_list"], bg_state["orchestrated_content"],
                 bg_state["quiz_questions"], bg_state["quiz_config"],
+                bg_state["generated_content"],
                 current_module_order, session_id,
             )
             if generated_resource_info:
@@ -560,6 +587,7 @@ async def generate_single_resource(
                     plan_id_int, user_id, is_quiz, type, title, description,
                     bg_state["module_list"], bg_state["orchestrated_content"],
                     bg_state["quiz_questions"], bg_state["quiz_config"],
+                    bg_state["generated_content"],
                     current_module_order, session_id,
                 )
         finally:
@@ -885,13 +913,43 @@ def _persist_generated_resources(
     orchestrated_content: dict,
     quiz_questions: list,
     quiz_config: dict,
-    current_module_order: int,
-    session_id: str,
+    generated_content: dict = None,
+    current_module_order: int = 0,
+    session_id: str = "",
 ) -> list:
     """将生成的资源持久化到数据库（与 SSE 解耦，确保断开连接时也能保存）"""
     generated_resource_info = []
 
-    if is_quiz:
+    # 类型资源（mindmap/summary/code）：直接从 generated_content 保存
+    is_type_resource = resource_type in ("mindmap", "summary", "code")
+    if is_type_resource and generated_content and plan_id_int:
+        module_data = {
+            "title": generated_content.get("title", title),
+            "description": generated_content.get("description", description),
+            "content": generated_content.get("content", ""),
+            "module_title": generated_content.get("title", title),
+        }
+        try:
+            result = java_client.create_resource(
+                plan_id=plan_id_int,
+                module_type=resource_type,
+                module_data=json.dumps(module_data, ensure_ascii=False),
+                module_order=current_module_order,
+                status=2,
+                generated_by_agent="resource_type_generator",
+            )
+            new_resource_id = result.get("id") if isinstance(result, dict) else 0
+            if new_resource_id:
+                generated_resource_info.append({
+                    "id": new_resource_id,
+                    "type": resource_type,
+                    "title": module_data.get("title", title),
+                })
+                logger.info(f"[资源持久化] 已创建{resource_type}补充资源，ID={new_resource_id}，moduleOrder={current_module_order}")
+        except Exception as e:
+            logger.warning(f"[资源持久化] 创建{resource_type}补充资源失败: {e}")
+
+    elif is_quiz:
         if quiz_questions and plan_id_int:
             quiz_res_id = _save_quiz_resource(plan_id_int, quiz_questions, quiz_config, module_order=current_module_order)
             if quiz_res_id:

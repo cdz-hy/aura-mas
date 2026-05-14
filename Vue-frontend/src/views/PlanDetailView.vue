@@ -149,7 +149,7 @@
           </div>
           <button
             class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors flex-shrink-0"
-            @click="selectedResourceId = null; selectedResource = null; quizData = null; gradingResult = null; quizSubmittedAnswers = null; showExplanations = false"
+            @click="selectedResourceId = null; selectedResource = null; quizData = null; mindmapData = null; gradingResult = null; quizSubmittedAnswers = null; showExplanations = false"
             title="关闭"
           >
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -196,7 +196,11 @@
 
           <!-- 导图类型 -->
           <template v-else-if="selectedResource.moduleType === 'mindmap'">
-            <div v-if="selectedResource.moduleData?.content" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(selectedResource.moduleData.content)"></div>
+            <MindmapPlayer
+              v-if="mindmapData"
+              :data="mindmapData"
+              :title="selectedResource.moduleData?.module_title || selectedResource.moduleData?.title || '思维导图'"
+            />
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>思维导图待生成</p>
             </div>
@@ -510,8 +514,10 @@ import { issueTicket } from '@/api/auth'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
+import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import type { LearningPlan, LearningResource } from '@/types/plan'
 import type { QuizData, QuizQuestion } from '@/types/quiz'
+import type { MindElixirData } from 'mind-elixir'
 
 const route = useRoute()
 const planId = Number(route.params.id)
@@ -526,6 +532,7 @@ const selectedModuleIndex = ref(-1)
 const selectedResourceId = ref<number | null>(null)
 const selectedResource = ref<LearningResource | null>(null)
 const quizData = ref<QuizData | null>(null)
+const mindmapData = ref<MindElixirData | null>(null)
 const gradingResult = ref<Record<string, any> | null>(null)
 const quizSubmittedAnswers = ref<Record<number, any> | null>(null)
 const showExplanations = ref(false)
@@ -604,6 +611,7 @@ function selectModule(index: number) {
     selectedResourceId.value = null
     selectedResource.value = null
     quizData.value = null
+    mindmapData.value = null
     gradingResult.value = null
     quizSubmittedAnswers.value = null
     showExplanations.value = false
@@ -623,6 +631,7 @@ function toggleResource(res: LearningResource) {
     selectedResourceId.value = null
     selectedResource.value = null
     quizData.value = null
+    mindmapData.value = null
     gradingResult.value = null
     quizSubmittedAnswers.value = null
     showExplanations.value = false
@@ -646,6 +655,7 @@ function toggleResource(res: LearningResource) {
   // 解析题目数据
   if (res.moduleType === 'quiz') {
     quizData.value = parseQuizData(res)
+    mindmapData.value = null
     // 优先从 module_data.latestResult 恢复批改结果，否则从 quiz_record 表加载
     const lr = res.moduleData?.latestResult
     if (lr && lr.details) {
@@ -658,8 +668,12 @@ function toggleResource(res: LearningResource) {
     } else {
       loadQuizRecords(res.id)
     }
+  } else if (res.moduleType === 'mindmap') {
+    quizData.value = null
+    mindmapData.value = parseMindmapData(res)
   } else {
     quizData.value = null
+    mindmapData.value = null
   }
 
   // 设置模块上下文并提示用户可以生成补充资源
@@ -748,6 +762,43 @@ function parseQuizData(res: LearningResource): QuizData | null {
     questions,
     totalPoints: md.totalPoints || md.total_points || questions.length,
     estimatedMinutes: md.estimatedMinutes || questions.length * 2,
+  }
+}
+
+function parseMindmapData(res: LearningResource): MindElixirData | null {
+  const md = res.moduleData
+  if (!md?.content) return null
+
+  try {
+    // content 应该是 MindElixir nodeData 的 JSON 字符串
+    const parsed = typeof md.content === 'string' ? JSON.parse(md.content) : md.content
+
+    // 验证基本结构：必须有 id 和 topic
+    if (!parsed || !parsed.topic) return null
+
+    return {
+      nodeData: parsed,
+      direction: 2, // SIDE: 左右分布
+    } as MindElixirData
+  } catch {
+    // JSON 解析失败，尝试将纯文本包装为简单的思维导图
+    const text = typeof md.content === 'string' ? md.content : ''
+    if (!text.trim()) return null
+
+    // 按行拆分，每行作为一个子节点
+    const lines = text.split('\n').filter(l => l.trim()).slice(0, 20)
+    return {
+      nodeData: {
+        id: 'root',
+        topic: res.moduleData?.module_title || res.moduleData?.title || '思维导图',
+        expanded: true,
+        children: lines.map((line, i) => ({
+          id: `n${i}`,
+          topic: line.replace(/^[-*•\d.]+\s*/, '').trim(),
+        })),
+      },
+      direction: 2,
+    } as MindElixirData
   }
 }
 

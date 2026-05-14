@@ -18,6 +18,7 @@ NODE_REVIEW_ONLY = "review_only"
 NODE_RESOURCE_GENERATOR = "resource_generator"
 NODE_QUIZ_GENERATOR = "quiz_generator"
 NODE_QUIZ_GRADER = "quiz_grader"
+NODE_RESOURCE_TYPE_GENERATOR = "resource_type_generator"
 NODE_PROFILE_MAINTAINER = "profile_maintainer"
 NODE_HUMAN_CONFIRM = "human_confirm"
 
@@ -86,6 +87,7 @@ class AgentState(TypedDict, total=False):
 
     # ==================== 自主生成 ====================
     generated_content: Optional[Dict[str, Any]]  # 自主生成的内容
+    source_resource_content: str  # 源资源全文（用于类型资源生成）
 
     # ==================== 题目相关 ====================
     quiz_config: Optional[Dict[str, Any]]  # 题目生成配置

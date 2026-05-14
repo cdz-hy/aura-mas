@@ -10,7 +10,8 @@ from app.agents.schemas import (
     AgentState,
     NODE_CONTROLLER, NODE_TASK_DECOMPOSER, NODE_SIMPLE_ANSWER,
     NODE_RAG_RETRIEVER, NODE_RESOURCE_GENERATOR, NODE_QUIZ_GENERATOR,
-    NODE_QUIZ_GRADER, NODE_PROFILE_MAINTAINER, NODE_HUMAN_CONFIRM,
+    NODE_QUIZ_GRADER, NODE_RESOURCE_TYPE_GENERATOR,
+    NODE_PROFILE_MAINTAINER, NODE_HUMAN_CONFIRM,
     NODE_REVIEW_ORCHESTRATE, NODE_REVIEW_ONLY,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
     INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP,
@@ -24,6 +25,7 @@ from app.agents.reviewer import reviewer_node
 from app.agents.resource_generator import resource_generator_node
 from app.agents.quiz_generator import quiz_generator_node
 from app.agents.quiz_grader import quiz_grader_node
+from app.agents.resource_type_generator import resource_type_generator_node
 from app.agents.profile_maintainer import profile_maintainer_node
 from app.services.db.java_client import java_client
 
@@ -139,6 +141,16 @@ def route_after_human_confirm(state: AgentState) -> str:
 def route_after_quiz_generator(state: AgentState) -> str:
     """题目生成之后的路由"""
     logger.info(f"  [路由] 题目生成完成 -> END")
+    return END
+
+
+def route_after_resource_type_generator(state: AgentState) -> str:
+    """类型资源生成之后的路由"""
+    error = state.get("error")
+    if error:
+        logger.info(f"  [路由] 类型资源生成失败 -> END")
+    else:
+        logger.info(f"  [路由] 类型资源生成完成 -> END")
     return END
 
 
@@ -532,6 +544,7 @@ def build_learning_graph() -> StateGraph:
     graph.add_node(NODE_RESOURCE_GENERATOR, resource_generator_node)
     graph.add_node(NODE_QUIZ_GENERATOR, quiz_generator_node)
     graph.add_node(NODE_QUIZ_GRADER, quiz_grader_node)
+    graph.add_node(NODE_RESOURCE_TYPE_GENERATOR, resource_type_generator_node)
     graph.add_node(NODE_PROFILE_MAINTAINER, profile_maintainer_node)
     graph.add_node(NODE_HUMAN_CONFIRM, _human_confirm_node)
     logger.info("已注册 11 个节点")
@@ -550,6 +563,7 @@ def build_learning_graph() -> StateGraph:
             NODE_QUIZ_GENERATOR: NODE_QUIZ_GENERATOR,
             NODE_QUIZ_GRADER: NODE_QUIZ_GRADER,
             NODE_RESOURCE_GENERATOR: NODE_RESOURCE_GENERATOR,
+            NODE_RESOURCE_TYPE_GENERATOR: NODE_RESOURCE_TYPE_GENERATOR,
             NODE_HUMAN_CONFIRM: NODE_HUMAN_CONFIRM,
             END: END,
         }
@@ -612,6 +626,13 @@ def build_learning_graph() -> StateGraph:
     graph.add_conditional_edges(
         NODE_QUIZ_GENERATOR,
         route_after_quiz_generator,
+        {END: END}
+    )
+
+    # 类型资源生成 -> 结束
+    graph.add_conditional_edges(
+        NODE_RESOURCE_TYPE_GENERATOR,
+        route_after_resource_type_generator,
         {END: END}
     )
 

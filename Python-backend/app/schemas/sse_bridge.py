@@ -81,6 +81,10 @@ def graph_event_to_sse(evt: Dict[str, Any]) -> str:
         status = "通过" if passed else "未通过"
         return _sse({"type": "progress", "content": f"内容审查: {status} (评分: {score})"})
 
+    elif event_type == "resource_type_generated":
+        # 类型资源生成完成（mindmap/summary/code 等）
+        return ""  # 资源持久化由 _persist_generated_resources 处理，这里不发 SSE
+
     elif event_type == "quiz":
         return _sse({"type": "resource", "data": {"type": "quiz", "questions": data.get("questions", data)}})
 
