@@ -249,7 +249,7 @@
             </div>
           </template>
 
-          <!-- 其他类型 -->
+          <!-- 其他类型（含图文） -->
           <template v-else>
             <div v-if="selectedResource.moduleData?.content" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(selectedResource.moduleData.content)"></div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
@@ -271,7 +271,7 @@
     </div>
 
     <!-- ==================== 右侧栏：对话界面 ==================== -->
-    <div class="flex-1 flex flex-col card overflow-hidden animate-fade-in-up min-w-[300px]" style="animation-delay: 0.1s">
+    <div class="flex-1 flex-shrink-0 flex flex-col card overflow-hidden animate-fade-in-up min-w-[300px]" style="animation-delay: 0.1s">
       <!-- Chat header -->
       <div class="px-6 py-3 border-b border-navy-100/50 flex items-center justify-between">
         <div class="flex items-center gap-3 min-w-0">
