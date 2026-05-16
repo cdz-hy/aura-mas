@@ -6,107 +6,15 @@ import logging
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_resource_type_generator_llm
+from app.prompts import RESOURCE_TYPE_GENERATOR_PROMPTS, RESOURCE_TYPE_GENERATOR_DEFAULT_PROMPT
+from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("agents.resource_type_generator")
 
 # ==================== 各类型的系统提示 ====================
 
-SYSTEM_PROMPTS = {
-    "mindmap": """你是一个专业的思维导图生成专家。根据学习内容，生成结构清晰、层次分明的思维导图数据。
-
-## 输出格式
-严格输出 JSON，不要输出其他内容：
-{
-  "title": "思维导图标题",
-  "description": "简要描述（单行文本）",
-  "nodeData": {
-    "id": "root",
-    "topic": "中心主题",
-    "expanded": true,
-    "children": [
-      {
-        "id": "n1",
-        "topic": "分支主题1",
-        "children": [
-          { "id": "n1_1", "topic": "子主题1.1" },
-          { "id": "n1_2", "topic": "子主题1.2" }
-        ]
-      },
-      {
-        "id": "n2",
-        "topic": "分支主题2",
-        "children": [
-          { "id": "n2_1", "topic": "子主题2.1" }
-        ]
-      }
-    ]
-  }
-}
-
-## 要求
-- id 必须是唯一字符串（使用 "root", "n1", "n2", "n1_1" 等简单命名）
-- topic 为节点显示文本，简洁明了，每个节点不超过 15 个字
-- children 为子节点数组，层级不超过 4 层
-- 一级分支 3-7 个，每个分支下 2-5 个子节点
-- 内容要丰富完整，覆盖该主题的核心知识点
-- 严禁使用 emoji 表情符号
-- 可以适当基于当前内容扩展
-- 所有文本使用中文""",
-
-    "summary": """你是一个专业的知识总结专家。根据学习内容，生成精炼的总结回顾材料，适合快速复习。
-
-## 输出格式
-严格输出 JSON，不要输出其他内容：
-{
-  "title": "总结标题",
-  "description": "简要描述（单行文本）",
-  "content": "Markdown 格式的总结内容"
-}
-
-## 内容要求
-- 提炼核心要点，去除冗余信息
-- 使用标题、列表、加粗等格式突出重点
-- 适当使用类比帮助记忆
-- 最后附上"关键要点回顾"列表
-- 严禁使用 emoji 表情符号
-- 所有文本使用中文""",
-
-    "code": """你是一个专业的编程教学专家。根据学习内容，生成高质量的代码示例和说明。
-
-## 输出格式
-严格输出 JSON，不要输出其他内容：
-{
-  "title": "代码示例标题",
-  "description": "简要描述（单行文本）",
-  "content": "Markdown 格式的代码内容"
-}
-
-## 内容要求
-- 代码块必须标注语言类型（如 ```python）
-- 代码要完整可运行，含必要的注释
-- 先简要说明原理，再给出代码示例
-- 代码后附上运行结果说明和注意事项
-- 涉及多个知识点时，分别给出示例
-- 严禁使用 emoji 表情符号
-- 所有文本使用中文""",
-}
 
 # 通用的默认提示
-SYSTEM_PROMPT_DEFAULT = """你是一个专业的学习内容生成专家。根据学习内容，生成指定类型的学习资源。
-
-## 输出格式
-严格输出 JSON，不要输出其他内容：
-{
-  "title": "资源标题",
-  "description": "简要描述（单行文本）",
-  "content": "Markdown 格式的内容"
-}
-
-## 要求
-- 内容准确、专业、完整
-- 结构清晰，使用标题、列表等格式
-- 严禁使用 emoji 表情符号
-- 所有文本使用中文"""
 
 
 def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
@@ -146,7 +54,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
     llm = get_resource_type_generator_llm()
 
     # 选择对应的系统提示
-    system_prompt = SYSTEM_PROMPTS.get(resource_type, SYSTEM_PROMPT_DEFAULT)
+    system_prompt = RESOURCE_TYPE_GENERATOR_PROMPTS.get(resource_type, RESOURCE_TYPE_GENERATOR_DEFAULT_PROMPT)
 
     # 构造学习内容摘要（优先用源资源全文，否则用 RAG）
     content_summary = ""
@@ -210,6 +118,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
     try:
         logger.info(f"  [类型资源生成] 正在调用 LLM 生成 {resource_type}...")
         result = llm.chat_json(messages, max_tokens=8192)
+        record_from_mimo(llm, state.get("user_id", 0), "resource_type_generation", state.get("task_id"))
 
         # 标准化输出
         generated = {

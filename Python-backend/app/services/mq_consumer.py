@@ -148,6 +148,7 @@ class MQConsumer:
         initial_state: AgentState = {
             "user_id": user_id,
             "plan_id": plan_id,
+            "task_id": task_id,
             "session_id": f"mq-task-{task_id}",
             "user_message": user_message,
             "human_feedback": None,

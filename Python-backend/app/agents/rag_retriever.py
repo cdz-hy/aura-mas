@@ -6,6 +6,8 @@ import asyncio
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState, NODE_CONTROLLER, NODE_REVIEWER
 from app.agents.llm_factory import get_rag_retriever_llm
+from app.prompts import RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT
+from app.utils.token_recorder import record_from_mimo
 from app.services.retrieval import HybridRetrievalService
 
 logger = logging.getLogger("agents.rag_retriever")
@@ -88,16 +90,7 @@ def _optimize_search_queries(modules: List[Dict[str, Any]], user_message: str, l
         history_text = "\n".join(history_lines)
 
     messages = [
-        {"role": "system", "content": """你是检索词优化专家。根据学习模块的描述和对话上下文，为每个模块生成最有效的搜索查询词。
-严格输出 JSON 对象，格式如下：
-{"queries": ["查询词1", "查询词2", "查询词3"]}
-规则：
-1. 查询词要精炼、具体，适合向量检索
-2. 包含核心概念和关键词
-3. 适合搜索教学资料
-4. 结合对话历史理解用户的真实学习需求
-5. queries 数组的元素个数必须与模块数相同
-严禁使用 emoji。严禁输出 JSON 以外的任何内容。"""},
+        {"role": "system", "content": RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT},
         {"role": "user", "content": f"""用户学习目标: {user_message}
 
 对话历史（请结合上下文理解用户需求）:
@@ -111,6 +104,7 @@ def _optimize_search_queries(modules: List[Dict[str, Any]], user_message: str, l
 
     try:
         result = llm.chat_json(messages)
+        record_from_mimo(llm, state.get("user_id", 0), "rag_query_optimization", state.get("task_id"))
         if isinstance(result, dict) and "queries" in result:
             queries = result["queries"]
         elif isinstance(result, list):

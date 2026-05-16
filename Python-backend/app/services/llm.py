@@ -2,13 +2,15 @@ import dashscope
 from http import HTTPStatus
 from typing import List, Dict, Any, Generator
 from app.core.config import settings
+from app.prompts import QWEN_CHAT_SYSTEM_PROMPT
 
 class QwenChatService:
     def __init__(self):
         self.api_key = settings.DASHSCOPE_API_KEY
-        self.model = "qwen-plus"
+        self.model = settings.QWEN_CHAT_MODEL
 
-    def generate_response(self, query: str, context_chunks: List[Dict[str, Any]]) -> Generator[str, None, None]:
+    def generate_response(self, query: str, context_chunks: List[Dict[str, Any]],
+                          user_id: int = 0, scene: str = "qwen_chat") -> Generator[str, None, None]:
         """
         结合检索到的上下文，调用 Qwen 模型生成回答（流式输出）。
         支持文本和图片类型的 context_chunk，图片会在 prompt 中以 URL 形式传入，
@@ -37,14 +39,7 @@ class QwenChatService:
 
         context_str = "\n\n".join(context_parts)
 
-        system_prompt = (
-            "你是一个专业的 AI 助手。请根据提供的参考资料回答用户的问题。\n"
-            "规则：\n"
-            "1. 如果资料中没有相关信息，请诚实告知。\n"
-            "2. 回答中尽量引用参考资料编号，保持专业和客观。\n"
-            "3. 如果参考资料包含图片 URL，请在回答的合适位置使用 Markdown 格式 ![图片描述](图片URL) 嵌入该图片，不要只描述图片而不展示。\n"
-            "4. 严禁在回答中使用任何 emoji 表情符号。"
-        )
+        system_prompt = QWEN_CHAT_SYSTEM_PROMPT
 
         user_content = f"参考资料：\n{context_str}\n\n用户问题：\n{query}"
 
@@ -61,8 +56,25 @@ class QwenChatService:
             stream=True
         )
 
+        last_usage = None
         for response in responses:
             if response.status_code == HTTPStatus.OK:
+                usage = getattr(response, "usage", None)
+                if usage:
+                    last_usage = {
+                        "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+                        "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+                    }
                 yield response.output.choices[0].message.content
             else:
                 yield f"AI 生成失败: {response.message}"
+
+        if last_usage:
+            from app.utils.token_recorder import record
+            record(
+                user_id=user_id,
+                scene=scene,
+                model_name=self.model,
+                input_tokens=last_usage["input_tokens"],
+                output_tokens=last_usage["output_tokens"],
+            )

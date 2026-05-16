@@ -7,7 +7,9 @@ import concurrent.futures
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_resource_generator_llm
+from app.prompts import RESOURCE_GENERATOR_PROMPT, SEARCH_PLANNING_PROMPT
 from app.core.config import settings
+from app.utils.token_recorder import record_from_mimo
 
 
 def _emit(state: dict, event_type: str, content: str):
@@ -21,59 +23,7 @@ def _emit(state: dict, event_type: str, content: str):
 
 logger = logging.getLogger("agents.resource_generator")
 
-SYSTEM_PROMPT = """你是一个专业的知识内容生成专家，配备网络搜索能力。当知识库中没有找到相关资料时，你需要自主决策调用搜索引擎获取最新信息，并结合搜索结果生成高质量的学习内容。
 
-## 生成要求
-1. 内容准确、专业、完整，优先使用搜索到的权威资料
-2. 结构清晰，使用标题、列表、代码块等格式
-3. 适当使用类比和举例帮助理解
-4. 难度要匹配用户的知识基础
-5. 如果涉及代码，要给出完整可运行的示例
-6. 搜索结果为英文时需翻译为中文输出
-
-## 输出格式
-严格输出 JSON：
-{
-  "title": "内容标题",
-  "content": "完整的 Markdown 格式内容（正文中用 [1] [2] 标注来源）",
-  "key_points": ["要点1", "要点2"],
-  "references": ["[1] 标题 - URL", "[2] 标题 - URL"],
-  "content_type": "text/code/mixed",
-  "difficulty": "入门/初级/中级/高级"
-}
-
-## 规则
-- 严禁使用 emoji 表情符号
-- 所有文本使用中文
-- 正文中必须用 [编号] 标注信息来源（如 [1] [2]），不标注来源的内容视为未引用
-- 代码示例要标注语言类型
-- 标题必须是实际内容名称，严禁使用「第一章」「第二章」「模块一」等章节编号前缀
-- 严禁生成题目/练习题/测验相关内容
-- 图片嵌入规则：如果提供了可用图片列表，从中选择最多 3 张与内容最相关的图片，用 Markdown 语法 ![描述](URL) 嵌入到正文中对应段落里。图片必须放在解释相关概念的文字旁边，严禁堆在末尾。如果没有合适的图片可以不嵌入。"""
-
-SEARCH_PLANNING_PROMPT = """你是一个具备多轮搜索能力的智能研究助手。你的任务是规划网络搜索策略，并根据已有搜索结果判断是否需要补充搜索。
-
-## 搜索工具
-使用 Tavily 统一搜索引擎，支持中英文查询，返回网页摘要和链接。
-
-## 首次搜索策略
-- 规划 2-3 个不同角度的搜索关键词（中英文结合）
-- 如果主题很简单或纯粹常识性知识，可以判定 sufficient
-
-## 补充搜索策略（已有部分结果时）
-- 审视已有结果覆盖了哪些方面，还缺少哪些方面
-- 针对缺失的方面制定补充搜索
-- 如果已经覆盖了足够的信息面，判定 sufficient 终止搜索
-
-## 输出格式
-严格输出 JSON，不要输出其他内容：
-{
-  "decision": "search" 或 "sufficient",
-  "reasoning": "判断依据（1-2句话）",
-  "searches": ["搜索关键词1", "搜索关键词2"]
-}
-
-注意：decision=search 时才需要 searches 数组；decision=sufficient 时 searches 留空数组即可。"""
 
 
 # ==================== Tavily 搜索 ====================
@@ -385,7 +335,7 @@ def resource_generator_node(state: AgentState) -> Dict[str, Any]:
 请基于你的知识生成详细的学习内容，输出 JSON:"""
 
     gen_messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": RESOURCE_GENERATOR_PROMPT},
         {"role": "user", "content": gen_user_prompt}
     ]
 
@@ -414,6 +364,8 @@ def resource_generator_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"    图片: {len(result.get('images', []))} 张")
         logger.info(f"    内容长度: {len(result.get('content', ''))} 字符")
         logger.info(f"{'='*60}")
+
+        record_from_mimo(llm, state.get("user_id", 0), "resource_generation", state.get("task_id"))
 
         return {
             "generated_content": result,

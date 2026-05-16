@@ -37,6 +37,7 @@ class AgentState(TypedDict, total=False):
     # ==================== 请求基础信息 ====================
     user_id: int
     plan_id: Optional[int]
+    task_id: Optional[int]
     session_id: str
     user_message: str  # 当前用户输入
 

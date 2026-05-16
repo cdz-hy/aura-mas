@@ -11,14 +11,14 @@ from app.core.config import settings
 class MIMOClient:
     """小米 MIMO 模型客户端 (OpenAI 兼容接口)"""
 
-    # 模型配置：编排智能体用 mimo-v2.5，其余用 mimo-v2.5-pro
-    MODEL_STANDARD = "mimo-v2.5"       # 编排智能体
-    MODEL_PRO = "mimo-v2.5-pro"        # 其余智能体
+    # 模型配置：编排智能体用标准模型，其余用 pro 模型
+    MODEL_STANDARD = settings.MIMO_MODEL_NAME        # 编排智能体
+    MODEL_PRO = settings.MIMO_MODEL_PRO_NAME         # 其余智能体
 
     # 各模型的上下文窗口上限（max_completion_tokens 上限）
     CONTEXT_WINDOWS = {
-        "mimo-v2.5": 131072,
-        "mimo-v2.5-pro": 131072,
+        settings.MIMO_MODEL_NAME: settings.MIMO_CONTEXT_WINDOW,
+        settings.MIMO_MODEL_PRO_NAME: settings.MIMO_CONTEXT_WINDOW,
     }
 
     # 为输出预留的默认比例（占上下文窗口的 25%），避免输入大时溢出
@@ -36,6 +36,8 @@ class MIMOClient:
         self.max_tokens = max_tokens
         # 思维链配置：None 表示使用模型默认值（mimo-v2.5-pro 默认 enabled）
         self.thinking = thinking
+        # Token 消耗记录
+        self._usage_records = []
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
@@ -43,6 +45,20 @@ class MIMOClient:
         cn_chars = sum(1 for c in text if '一' <= c <= '鿿')
         other_chars = len(text) - cn_chars
         return int(cn_chars * 1.5 + other_chars * 0.25)
+
+    def add_usage(self, input_tokens: int, output_tokens: int):
+        self._usage_records.append({
+            "model": self.model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        })
+
+    def get_usage_records(self):
+        return list(self._usage_records)
+
+    def clear_usage_records(self):
+        self._usage_records = []
 
     def _clamp_max_tokens(self, messages: list, requested_max: int) -> int:
         """确保 input_tokens + max_tokens 不超过模型上下文窗口"""
@@ -131,13 +147,31 @@ class MIMOClient:
                 result = resp.json()
             except json.JSONDecodeError:
                 raise Exception(f"MIMO API 返回非 JSON 格式: {resp.text[:300]}")
-            
+
+            usage = result.get("usage", {})
+            if usage:
+                self.add_usage(
+                    input_tokens=usage.get("prompt_tokens", 0),
+                    output_tokens=usage.get("completion_tokens", 0),
+                )
+            else:
+                # 无 usage 时估算
+                input_est = sum(self._estimate_tokens(m.get("content", "")) for m in messages)
+                self.add_usage(input_tokens=input_est, output_tokens=0)
+
             choices = result.get("choices", [])
             if not choices:
                 raise Exception(f"MIMO API 返回空 choices: {str(result)[:300]}")
-            
+
             content = choices[0].get("message", {}).get("content")
             finish_reason = choices[0].get("finish_reason", "")
+
+            # 回填 output_tokens（之前估算时填了 0）
+            if not usage and content:
+                output_est = self._estimate_tokens(content)
+                rec = self._usage_records[-1]
+                rec["output_tokens"] = output_est
+                rec["total_tokens"] = rec["input_tokens"] + output_est
 
             if content is None or content.strip() == "":
                 # 记录完整响应以便排查
@@ -193,6 +227,10 @@ class MIMOClient:
         if resp.status_code != 200:
             raise Exception(f"MIMO API 流式调用失败 ({resp.status_code}): {resp.text}")
 
+        input_est = sum(self._estimate_tokens(m.get("content", "")) for m in messages)
+        accumulated = ""
+        last_usage = None
+
         for line in resp.iter_lines():
             if not line:
                 continue
@@ -203,6 +241,9 @@ class MIMOClient:
                     break
                 try:
                     chunk = json.loads(data)
+                    usage = chunk.get("usage")
+                    if usage:
+                        last_usage = usage
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
                     # 思维链内容（reasoning_content）不对外输出，仅调试时记录
                     reasoning = delta.get("reasoning_content", "")
@@ -212,9 +253,22 @@ class MIMOClient:
                     # 只输出正式内容
                     content = delta.get("content", "")
                     if content:
+                        accumulated += content
                         yield content
                 except json.JSONDecodeError:
                     continue
+
+        # 流式消费完毕后记录 token
+        if last_usage:
+            self.add_usage(
+                input_tokens=last_usage.get("prompt_tokens", input_est),
+                output_tokens=last_usage.get("completion_tokens", self._estimate_tokens(accumulated)),
+            )
+        else:
+            self.add_usage(
+                input_tokens=input_est,
+                output_tokens=self._estimate_tokens(accumulated),
+            )
 
     def chat_json(
         self,

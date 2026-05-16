@@ -7,8 +7,8 @@ from app.core.config import settings
 class BailianEmbeddingService:
     def __init__(self):
         self.api_key = settings.DASHSCOPE_API_KEY
-        self.model_name = "qwen3-vl-embedding"
-        self.url = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+        self.model_name = settings.QWEN_EMBEDDING_MODEL
+        self.url = settings.QWEN_EMBEDDING_URL
 
     def _encode_image(self, image_path: str) -> str:
         """读取本地图片并转换为 Base64 编码"""

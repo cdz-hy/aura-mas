@@ -5,36 +5,11 @@ import logging
 from typing import Dict, Any
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_quiz_grader_llm
+from app.prompts import QUIZ_GRADER_PROMPT
+from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("agents.quiz_grader")
 
-SYSTEM_PROMPT = """你是一个严格的题目批改专家。你的任务是根据参考答案评判用户的回答，给出公正准确的评分。
-
-## 评分标准
-1. **选择题/判断题**: 完全正确得1分，否则0分
-2. **填空题**: 关键词匹配，部分正确可给0.5分
-3. **简答题**: 按照以下维度评分
-   - 核心概念准确性 (40%)
-   - 逻辑完整性 (30%)
-   - 表达清晰度 (15%)
-   - 补充有价值的额外信息 (15%)
-
-## 输出格式
-严格输出 JSON：
-{
-  "score": 0.85,
-  "is_correct": true,
-  "feedback": "详细的批改反馈",
-  "key_points_hit": ["命中的要点1"],
-  "key_points_missed": ["遗漏的要点1"],
-  "improvement_suggestions": ["改进建议1"]
-}
-
-## 规则
-- score 为 0-1 之间的浮点数
-- is_correct: score >= 0.6 为 true
-- 严禁使用 emoji 表情符号
-- 反馈要具体、有建设性"""
 
 
 def quiz_grader_node(state: AgentState) -> Dict[str, Any]:
@@ -71,7 +46,7 @@ def quiz_grader_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  [题目判定智能体] 参考答案: {correct_answer[:100]}")
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": QUIZ_GRADER_PROMPT},
         {"role": "user", "content": f"""题目: {question_text}
 题型: {question_type}
 参考答案: {correct_answer}
@@ -85,6 +60,7 @@ def quiz_grader_node(state: AgentState) -> Dict[str, Any]:
     try:
         logger.info(f"  [题目判定智能体] 正在调用 LLM 进行批改...")
         result = llm.chat_json(messages, max_tokens=2048)
+        record_from_mimo(llm, state.get("user_id", 0), "quiz_grading", state.get("task_id"))
         score = result.get("score", 0)
         is_correct = result.get("is_correct", False)
         feedback = result.get("feedback", "")

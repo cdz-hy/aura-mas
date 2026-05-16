@@ -19,9 +19,11 @@ from fastapi.responses import StreamingResponse
 from app.services.db.java_client import java_client
 from app.graph.learning_graph import get_learning_graph
 from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR
+from app.prompts import QUIZ_GRADER_PROMPT
 from app.agents.profile_maintainer import profile_maintainer_node
 from app.schemas.sse_bridge import graph_step_to_sse
 from app.utils.profile_utils import ensure_learning_behavior_fields
+from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("api.resource_chat")
 router = APIRouter()
@@ -113,10 +115,22 @@ async def plan_chat(
     if not breakdown_confirmed and parsed_breakdown:
         human_feedback = message
 
+    # 创建对话任务，用于关联 Token 消耗记录
+    chat_task_id = None
+    try:
+        task_result = java_client.create_generation_task(
+            plan_id=plan_id_int,
+            resource_id=0,
+        )
+        chat_task_id = task_result.get("id") if isinstance(task_result, dict) else None
+    except Exception:
+        pass
+
     # 构造现有 graph 的初始状态
     initial_state: AgentState = {
         "user_id": user_id,
         "plan_id": plan_id_int,
+        "task_id": chat_task_id,
         "session_id": session_id,
         "user_message": message,
         "human_feedback": human_feedback,
@@ -231,6 +245,12 @@ async def plan_chat(
             # 图执行完成，保存资源
             _bg_save_resources()
 
+            if chat_task_id:
+                try:
+                    java_client.update_generation_task(chat_task_id, 2)
+                except Exception:
+                    pass
+
             # 生成画像维护任务
             if bg_state["generated_resource_info"]:
                 asyncio.create_task(_async_profile_maintenance(
@@ -257,6 +277,11 @@ async def plan_chat(
             )
             # 异常时也尝试保存已生成的资源
             _bg_save_resources()
+            if chat_task_id:
+                try:
+                    java_client.update_generation_task(chat_task_id, 3)
+                except Exception:
+                    pass
             _save_plain_text_reply(bg_state["breakdown_confirmed"], bg_state["generated_resource_info"],
                                    bg_state["ai_response_parts"], user_id, session_id, plan_id_int)
 
@@ -498,9 +523,24 @@ async def generate_single_resource(
     # 优先使用前端传入的 session_id，保持会话连续性
     effective_session_id = session_id if session_id else f"resource-{plan_id_int}-{module_id_int}"
 
+    # 创建资源生成任务，用于关联 Token 消耗记录
+    generation_task_id = None
+    try:
+        task_result = java_client.create_generation_task(
+            plan_id=plan_id_int,
+            resource_id=module_id_int,
+            agent_chain=type,
+        )
+        generation_task_id = task_result.get("id") if isinstance(task_result, dict) else None
+        if generation_task_id:
+            logger.info(f"[资源生成] 已创建生成任务 task_id={generation_task_id}")
+    except Exception as e:
+        logger.warning(f"[资源生成] 创建生成任务失败: {e}")
+
     initial_state: AgentState = {
         "user_id": user_id,
         "plan_id": plan_id_int,
+        "task_id": generation_task_id,
         "session_id": effective_session_id,
         "user_message": resource_message,
         "human_feedback": None,
@@ -585,6 +625,11 @@ async def generate_single_resource(
                 bg_state["events"].append(
                     f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
                 )
+                if generation_task_id:
+                    try:
+                        java_client.update_generation_task(generation_task_id, 2)
+                    except Exception:
+                        pass
                 return
 
             # quiz 和其他类型走 LangGraph
@@ -642,6 +687,13 @@ async def generate_single_resource(
                 f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
             )
 
+            # 更新生成任务状态为已完成
+            if generation_task_id:
+                try:
+                    java_client.update_generation_task(generation_task_id, 2)
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.error(f"[资源生成] 后台图执行异常: {e}", exc_info=True)
             bg_state["error"] = str(e)
@@ -656,6 +708,12 @@ async def generate_single_resource(
                     bg_state["generated_content"],
                     current_module_order, session_id,
                 )
+            # 更新生成任务状态为失败
+            if generation_task_id:
+                try:
+                    java_client.update_generation_task(generation_task_id, 3)
+                except Exception:
+                    pass
         finally:
             bg_state["finished"] = True
 
@@ -748,24 +806,6 @@ async def submit_quiz(
         correct_count = 0
         details = []
 
-        GRADER_PROMPT = """你是一个严格的题目批改专家。根据参考答案评判用户的回答，给出公正准确的评分。
-
-## 评分标准
-1. 选择题/判断题: 完全正确得1分，否则0分
-2. 填空题: 关键词匹配，部分正确可给0.5分
-3. 简答题: 核心概念准确性(40%) + 逻辑完整性(30%) + 表达清晰度(15%) + 补充有价值的额外信息(15%)
-
-## 改进建议要求（重要）
-当用户答错时，improvement_suggestions 必须：
-- 具体分析用户选错的答案为什么是错的（用户可能存在的误解或知识盲区）
-- 对比正确答案和错误答案的差异，指出用户混淆了什么概念
-- 给出具体的学习方向，而不是泛泛地说"请复习相关知识点"
-- 例如：不要写"请重新审题"，而要写"你可能混淆了HTTP/1.0的短连接和HTTP/1.1的持久连接，建议重点理解两者的区别"
-
-## 输出格式
-严格输出 JSON：
-{"score": 0-1的浮点数, "is_correct": true/false(score>=0.6为true), "feedback": "简短批改结果(一句话)", "key_points_hit": ["命中的知识点"], "key_points_missed": ["遗漏的知识点"], "improvement_suggestions": ["针对用户错误答案的具体分析和改进建议"]}"""
-
         for i, q in enumerate(raw_questions):
             question_text = q.get("question_text", q.get("question", ""))
             question_type = q.get("question_type", q.get("type", "short_answer"))
@@ -796,7 +836,7 @@ async def submit_quiz(
 
             # 批改 - 所有题型统一走 LLM，生成具体分析
             messages = [
-                {"role": "system", "content": GRADER_PROMPT},
+                {"role": "system", "content": QUIZ_GRADER_PROMPT},
                 {"role": "user", "content": f"题目: {question_text}\n题型: {question_type}\n参考答案: {correct_answer}\n答案解析: {explanation}\n\n用户回答: {user_answer_text}\n\n请批改并输出 JSON:"},
             ]
             try:
@@ -843,6 +883,9 @@ async def submit_quiz(
 
             # SSE 推送该题结果
             yield f'data: {json.dumps({"type": "quiz_question_result", "index": i, "result": detail}, ensure_ascii=False)}\n\n'
+
+        # 记录所有批改 LLM 调用的 token 消耗
+        record_from_mimo(llm, user_id, "quiz_grading", plan_id_int)
 
         # 总体结果
         overall_score = round(correct_count / total * 100) if total > 0 else 0

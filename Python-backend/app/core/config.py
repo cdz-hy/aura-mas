@@ -4,6 +4,14 @@ from typing import Optional
 class Settings(BaseSettings):
     # 阿里云百炼设置
     DASHSCOPE_API_KEY: str = ""
+    QWEN_CHAT_MODEL: str = "qwen-plus"
+    QWEN_EMBEDDING_MODEL: str = "qwen3-vl-embedding"
+    QWEN_EMBEDDING_URL: str = (
+        "https://dashscope.aliyuncs.com/api/v1/services/embeddings/"
+        "multimodal-embedding/multimodal-embedding"
+    )
+    QWEN_RERANKER_MODEL: str = "qwen3-vl-rerank"
+    QWEN_VL_CHAT_MODEL: str = "qwen3.6-plus"  # 用于图片内容深度分析的对话模型
 
     # 七牛云 OSS 设置
     QINIU_ACCESS_KEY: str = ""
@@ -16,14 +24,12 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION_NAME: str = "aura_multimodal_resources"
     QDRANT_VECTOR_SIZE: int = 2560  # Qwen3-VL-Embedding 默认维度
 
-    # 阿里云百炼模型设置
-    QWEN_RERANKER_MODEL: str = "qwen3-vl-rerank"
-    QWEN_VL_CHAT_MODEL: str = "qwen3.6-plus" # 用于图片内容深度分析的对话模型
-
     # 小米 MIMO 模型设置 (OpenAI 兼容接口)
     MIMO_API_KEY: str = ""
     MIMO_BASE_URL: str = "https://token-plan-cn.xiaomimimo.com/v1"
     MIMO_MODEL_NAME: str = "mimo-v2.5"
+    MIMO_MODEL_PRO_NAME: str = "mimo-v2.5-pro"
+    MIMO_CONTEXT_WINDOW: int = 131072
 
     # Tavily 搜索 API
     TAVILY_API_KEY: str = ""

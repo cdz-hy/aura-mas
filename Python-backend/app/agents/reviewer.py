@@ -8,88 +8,29 @@ import asyncio
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_reviewer_llm
+from app.prompts import REVIEWER_BATCH_PROMPT, REVIEWER_MODULE_PROMPT
+from app.utils.token_recorder import record
 
 logger = logging.getLogger("agents.reviewer")
 
-SYSTEM_PROMPT_BATCH = """你是一个严格的内容审查专家。你的任务是检查 RAG 检索到的知识内容是否存在以下问题：
+def _flush_review_usage(review_results: list, user_id: int, scene: str, task_id=None,
+                         extra_records: list = None):
+    """收集审查过程中的 token 消耗并统一记录"""
+    all_records = list(extra_records or [])
+    for r in review_results:
+        if isinstance(r, dict):
+            records = r.pop("_usage_records", None) or []
+            all_records.extend(records)
+    for rec in all_records:
+        record(
+            user_id=user_id,
+            scene=scene,
+            model_name=rec["model"],
+            input_tokens=rec["input_tokens"],
+            output_tokens=rec["output_tokens"],
+            task_id=task_id,
+        )
 
-## 审查标准
-1. **事实性错误**: 内容中的事实、数据、定义是否明显错误
-2. **逻辑矛盾**: 不同来源的内容之间是否存在矛盾
-3. **关键缺失**: 是否缺少关键信息导致理解偏差
-4. **时效性**: 内容是否过于陈旧（如有明确的时间标记）
-5. **相关性**: 检索内容与用户学习目标是否相关
-
-## 输出要求
-严格输出 JSON，确保所有字符串字段中的特殊字符（引号、换行符、反斜杠等）都正确转义：
-{
-  "passed": true/false,
-  "overall_score": 0-100,
-  "issues": [
-    {
-      "severity": "critical/warning/info",
-      "description": "问题描述（不要引用原文，用概括性语言描述）",
-      "source_index": 0,
-      "suggestion": "修改建议（不要引用原文，用概括性语言描述）"
-    }
-  ],
-  "suggestions": ["优化建议1", "优化建议2"],
-  "summary": "审查总结（单行文本，不要包含换行符，不要引用原文）"
-}
-
-## JSON 格式规则
-- 所有字符串中的双引号必须转义为 \"
-- 所有字符串中的换行符必须转义为 \n
-- 所有字符串中的反斜杠必须转义为 \\
-- 所有文本字段必须是单行文本，不要包含实际的换行符
-- **严禁在 description、suggestion、summary 中引用原文内容**（避免引号嵌套问题）
-- 使用概括性语言描述问题，而不是复制粘贴原文片段
-- 确保输出的是合法的 JSON 格式
-
-## 审查规则
-- 如果存在 critical 级别的问题，passed 必须为 false
-- 如果相关性低于 30 分，passed 为 false
-- 严禁使用 emoji 表情符号"""
-
-
-SYSTEM_PROMPT_MODULE = """你是一个严格的内容审查专家。你的任务是检查单个学习模块的内容质量。
-
-## 审查标准
-1. **事实性错误**: 内容中的事实、数据、定义是否明显错误
-2. **逻辑完整性**: 内容逻辑是否清晰完整
-3. **关键信息**: 是否包含该模块应有的关键知识点
-4. **内容质量**: 内容是否充实、易懂、结构清晰
-5. **相关性**: 内容是否与模块主题高度相关
-
-## 输出要求
-严格输出 JSON，确保所有字符串字段中的特殊字符（引号、换行符、反斜杠等）都正确转义：
-{
-  "passed": true/false,
-  "score": 0-100,
-  "issues": [
-    {
-      "severity": "critical/warning/info",
-      "description": "问题描述（不要引用原文，用概括性语言描述）",
-      "suggestion": "修改建议（不要引用原文，用概括性语言描述）"
-    }
-  ],
-  "feedback": "审查反馈（单行文本，不要包含换行符，不要引用原文）",
-  "missing_points": ["缺失的关键点1", "缺失的关键点2"]
-}
-
-## JSON 格式规则
-- 所有字符串中的双引号必须转义为 \"
-- 所有字符串中的换行符必须转义为 \n
-- 所有字符串中的反斜杠必须转义为 \\
-- 所有文本字段必须是单行文本，不要包含实际的换行符
-- **严禁在 description、suggestion、feedback 中引用原文内容**（避免引号嵌套问题）
-- 使用概括性语言描述问题，而不是复制粘贴原文片段
-- 确保输出的是合法的 JSON 格式
-
-## 审查规则
-- 如果存在 critical 级别的问题，passed 必须为 false
-- 如果 score < 60 分，passed 为 false
-- 严禁使用 emoji 表情符号"""
 
 
 def _review_single_module(
@@ -116,7 +57,7 @@ def _review_single_module(
     expected_key_points = task_breakdown_module.get("key_points", [])
     
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT_MODULE},
+        {"role": "system", "content": REVIEWER_MODULE_PROMPT},
         {"role": "user", "content": f"""模块信息:
 - 标题: {module_title}
 - 类型: {module_type}
@@ -132,6 +73,7 @@ def _review_single_module(
         result = llm.chat_json(messages, max_tokens=1536)
         result["module_order"] = module_order
         result["module_title"] = module_title
+        result["_usage_records"] = llm.get_usage_records()
         return result
     except Exception as e:
         logger.error(f"  [模块{module_order}] 审查失败: {str(e)}")
@@ -171,10 +113,22 @@ def reviewer_node(state: AgentState) -> Dict[str, Any]:
     
     # 模块级别审查
     if use_module_review:
-        return _review_modules(module_list, task_breakdown, learning_goal)
+        result = _review_modules(module_list, task_breakdown, learning_goal)
+        extra_records = result.pop("_usage_records", None) or []
+        _flush_review_usage(
+            result.get("module_review_results", []),
+            state.get("user_id", 0),
+            "content_review", state.get("task_id"),
+            extra_records=extra_records)
+        return result
     
     # 批量 RAG 审查（原有逻辑）
-    return _review_rag_content(rag_chunks, learning_goal)
+    result = _review_rag_content(rag_chunks, learning_goal)
+    extra_records = result.pop("_usage_records", None) or []
+    _flush_review_usage([], state.get("user_id", 0),
+                        "content_review", state.get("task_id"),
+                        extra_records=extra_records)
+    return result
 
 
 def _review_modules(
@@ -355,7 +309,7 @@ def _review_rag_content(
             content_summary.append(f"[{i+1}] [文本] 来源: {doc_title} | 章节: {heading} | 内容: {content}")
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT_BATCH},
+        {"role": "system", "content": REVIEWER_BATCH_PROMPT},
         {"role": "user", "content": f"""学习目标: {learning_goal}
 
 检索到的知识内容:
@@ -388,6 +342,7 @@ def _review_rag_content(
         logger.info(f"{'='*60}")
 
         return {
+            "_usage_records": llm.get_usage_records(),
             "review_passed": passed,
             "review_feedback": summary,
             "review_suggestions": suggestions,
