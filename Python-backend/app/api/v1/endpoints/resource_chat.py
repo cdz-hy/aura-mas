@@ -164,10 +164,14 @@ async def plan_chat(
         "orchestrated_content": None,
         "quiz_questions": None,
         "quiz_config": None,
+        "generated_content": None,
         "new_breakdown": None,
         "generated_resource_info": [],
         "saved_module_orders": set(),
     }
+
+    # SSE 实时回调：节点执行期间直接推送事件到队列
+    initial_state["sse_callback"] = lambda data: bg_state["events"].append(data)
 
     async def _run_graph_background():
         """后台执行图工作流，与 SSE 连接完全解耦"""
@@ -187,6 +191,8 @@ async def plan_chat(
                             bg_state["quiz_questions"] = node_output["quiz_questions"]
                         if node_output.get("quiz_config"):
                             bg_state["quiz_config"] = node_output["quiz_config"]
+                        if node_output.get("generated_content"):
+                            bg_state["generated_content"] = node_output["generated_content"]
                         tb = node_output.get("task_breakdown")
                         if tb and node_name == "task_decomposer":
                             bg_state["new_breakdown"] = tb
@@ -263,6 +269,25 @@ async def plan_chat(
     def _bg_save_resources():
         """保存后台任务中生成的资源"""
         bs = bg_state
+
+        # 网络搜索资源：将 generated_content 转为 module_list（跳过审查后需要此转换）
+        if bs["generated_content"] and not bs["module_list"] and not bs["orchestrated_content"]:
+            gc = bs["generated_content"]
+            bs["module_list"] = [{
+                "module_order": 1,
+                "module_id": gc.get("module_id", 1),
+                "title": gc.get("title", ""),
+                "content": gc.get("content", ""),
+                "module_type": gc.get("content_type", "text"),
+                "key_points": gc.get("key_points", []),
+                "images": gc.get("images", []),
+                "description": message,
+            }]
+            bs["orchestrated_content"] = {
+                "title": gc.get("title", ""),
+                "modules": bs["module_list"],
+            }
+
         if bs["new_breakdown"] and plan_id_int and not bs["breakdown_confirmed"]:
             _save_breakdown_dialogue(user_id, session_id, plan_id_int, bs["new_breakdown"])
 
@@ -284,6 +309,22 @@ async def plan_chat(
                 all_ids = [r["id"] for r in bs["generated_resource_info"] if r.get("id")]
                 if all_ids:
                     _save_breakdown_dialogue(user_id, session_id, plan_id_int, parsed_breakdown, all_ids)
+
+        # 网络搜索资源（无 task_breakdown 流程）：直接从 module_list 保存
+        if not bs["breakdown_confirmed"] and bs["module_list"] and plan_id_int:
+            new_modules = [m for m in bs["module_list"]
+                           if m.get("module_order") not in bs["saved_module_orders"]]
+            if new_modules:
+                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"])
+                for idx, rid in enumerate(new_ids):
+                    mod = new_modules[idx] if idx < len(new_modules) else {}
+                    bs["generated_resource_info"].append({
+                        "id": rid,
+                        "type": mod.get("module_type", "document"),
+                        "title": mod.get("title", f"模块 {idx + 1}"),
+                    })
+                    bs["saved_module_orders"].add(mod.get("module_order"))
+                logger.info(f"[资源持久化] 保存 {len(new_modules)} 个网络搜索资源")
 
         if bs["quiz_questions"] and plan_id_int:
             quiz_res_id = _save_quiz_resource(plan_id_int, bs["quiz_questions"], bs["quiz_config"])
@@ -518,6 +559,9 @@ async def generate_single_resource(
         "generated_content": None,
     }
 
+    # SSE 实时回调
+    initial_state["sse_callback"] = lambda data: bg_state["events"].append(data)
+
     async def _run_graph_background():
         try:
             # video 类型：直接搜索视频，不走 LangGraph
@@ -563,6 +607,24 @@ async def generate_single_resource(
                     for sse_data in graph_step_to_sse(node_name, node_output):
                         bg_state["events"].append(sse_data)
                         _persist_profile_update(sse_data, user_id)
+
+            # 网络搜索资源：将 generated_content 转为 module_list（跳过审查后需要此转换）
+            if bg_state["generated_content"] and not bg_state["module_list"] and not bg_state["orchestrated_content"]:
+                gc = bg_state["generated_content"]
+                bg_state["module_list"] = [{
+                    "module_order": 1,
+                    "module_id": gc.get("module_id", 1),
+                    "title": gc.get("title", ""),
+                    "content": gc.get("content", ""),
+                    "module_type": gc.get("content_type", "text"),
+                    "key_points": gc.get("key_points", []),
+                    "images": gc.get("images", []),
+                    "description": description,
+                }]
+                bg_state["orchestrated_content"] = {
+                    "title": gc.get("title", ""),
+                    "modules": bg_state["module_list"],
+                }
 
             # 图执行完成，保存资源
             generated_resource_info = _persist_generated_resources(
@@ -974,6 +1036,10 @@ def _persist_generated_resources(
                 module_data["content"] = module_list[0].get("content", "") if module_list else ""
                 if not module_data.get("title"):
                     module_data["title"] = module_list[0].get("title", title)
+                # 传递图片数据
+                images = module_list[0].get("images", [])
+                if images:
+                    module_data["images"] = images
             if not module_data.get("title"):
                 module_data["title"] = title
             try:
@@ -1028,8 +1094,8 @@ def _search_videos(module_title: str) -> list:
         return []
 
     # 中英文双语搜索
-    results_cn = _search_tavily(f"{module_title} 教学视频", max_results=5)
-    results_en = _search_tavily(f"{module_title} tutorial video", max_results=3)
+    results_cn, _ = _search_tavily(f"{module_title} 教学视频", max_results=5)
+    results_en, _ = _search_tavily(f"{module_title} tutorial video", max_results=3)
 
     # 视频平台白名单
     video_domains = [
@@ -1305,6 +1371,10 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
                 "module_title": mod.get("title", f"模块 {module_order_in_list}"),
                 "estimated_hours": mod.get("estimated_hours", 2),
             }
+            # 传递图片数据
+            images = mod.get("images", [])
+            if images:
+                module_data["images"] = images
             resources.append({
                 "planId": plan_id,
                 "moduleType": module_type,

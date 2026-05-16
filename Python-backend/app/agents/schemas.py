@@ -99,6 +99,7 @@ class AgentState(TypedDict, total=False):
     stream_events: List[Dict[str, Any]]  # 流式事件队列
     current_step: str  # 当前处理步骤描述
     error: Optional[str]  # 错误信息
+    sse_callback: Any  # Callable[[str], None] - 实时推送 SSE 事件的回调函数
 
     # ==================== 循环控制 ====================
     iteration_count: int  # 当前迭代次数（防止无限循环）

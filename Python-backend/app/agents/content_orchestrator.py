@@ -8,10 +8,21 @@
 - 默认使用并行模式，提升性能和可靠性
 """
 import logging
+import json
 import asyncio
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_content_orchestrator_llm
+
+
+def _emit(state: dict, event_type: str, content: str):
+    """通过 sse_callback 实时推送 SSE 事件"""
+    cb = state.get("sse_callback")
+    if cb:
+        try:
+            cb(f'data: {json.dumps({"type": event_type, "content": content}, ensure_ascii=False)}\n\n')
+        except Exception:
+            pass
 
 logger = logging.getLogger("agents.content_orchestrator")
 
@@ -500,6 +511,7 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     # 并行模式：为每个模块并发生成内容
     if use_parallel and modules:
         logger.info(f"  [内容编排智能体] 使用并行模式，共 {len(modules)} 个模块")
+        _emit(state, "progress", f"正在并行编排 {len(modules)} 个学习模块...")
         
         async def run_parallel_orchestration():
             """并发为每个模块生成内容"""
@@ -556,6 +568,7 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                 "summary": f"已生成 {len(modules_list)} 个学习模块",
             }
             
+            _emit(state, "progress", f"并行编排完成，共生成 {len(modules_list)} 个学习模块")
             logger.info(f"  [内容编排智能体] 并行编排完成!")
             logger.info(f"    标题: {orchestrated_content.get('title', '未命名')}")
             logger.info(f"    模块数: {len(modules_list)}")
@@ -589,6 +602,7 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     # 批量模式：一次性生成所有模块（原有逻辑）
     if not use_parallel or not modules:
         logger.info(f"  [内容编排智能体] 使用批量模式")
+        _emit(state, "progress", "正在编排学习内容...")
         return _batch_orchestration(
             rag_chunks, task_breakdown, user_message, learning_goal,
             user_profile, generated_content, chat_history
