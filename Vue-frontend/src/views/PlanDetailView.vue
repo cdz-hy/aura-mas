@@ -134,9 +134,13 @@
       </svg>
     </button>
 
-    <!-- ==================== 中间栏：资源详情 ==================== -->
-    <transition name="slide-fade">
-      <div v-if="selectedResource" class="flex flex-col card overflow-hidden animate-fade-in-up mx-2" :style="{ width: panelWidth + 'px', minWidth: '280px' }">
+    <!-- ==================== 中间栏：资源详情（始终在 DOM 中，width 过渡动画） ==================== -->
+    <div
+      class="resource-panel flex flex-col card overflow-hidden mx-2"
+      :class="{ 'resource-panel--closed': !selectedResource }"
+      :style="panelStyle"
+    >
+      <template v-if="selectedResource">
         <!-- 标题栏 -->
         <div class="px-4 py-3 border-b border-navy-100/50 flex items-center justify-between">
           <div class="flex items-center gap-2 min-w-0">
@@ -188,7 +192,7 @@
 
           <!-- 文档/阅读类型 -->
           <template v-else-if="selectedResource.moduleType === 'document' || selectedResource.moduleType === 'reading'">
-            <div v-if="selectedResource.moduleData?.content" class="prose prose-sm max-w-none text-navy-700 leading-relaxed markdown-body" v-html="renderMd(selectedResource.moduleData.content)"></div>
+            <div v-if="selectedResource.moduleData?.content" class="prose prose-sm max-w-none text-navy-700 leading-relaxed markdown-body" v-html="renderedResourceContent"></div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>资源内容待生成</p>
             </div>
@@ -208,7 +212,7 @@
 
           <!-- 代码类型 -->
           <template v-else-if="selectedResource.moduleType === 'code'">
-            <div v-if="selectedResource.moduleData?.content" class="text-sm font-mono text-navy-700 leading-relaxed markdown-body" v-html="renderMd(selectedResource.moduleData.content)"></div>
+            <div v-if="selectedResource.moduleData?.content" class="text-sm font-mono text-navy-700 leading-relaxed markdown-body" v-html="renderedResourceContent"></div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>代码示例待生成</p>
             </div>
@@ -251,20 +255,19 @@
 
           <!-- 其他类型 -->
           <template v-else>
-            <div v-if="selectedResource.moduleData?.content" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(selectedResource.moduleData.content)"></div>
+            <div v-if="selectedResource.moduleData?.content" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderedResourceContent"></div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>资源内容待生成</p>
             </div>
           </template>
         </div>
-      </div>
-    </transition>
+      </template>
+    </div>
 
-    <!-- 拖拽分隔线 -->
+    <!-- 拖拽分隔线（始终在 DOM 中，width 过渡动画） -->
     <div
-      v-if="selectedResource"
-      class="flex-shrink-0 flex items-center justify-center cursor-col-resize group"
-      :class="isDragging ? 'w-2' : 'w-1.5'"
+      class="resource-divider flex-shrink-0 flex items-center justify-center cursor-col-resize group"
+      :class="{ 'resource-divider--closed': !selectedResource, 'w-2': isDragging, 'w-1.5': !isDragging }"
       @mousedown="onDividerMouseDown"
     >
       <div class="w-0.5 h-8 rounded-full transition-colors" :class="isDragging ? 'bg-navy-400' : 'bg-navy-200 group-hover:bg-navy-400'"></div>
@@ -539,9 +542,44 @@ const authStore = useAuthStore()
 const panelWidth = ref(400)
 const isDragging = ref(false)
 
+// 中间面板的宽度样式（包含关闭态：width=0，由 CSS transition 驱动动画）
+const panelStyle = computed(() => {
+  if (!selectedResource.value) {
+    return { width: '0px', minWidth: '0px', marginLeft: '0px', marginRight: '0px' }
+  }
+  return { width: panelWidth.value + 'px', minWidth: '280px' }
+})
+
+interface DragState {
+  containerLeft: number
+  sidebarW: number
+  collapseW: number
+  offset: number
+  pendingWidth: number
+  rafId: number | null
+}
+
+let dragState: DragState | null = null
+
 function onDividerMouseDown(e: MouseEvent) {
   e.preventDefault()
   isDragging.value = true
+
+  const container = document.querySelector('.flex.gap-0')
+  if (!container) return
+  const rect = container.getBoundingClientRect()
+  const sidebarEl = container.children[0] as HTMLElement
+  const collapseBtn = container.children[1] as HTMLElement
+
+  dragState = {
+    containerLeft: rect.left,
+    sidebarW: sidebarEl?.offsetWidth || 280,
+    collapseW: collapseBtn?.offsetWidth || 24,
+    offset: 8,
+    pendingWidth: panelWidth.value,
+    rafId: null,
+  }
+
   document.addEventListener('mousemove', onDividerMouseMove)
   document.addEventListener('mouseup', onDividerMouseUp)
   document.body.style.cursor = 'col-resize'
@@ -549,32 +587,45 @@ function onDividerMouseDown(e: MouseEvent) {
 }
 
 function onDividerMouseMove(e: MouseEvent) {
-  if (!isDragging.value) return
-  // 计算鼠标相对于容器左边缘的位置
-  const container = document.querySelector('.flex.gap-0')
-  if (!container) return
-  const rect = container.getBoundingClientRect()
-  // 左侧栏宽度
-  const sidebarEl = container.children[0] as HTMLElement
-  const sidebarW = sidebarEl?.offsetWidth || 280
-  // 折叠按钮宽度
-  const collapseBtn = container.children[1] as HTMLElement
-  const collapseW = collapseBtn?.offsetWidth || 24
-  // 分隔线的左右偏移（约 8px）
-  const offset = 8
-  const newWidth = e.clientX - rect.left - sidebarW - collapseW - offset
-  panelWidth.value = Math.max(280, Math.min(800, newWidth))
+  if (!dragState) return
+  dragState.pendingWidth = Math.max(280, Math.min(800,
+    e.clientX - dragState.containerLeft - dragState.sidebarW - dragState.collapseW - dragState.offset
+  ))
+
+  if (dragState.rafId === null) {
+    dragState.rafId = requestAnimationFrame(() => {
+      if (!dragState) return
+      dragState.rafId = null
+      panelWidth.value = dragState.pendingWidth
+    })
+  }
 }
 
-function onDividerMouseUp() {
+function endDrag() {
   isDragging.value = false
+  if (dragState) {
+    if (dragState.rafId !== null) {
+      cancelAnimationFrame(dragState.rafId)
+      dragState.rafId = null
+    }
+    panelWidth.value = dragState.pendingWidth
+  }
+  dragState = null
   document.removeEventListener('mousemove', onDividerMouseMove)
   document.removeEventListener('mouseup', onDividerMouseUp)
   document.body.style.cursor = ''
   document.body.style.userSelect = ''
 }
 
+function onDividerMouseUp() { endDrag() }
+
 onUnmounted(() => {
+  if (dragState) {
+    if (dragState.rafId !== null) {
+      cancelAnimationFrame(dragState.rafId)
+    }
+    dragState = null
+  }
   document.removeEventListener('mousemove', onDividerMouseMove)
   document.removeEventListener('mouseup', onDividerMouseUp)
 })
@@ -655,6 +706,13 @@ const modules = computed(() => {
 })
 
 function renderMd(text: string) { return parseMarkdown(text) }
+
+// 缓存资源内容的 markdown 渲染结果，避免每次 Vue 重渲染都重新解析
+const renderedResourceContent = computed(() => {
+  const content = selectedResource.value?.moduleData?.content
+  if (!content) return ''
+  return renderMd(content)
+})
 
 // ==================== 资源详情 ====================
 
@@ -1239,15 +1297,27 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.slide-fade-enter-active,
-.slide-fade-leave-active {
-  transition: all 0.3s ease;
+/* 资源面板：width 过渡驱动打开/关闭动画，flex 布局联动右侧面板 */
+.resource-panel {
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              min-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              margin 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.25s ease;
 }
-.slide-fade-enter-from,
-.slide-fade-leave-to {
+.resource-panel--closed {
   opacity: 0;
-  transform: translateX(-20px);
+  pointer-events: none;
 }
+
+.resource-divider {
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.25s ease;
+}
+.resource-divider--closed {
+  width: 0 !important;
+  opacity: 0;
+}
+
 .slide-down-enter-active,
 .slide-down-leave-active {
   transition: all 0.25s ease;
