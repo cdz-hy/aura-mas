@@ -181,7 +181,7 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
 
     # 构建对话历史文本（包含更多轮次以便 LLM 理解上下文）
     history_text = ""
-    recent = chat_history[-10:]  # 增加到10轮，让 LLM 有更多上下文
+    recent = chat_history[-20:]  # 最近20轮
     for msg in recent:
         role = "用户" if msg["role"] == "user" else "助手"
         history_text += f"{role}: {msg['content']}\n"
@@ -283,7 +283,7 @@ def _should_ask_profile(chat_history: List[Dict[str, str]], profile: Dict[str, A
         return False
 
     # 检查最近是否询问过画像问题
-    recent = chat_history[-10:]
+    recent = chat_history[-20:]
     for msg in recent:
         content = msg.get("content", "").lower()
         if any(kw in content for kw in ["学习风格", "偏好", "喜欢", "习惯", "更倾向"]):

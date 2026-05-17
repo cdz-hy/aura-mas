@@ -124,6 +124,15 @@ public class AiDialogueService {
     }
 
     @Transactional
+    public void updateConversationContext(Long dialogueId, String conversationContext) {
+        AiDialogue dialogue = dialogueMapper.selectById(dialogueId);
+        if (dialogue != null) {
+            dialogue.setConversationContext(conversationContext);
+            dialogueMapper.updateById(dialogue);
+        }
+    }
+
+    @Transactional
     public void updateResourceId(Long dialogueId, Long resourceId) {
         AiDialogue dialogue = dialogueMapper.selectById(dialogueId);
         if (dialogue != null) {

@@ -49,6 +49,15 @@ public class AiDialogueController {
         return Result.success();
     }
 
+    @Operation(summary = "内部接口：更新对话上下文压缩字段")
+    @PutMapping("/api/internal/dialogue/{dialogueId}/context")
+    public Result<Void> updateConversationContext(
+            @PathVariable Long dialogueId,
+            @RequestBody Map<String, String> body) {
+        dialogueService.updateConversationContext(dialogueId, body.get("conversationContext"));
+        return Result.success();
+    }
+
     @Operation(summary = "内部接口：获取对话历史")
     @GetMapping("/api/internal/dialogue/history")
     public Result<List<AiDialogue>> getHistory(

@@ -142,7 +142,7 @@ def profile_maintainer_node(state: AgentState) -> Dict[str, Any]:
     llm = get_profile_maintainer_llm()
 
     history_text = ""
-    recent = chat_history[-10:]
+    recent = chat_history[-20:]
     for msg in recent:
         role = "用户" if msg["role"] == "user" else "助手"
         history_text += f"{role}: {msg['content']}\n"

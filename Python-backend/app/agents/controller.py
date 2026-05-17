@@ -271,7 +271,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     history_text = ""
     chat_history = state.get("chat_history", [])
     if chat_history:
-        recent = chat_history[-10:]  # 最近10轮
+        recent = chat_history[-20:]  # 最近20轮
         for msg in recent:
             role = "用户" if msg["role"] == "user" else "助手"
             history_text += f"{role}: {msg['content']}\n"
