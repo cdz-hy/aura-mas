@@ -85,6 +85,7 @@ class AgentState(TypedDict, total=False):
     orchestrated_content: Optional[Dict[str, Any]]  # 编排后的模块化内容
     module_list: List[Dict[str, Any]]  # 生成的学习资源模块列表
     use_parallel_orchestration: bool  # 是否使用并行编排模式（默认 True）
+    placeholder_resource_map: Dict[int, Dict[str, Any]]  # module_order -> {id, type, title} 占位资源映射
 
     # ==================== 自主生成 ====================
     generated_content: Optional[Dict[str, Any]]  # 自主生成的内容
@@ -101,6 +102,7 @@ class AgentState(TypedDict, total=False):
     current_step: str  # 当前处理步骤描述
     error: Optional[str]  # 错误信息
     sse_callback: Any  # Callable[[str], None] - 实时推送 SSE 事件的回调函数
+    create_placeholder_callback: Any  # Callable[[list], dict] - 创建占位资源记录的回调函数
 
     # ==================== 循环控制 ====================
     iteration_count: int  # 当前迭代次数（防止无限循环）

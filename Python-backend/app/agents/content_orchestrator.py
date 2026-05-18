@@ -26,6 +26,16 @@ def _emit(state: dict, event_type: str, content: str):
         except Exception:
             pass
 
+
+def _emit_resource_stream(sse_callback, event_type: str, resource_id: int, content: str):
+    """通过 sse_callback 推送带资源 ID 的流式事件"""
+    if sse_callback:
+        try:
+            sse_callback(f'data: {json.dumps({"type": event_type, "resource_id": resource_id, "content": content}, ensure_ascii=False)}\n\n')
+        except Exception:
+            pass
+
+
 logger = logging.getLogger("agents.content_orchestrator")
 
 
@@ -55,6 +65,8 @@ def _generate_single_module(
     user_profile: Dict[str, Any],
     learning_goal: str,
     chat_history: List[Dict[str, str]],
+    sse_callback=None,
+    resource_id: int = 0,
 ) -> Dict[str, Any]:
     """
     为单个模块生成内容（用于并行编排）
@@ -170,7 +182,10 @@ def _generate_single_module(
     ]
     
     try:
-        result = llm.chat_json(messages, max_tokens=16384)
+        def _on_chunk(chunk: str):
+            _emit_resource_stream(sse_callback, "resource_stream_text", resource_id, chunk)
+
+        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, max_tokens=16384, stream_field="content")
         result["module_order"] = module_order
         result["module_id"] = module_info.get("module_id", module_order)
         result["_usage_records"] = llm.get_usage_records()
@@ -263,12 +278,17 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             })
         
         # 并发重新生成未通过的模块
+        sse_cb = state.get("sse_callback")
+        placeholder_map = state.get("placeholder_resource_map", {})
+
         async def run_retry_orchestration():
             """并发重新生成未通过的模块"""
             loop = asyncio.get_event_loop()
-            
+
             tasks = []
             for module_id, module_info in target_modules_info:
+                placeholder = placeholder_map.get(module_id, {})
+                res_id = placeholder.get("id", 0)
                 task = loop.run_in_executor(
                     None,
                     _generate_single_module,
@@ -278,6 +298,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                     user_profile,
                     learning_goal,
                     chat_history,
+                    sse_cb,
+                    res_id,
                 )
                 tasks.append(task)
             
@@ -373,22 +395,42 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     if use_parallel and modules:
         logger.info(f"  [内容编排智能体] 使用并行模式，共 {len(modules)} 个模块")
         _emit(state, "progress", f"正在并行编排 {len(modules)} 个学习模块...")
-        
+        sse_cb = state.get("sse_callback")
+        placeholder_map = state.get("placeholder_resource_map", {})
+
+        # 单模块自动确认场景：placeholder_resource_map 为空，通过回调动态创建
+        if not placeholder_map and modules:
+            create_placeholder_cb = state.get("create_placeholder_callback")
+            if create_placeholder_cb:
+                try:
+                    placeholder_map = create_placeholder_cb(modules)
+                except Exception as e:
+                    logger.warning(f"  [内容编排智能体] 创建占位资源失败: {e}")
+
+        # 通知前端创建侧栏占位条目
+        if placeholder_map:
+            _emit(state, "resource_stream_start", json.dumps(list(placeholder_map.values()), ensure_ascii=False))
+
         async def run_parallel_orchestration():
             """并发为每个模块生成内容"""
             loop = asyncio.get_event_loop()
-            
+
             tasks = []
             for i, module in enumerate(modules):
+                module_order = i + 1
+                placeholder = placeholder_map.get(module_order, {})
+                res_id = placeholder.get("id", 0)
                 task = loop.run_in_executor(
                     None,
                     _generate_single_module,
                     module,
-                    i + 1,
+                    module_order,
                     rag_chunks,
                     user_profile,
                     learning_goal,
                     chat_history,
+                    sse_cb,
+                    res_id,
                 )
                 tasks.append(task)
             
@@ -469,7 +511,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
         _emit(state, "progress", "正在编排学习内容...")
         batch_result = _batch_orchestration(
             rag_chunks, task_breakdown, user_message, learning_goal,
-            user_profile, generated_content, chat_history
+            user_profile, generated_content, chat_history,
+            sse_callback=state.get("sse_callback"),
         )
         extra_records = batch_result.pop("_usage_records", None) or []
         _flush_module_usage(batch_result.get("module_list", []),
@@ -487,6 +530,7 @@ def _batch_orchestration(
     user_profile: Dict[str, Any],
     generated_content: Dict[str, Any],
     chat_history: List[Dict[str, str]],
+    sse_callback=None,
 ) -> Dict[str, Any]:
     """批量编排模式：一次性生成所有模块（原有逻辑）"""
     llm = get_content_orchestrator_llm()

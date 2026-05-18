@@ -138,3 +138,9 @@
 .markdown-body a { color: var(--color-navy-light); text-decoration: underline; text-underline-offset: 2px; }
 .markdown-body a:hover { color: var(--color-navy); }
 .markdown-body hr { border: none; border-top: 1px solid rgba(26, 40, 71, 0.12); margin: 1.5rem 0; }
+
+/* KaTeX 公式样式 */
+.markdown-body .katex { font-size: 1.05em; }
+.markdown-body .katex-display { margin: 1rem 0; overflow-x: auto; overflow-y: hidden; padding: 0.5rem 0; }
+.markdown-body .katex-display > .katex { text-align: left; }
+.markdown-body .katex-error { color: #cc0000; font-size: 0.85em; background: rgba(204,0,0,0.05); padding: 0.2rem 0.4rem; border-radius: 4px; }

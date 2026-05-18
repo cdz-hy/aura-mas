@@ -127,8 +127,16 @@ async def agent_chat(request: ChatRequest):
             all_events = []
             ai_response_parts = []
             node_count = 0
+            raw_sse_queue = []
+
+            # 注入 sse_callback，使智能体的流式 JSON 输出能实时推送
+            initial_state["sse_callback"] = lambda data: raw_sse_queue.append(data)
 
             async for event in graph.astream(initial_state, stream_mode="updates"):
+                # 先推送 sse_callback 收集的实时事件（如 raw_chunk）
+                while raw_sse_queue:
+                    yield raw_sse_queue.pop(0)
+
                 for node_name, node_output in event.items():
                     if node_output is None:
                         continue
@@ -149,6 +157,10 @@ async def agent_chat(request: ChatRequest):
                         # 持久化画像更新
                         if evt.get("event_type") == "profile_update":
                             _persist_profile_update_raw(evt, request.user_id)
+
+                    # 节点完成后也推送可能残留的 sse_callback 事件
+                    while raw_sse_queue:
+                        yield raw_sse_queue.pop(0)
 
                     step = node_output.get("current_step", "")
                     if step:

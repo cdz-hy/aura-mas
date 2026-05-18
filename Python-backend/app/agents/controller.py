@@ -264,11 +264,11 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [主控智能体] 正在流式调用 LLM 进行意图识别...")
-        
+
         intent = None
         reasoning = ""
         accumulated_text = ""
-        
+
         # 使用流式输出
         for chunk in llm.chat_stream(messages, temperature=0.2):
             accumulated_text += chunk

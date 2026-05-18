@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { createSSEConnection, cancelSSE } from '@/utils/sse'
 import { issueTicket } from '@/api/auth'
 import { getSessions, getSessionMessages, getDialogueHistoryByPlan, deleteSession as apiDeleteSession } from '@/api/chat'
@@ -17,6 +17,8 @@ export const useChatStore = defineStore('chat', () => {
   const messages = ref<Array<{ role: string; content: string; type?: string; breakdown?: any; resources?: Array<{ id: number; type: string; title: string }> }>>([])
   const streaming = ref(false)
   const streamBuffer = ref('')
+  // 标记是否已通过 stream_text 接收过流式文本（防止 onChunk 重复追加）
+  let hasStreamText = false
 
   // 任务分解确认状态
   const pendingTaskBreakdown = ref<any>(null)
@@ -31,6 +33,18 @@ export const useChatStore = defineStore('chat', () => {
   const lastGradingResult = ref<Record<string, any> | null>(null)
   // 生成的资源事件（供 PlanDetailView 将资源添加到侧栏并打开）
   const lastGeneratedResources = ref<Array<{ id: number; type: string; title: string }> | null>(null)
+  // 流式资源更新事件（供 PlanDetailView 实时更新侧栏资源内容）
+  const streamingResources = ref<Array<{ resource: { id: number; type: string; title: string }; content: string }>>([])
+  // 多资源流式文本缓冲（供中间面板实时显示多个资源生成进度）
+  const resourceStreamBuffers = ref<Record<number, string>>({})
+  const streamingPlaceholders = ref<Array<{ id: number; type: string; title: string }>>([])
+  const isResourceStreaming = ref(false)
+  // 向后兼容：取最后一个活跃的资源流内容
+  const resourceStreamBuffer = computed(() => {
+    const buffers = resourceStreamBuffers.value
+    const keys = Object.keys(buffers)
+    return keys.length > 0 ? buffers[Number(keys[keys.length - 1])] || '' : ''
+  })
 
   // 当前选中的模块上下文（供补充资源生成）
   const selectedModuleContext = ref<{ title: string; description: string; moduleId: number; planId: number } | null>(null)
@@ -106,12 +120,17 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 切换计划时重置整个对话状态，防止残留其他计划的消息
-   * 如果是同一个计划，不中断正在进行的 SSE 连接和对话状态
+   * 切换计划时重置对话状态
+   * 如果是同一个计划且有活跃 SSE 连接，不中断（保留流式输出状态）
    */
   function resetForPlan(planId: string) {
     if (planId === currentPlanId) {
       // 同一计划，不重置（保留流式输出、消息、会话等状态）
+      return
+    }
+    // 有活跃 SSE 连接时保持不断开（防止导航导致流式中断）
+    if (currentSSE && streaming.value) {
+      currentPlanId = planId
       return
     }
     cancelSSE(currentSSE)
@@ -126,6 +145,10 @@ export const useChatStore = defineStore('chat', () => {
     awaitingConfirmation.value = false
     lastQuizResource.value = null
     lastGradingResult.value = null
+    streamingResources.value = []
+    resourceStreamBuffers.value = {}
+    streamingPlaceholders.value = []
+    isResourceStreaming.value = false
     selectedModuleContext.value = null
     skipNextModulesPush = false
   }
@@ -142,6 +165,9 @@ export const useChatStore = defineStore('chat', () => {
     awaitingConfirmation.value = false
     lastQuizResource.value = null
     lastGradingResult.value = null
+    resourceStreamBuffers.value = {}
+    streamingPlaceholders.value = []
+    isResourceStreaming.value = false
   }
 
   async function selectSession(sessionId: string) {
@@ -155,6 +181,9 @@ export const useChatStore = defineStore('chat', () => {
     lastQuizResource.value = null
     lastGradingResult.value = null
     selectedModuleContext.value = null
+    resourceStreamBuffers.value = {}
+    streamingPlaceholders.value = []
+    isResourceStreaming.value = false
     skipNextModulesPush = false
     activeSessionId.value = sessionId
 
@@ -197,6 +226,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value.push({ role: 'user', content: text })
     streaming.value = true
     streamBuffer.value = ''
+    hasStreamText = false
     awaitingConfirmation.value = false
 
     try {
@@ -208,9 +238,30 @@ export const useChatStore = defineStore('chat', () => {
         ticket,
         { plan_id: planId || '', message: text, session_id: activeSessionId.value, ...extraParams },
         {
-          onProgress() {},
-          onChunk(content) {
+          onStreamText(content) {
+            // 后端直接发送纯文本，实时追加到 streamBuffer
             streamBuffer.value += content
+            hasStreamText = true
+          },
+          onResourceStreamStart(placeholders) {
+            streamingPlaceholders.value = placeholders
+            isResourceStreaming.value = true
+            for (const p of placeholders) {
+              resourceStreamBuffers.value[p.id] = ''
+            }
+          },
+          onResourceStreamText(resourceId, content) {
+            resourceStreamBuffers.value[resourceId] = (resourceStreamBuffers.value[resourceId] || '') + content
+            isResourceStreaming.value = true
+          },
+          onResourceStreamFailed(resourceId) {
+            delete resourceStreamBuffers.value[resourceId]
+          },
+          onChunk(content) {
+            // 仅在未收到 stream_text 时追加（避免重复）
+            if (!hasStreamText) {
+              streamBuffer.value += content
+            }
           },
           onProfileUpdate(dimensions) {
             console.debug('[Chat] Profile updated:', dimensions)
@@ -258,6 +309,10 @@ export const useChatStore = defineStore('chat', () => {
           },
           onResourceGenerated(resources) {
             lastGeneratedResources.value = resources
+            // 资源已生成，清除流式缓冲
+            resourceStreamBuffers.value = {}
+            streamingPlaceholders.value = []
+            isResourceStreaming.value = false
             // 在对话中显示资源生成卡片
             if (resources.length) {
               const summary = resources.map(r => r.title).join('、')
@@ -269,6 +324,9 @@ export const useChatStore = defineStore('chat', () => {
               })
             }
           },
+          onStreamingResource(resource, content) {
+            streamingResources.value.push({ resource, content })
+          },
           onDone() {
             // 用户确认后：如果资源已通过 onResourceGenerated 显示，跳过模块消息推送
             if (skipNextModulesPush) {
@@ -277,6 +335,9 @@ export const useChatStore = defineStore('chat', () => {
                 // 资源已生成并显示，清理缓冲
                 pendingModules.value = []
                 streamBuffer.value = ''
+                resourceStreamBuffers.value = {}
+                streamingPlaceholders.value = []
+                isResourceStreaming.value = false
                 streaming.value = false
                 loadSessions(planId)
                 return
@@ -322,6 +383,9 @@ export const useChatStore = defineStore('chat', () => {
               streamBuffer.value = ''
             }
             streaming.value = false
+            resourceStreamBuffers.value = {}
+            streamingPlaceholders.value = []
+            isResourceStreaming.value = false
             loadSessions(planId)
           },
           onError(err) {
@@ -345,12 +409,18 @@ export const useChatStore = defineStore('chat', () => {
             }
             messages.value.push({ role: 'assistant', content: `错误：${err}` })
             streaming.value = false
+            resourceStreamBuffers.value = {}
+            streamingPlaceholders.value = []
+            isResourceStreaming.value = false
           },
         }
       )
     } catch (e: any) {
       messages.value.push({ role: 'assistant', content: `连接失败：${e.message}` })
       streaming.value = false
+      resourceStreamBuffers.value = {}
+      streamingPlaceholders.value = []
+      isResourceStreaming.value = false
     }
   }
 
@@ -385,6 +455,9 @@ export const useChatStore = defineStore('chat', () => {
       streamBuffer.value = ''
     }
     streaming.value = false
+    resourceStreamBuffers.value = {}
+    streamingPlaceholders.value = []
+    isResourceStreaming.value = false
   }
 
   /**
@@ -407,6 +480,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value.push({ role: 'user', content: `请为「${moduleContext.title}」生成${typeLabel}` })
     streaming.value = true
     streamBuffer.value = ''
+    let supHasStreamText = false
 
     try {
       const ticketRes = await issueTicket()
@@ -424,17 +498,37 @@ export const useChatStore = defineStore('chat', () => {
           session_id: activeSessionId.value,
         },
         {
-          onProgress(content) {
-            streamBuffer.value += content + '\n'
+          onStreamText(content) {
+            streamBuffer.value += content
+            supHasStreamText = true
+          },
+          onResourceStreamStart(placeholders) {
+            streamingPlaceholders.value = placeholders
+            isResourceStreaming.value = true
+            for (const p of placeholders) {
+              resourceStreamBuffers.value[p.id] = ''
+            }
+          },
+          onResourceStreamText(resourceId, content) {
+            resourceStreamBuffers.value[resourceId] = (resourceStreamBuffers.value[resourceId] || '') + content
+            isResourceStreaming.value = true
+          },
+          onResourceStreamFailed(resourceId) {
+            delete resourceStreamBuffers.value[resourceId]
           },
           onChunk(content) {
-            streamBuffer.value += content
+            if (!supHasStreamText) {
+              streamBuffer.value += content
+            }
           },
           onModules(modules) {
             pendingModules.value = [...pendingModules.value, ...modules]
           },
           onResourceGenerated(resources) {
             lastGeneratedResources.value = resources
+            resourceStreamBuffers.value = {}
+            streamingPlaceholders.value = []
+            isResourceStreaming.value = false
             if (resources.length) {
               const summary = resources.map(r => r.title).join('、')
               messages.value.push({
@@ -445,9 +539,11 @@ export const useChatStore = defineStore('chat', () => {
               })
             }
           },
+          onStreamingResource(resource, content) {
+            streamingResources.value.push({ resource, content })
+          },
           onDone() {
             if (pendingModules.value.length > 0 && !lastGeneratedResources.value) {
-              // 没有 resource_generated 事件，直接显示模块内容
               for (const mod of pendingModules.value) {
                 const body = mod.content || ''
                 messages.value.push({ role: 'assistant', content: body })
@@ -459,6 +555,9 @@ export const useChatStore = defineStore('chat', () => {
               streamBuffer.value = ''
             }
             streaming.value = false
+            resourceStreamBuffers.value = {}
+            streamingPlaceholders.value = []
+            isResourceStreaming.value = false
             loadSessions(planId)
           },
           onError(err) {
@@ -468,6 +567,9 @@ export const useChatStore = defineStore('chat', () => {
             }
             messages.value.push({ role: 'assistant', content: `${typeLabel}生成失败：${err}` })
             streaming.value = false
+            resourceStreamBuffers.value = {}
+            streamingPlaceholders.value = []
+            isResourceStreaming.value = false
           },
         }
       )
@@ -489,6 +591,11 @@ export const useChatStore = defineStore('chat', () => {
     lastQuizResource,
     lastGradingResult,
     lastGeneratedResources,
+    streamingResources,
+    resourceStreamBuffer,
+    resourceStreamBuffers,
+    streamingPlaceholders,
+    isResourceStreaming,
     selectedModuleContext,
     loadSessions,
     loadHistoryByPlan,

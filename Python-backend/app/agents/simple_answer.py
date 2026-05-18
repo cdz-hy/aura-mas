@@ -2,6 +2,7 @@
 简答智能体 - 简短回答用户问题，决定是否追问，维护对话上下文
 可主动询问学习满意度、学习要求、Felder-Silverman 模型相关问题
 """
+import json
 import logging
 import random
 from typing import Dict, Any, List
@@ -91,8 +92,17 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
     ]
 
     try:
-        logger.info(f"  [简答智能体] 正在调用 LLM 生成回复...")
-        result = llm.chat_json(messages)
+        logger.info(f"  [简答智能体] 正在调用 LLM 生成回复（流式）...")
+        sse_cb = state.get("sse_callback")
+
+        def _on_chunk(chunk: str):
+            if sse_cb:
+                try:
+                    sse_cb(f'data: {json.dumps({"type": "stream_text", "content": chunk}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
+
+        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, stream_field="response")
         record_from_mimo(llm, state.get("user_id", 0), "simple_qa", state.get("task_id"))
         response = result.get("response", "")
         action = result.get("action", "answer")

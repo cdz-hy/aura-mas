@@ -3,6 +3,10 @@ import { PYTHON_AI_BASE } from '@/api/request'
 export interface SSEHandlers {
   onProgress?: (content: string) => void
   onChunk?: (content: string) => void
+  onStreamText?: (content: string) => void
+  onResourceStreamStart?: (placeholders: Array<{ id: number; type: string; title: string }>) => void
+  onResourceStreamText?: (resourceId: number, content: string) => void
+  onResourceStreamFailed?: (resourceId: number) => void
   onProfileUpdate?: (dimensions: Record<string, any>) => void
   onQuestion?: (content: string) => void
   onProfileComplete?: (profile: Record<string, any>) => void
@@ -11,6 +15,7 @@ export interface SSEHandlers {
   onResource?: (resource: any) => void
   onResourceTrigger?: (resourceType: string, moduleId: number) => void
   onResourceGenerated?: (resources: Array<{ id: number; type: string; title: string }>) => void
+  onStreamingResource?: (resource: { id: number; type: string; title: string }, content: string) => void
   onRecommendations?: (data: any[]) => void
   onNeedConfirmation?: (message: string, taskBreakdown: any) => void
   onDone?: () => void
@@ -36,6 +41,18 @@ export function createSSEConnection(
           break
         case 'chunk':
           handlers.onChunk?.(data.content)
+          break
+        case 'stream_text':
+          handlers.onStreamText?.(data.content)
+          break
+        case 'resource_stream_text':
+          handlers.onResourceStreamText?.(data.resource_id, data.content)
+          break
+        case 'resource_stream_start':
+          handlers.onResourceStreamStart?.(data.content ? JSON.parse(data.content) : [])
+          break
+        case 'resource_stream_failed':
+          handlers.onResourceStreamFailed?.(data.resource_id)
           break
         case 'profile_update':
           handlers.onProfileUpdate?.(data.dimensions)
@@ -82,6 +99,9 @@ export function createSSEConnection(
         case 'resource_generated':
           handlers.onResourceGenerated?.(data.resources || [])
           break
+        case 'resource_stream_update':
+          handlers.onStreamingResource?.(data.resource, data.content)
+          break
       }
     } catch (e) {
       console.error('SSE parse error:', e)
@@ -94,7 +114,7 @@ export function createSSEConnection(
   }
 
   // Listen for custom event types (question, progress, done, error, etc.)
-  const customEvents = ['question', 'progress', 'profile_update', 'profile_complete', 'done', 'error', 'chunk', 'format_chunk', 'resource', 'resource_trigger', 'plan', 'modules']
+  const customEvents = ['question', 'progress', 'profile_update', 'profile_complete', 'done', 'error', 'chunk', 'format_chunk', 'resource', 'resource_trigger', 'plan', 'modules', 'resource_stream_start', 'resource_stream_text', 'resource_stream_failed']
   for (const eventType of customEvents) {
     source.addEventListener(eventType, (event: MessageEvent) => {
       handleSSEData(event.data)

@@ -129,7 +129,10 @@
             </svg>
           </div>
           <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
-            <div v-if="store.streamBuffer" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(store.streamBuffer)"></div>
+            <div v-if="store.streamBuffer" class="text-navy-700 leading-relaxed markdown-body">
+              <div>{{ store.streamBuffer }}<span class="inline-block w-0.5 h-4 bg-navy-400 ml-0.5 animate-pulse align-text-bottom"></span></div>
+            </div>
+            <!-- 加载动画 -->
             <div v-else class="flex gap-1.5 py-1">
               <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0s"></span>
               <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.15s"></span>

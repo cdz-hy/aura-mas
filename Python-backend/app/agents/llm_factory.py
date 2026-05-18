@@ -244,7 +244,10 @@ class MIMOClient:
                     usage = chunk.get("usage")
                     if usage:
                         last_usage = usage
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
                     # 思维链内容（reasoning_content）不对外输出，仅调试时记录
                     reasoning = delta.get("reasoning_content", "")
                     if reasoning:
@@ -269,6 +272,77 @@ class MIMOClient:
                 input_tokens=input_est,
                 output_tokens=self._estimate_tokens(accumulated),
             )
+
+    def chat_json_stream(
+        self,
+        messages: list,
+        on_chunk: Optional[Any] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        stream_field: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        流式生成 + 最终 JSON 解析。
+        每收到一个 token 时通过 on_chunk 回调实时推送原始 JSON 片段，
+        同时累积完整文本，流结束后解析为 JSON 返回。
+
+        stream_field: 如果指定，on_chunk 只接收该 JSON 字段的纯文本值（而非原始 JSON token）。
+                     例如 stream_field="response" 时，只流式推送 response 字段的内容。
+
+        不使用 response_format（避免 LLM 输出 ```json 包裹），依靠 prompt 约束。
+        """
+        logger = __import__('logging').getLogger("llm_factory")
+        accumulated = ""
+
+        # 流式字段提取状态
+        field_name = stream_field
+        in_field = False
+        field_escaped = False
+        field_buf = ""
+
+        for chunk in self.chat_stream(messages, temperature=temperature, max_tokens=max_tokens):
+            accumulated += chunk
+            if on_chunk:
+                try:
+                    if field_name:
+                        # 从原始 JSON token 中提取指定字段的纯文本值
+                        extracted = self._extract_field_stream(accumulated, field_name, in_field, field_escaped, field_buf)
+                        text_to_send, in_field, field_escaped, field_buf = extracted
+                        if text_to_send:
+                            on_chunk(text_to_send)
+                    else:
+                        on_chunk(chunk)
+                except Exception:
+                    pass
+
+        # 去除可能的 markdown 代码块包裹
+        raw = accumulated.strip()
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            # 去掉首行 ```json / ```
+            if lines[0].strip().startswith("```"):
+                lines = lines[1:]
+            # 去掉末尾 ```
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            raw = "\n".join(lines).strip()
+
+        result = self._parse_json(raw)
+        if result is not None:
+            return result
+
+        # 解析失败：重试（用 json 格式约束 + 低温度）
+        logger.warning(f"chat_json_stream: JSON 解析失败，使用 json_object 重试")
+        retry_messages = list(messages) + [
+            {"role": "user", "content": "你上次的回复不是合法的 JSON。请严格只输出合法的 JSON，不要包裹在代码块中。"}
+        ]
+        raw_retry = self.chat(retry_messages, temperature=0.0, max_tokens=max_tokens,
+                              response_format={"type": "json_object"})
+        result = self._parse_json(raw_retry)
+        if result is not None:
+            return result
+
+        raise Exception(f"chat_json_stream: JSON 解析失败（重试后仍失败）\n原始内容前500字符: {raw[:500]}")
 
     def chat_json(
         self,
@@ -375,6 +449,87 @@ class MIMOClient:
                     pass
 
         return None
+
+    @staticmethod
+    def _extract_field_stream(
+        accumulated: str, field: str, in_field: bool, field_escaped: bool, field_buf: str
+    ) -> tuple:
+        """
+        从不完整 JSON 中增量提取指定字段的纯文本值。
+        返回 (text_to_emit, new_in_field, new_field_escaped, new_field_buf)。
+        """
+        # 查找字段开始: "field": "
+        search = f'"{field}"'
+        if not in_field:
+            idx = accumulated.find(search)
+            if idx == -1:
+                return ("", False, False, "")
+            after = accumulated[idx + len(search):].lstrip()
+            if not after.startswith(':'):
+                return ("", False, False, "")
+            after = after[1:].lstrip()
+            if not after:
+                return ("", False, False, "")
+            if after[0] == '"':
+                in_field = True
+                field_escaped = False
+                field_buf = ""
+            else:
+                return ("", False, False, "")
+
+        # 在字段值内部，逐字符扫描累积文本找结束引号
+        # 重新定位字段值起始位置
+        search2 = f'"{field}"'
+        idx = accumulated.find(search2)
+        if idx == -1:
+            return ("", in_field, field_escaped, field_buf)
+        after_key = accumulated[idx + len(search2):].lstrip()
+        colon_pos = after_key.find(':')
+        if colon_pos == -1:
+            return ("", in_field, field_escaped, field_buf)
+        rest = after_key[colon_pos + 1:].lstrip()
+        if not rest or rest[0] != '"':
+            return ("", in_field, field_escaped, field_buf)
+
+        # 从引号后开始扫描
+        content = rest[1:]  # 跳过开头的 "
+        new_buf = ""
+        i = 0
+        while i < len(content):
+            ch = content[i]
+            if field_escaped:
+                field_escaped = False
+                # 处理转义字符
+                if ch == 'n':
+                    new_buf += '\n'
+                elif ch == 't':
+                    new_buf += '\t'
+                elif ch == 'r':
+                    pass
+                elif ch == '"':
+                    new_buf += '"'
+                elif ch == '\\':
+                    new_buf += '\\'
+                else:
+                    new_buf += '\\' + ch
+                i += 1
+                continue
+            if ch == '\\':
+                field_escaped = True
+                i += 1
+                continue
+            if ch == '"':
+                # 字段值结束
+                break
+            new_buf += ch
+            i += 1
+
+        # 只返回新增的文本
+        if len(new_buf) > len(field_buf):
+            delta = new_buf[len(field_buf):]
+            return (delta, True, field_escaped, new_buf)
+
+        return ("", in_field, field_escaped, field_buf)
 
     @staticmethod
     def _fix_common_json_errors(s: str) -> str:

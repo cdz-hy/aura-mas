@@ -137,7 +137,7 @@
     <!-- ==================== 中间栏：资源详情（始终在 DOM 中，width 过渡动画） ==================== -->
     <div
       class="resource-panel flex flex-col card overflow-hidden mx-2"
-      :class="{ 'resource-panel--closed': !selectedResource }"
+      :class="{ 'resource-panel--closed': !selectedResource && !showResourceStreamPreview }"
       :style="panelStyle"
     >
       <template v-if="selectedResource">
@@ -262,12 +262,34 @@
           </template>
         </div>
       </template>
+
+      <!-- 资源流式生成预览（生成过程中在中间面板实时显示多资源流） -->
+      <template v-if="showResourceStreamPreview && !selectedResource">
+        <div class="px-4 py-3 border-b border-navy-100/50 flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <h3 class="font-display text-sm font-semibold text-navy-800">正在生成 {{ Object.keys(chatStore.resourceStreamBuffers).length }} 个资源...</h3>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-6">
+          <div v-for="placeholder in chatStore.streamingPlaceholders" :key="placeholder.id" class="space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span class="text-xs font-medium text-navy-600">{{ placeholder.title }}</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded-full" :class="badgeClass(placeholder.type)">
+                {{ typeLabels[placeholder.type] || placeholder.type }}
+              </span>
+            </div>
+            <div v-if="chatStore.resourceStreamBuffers[placeholder.id]" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(chatStore.resourceStreamBuffers[placeholder.id])"></div>
+            <div v-else class="text-xs text-navy-400 animate-pulse">等待生成...</div>
+          </div>
+          <span class="inline-block w-0.5 h-4 bg-navy-400 ml-0.5 animate-pulse align-text-bottom"></span>
+        </div>
+      </template>
     </div>
 
     <!-- 拖拽分隔线（始终在 DOM 中，width 过渡动画） -->
     <div
       class="resource-divider flex-shrink-0 flex items-center justify-center cursor-col-resize group"
-      :class="{ 'resource-divider--closed': !selectedResource, 'w-2': isDragging, 'w-1.5': !isDragging }"
+      :class="{ 'resource-divider--closed': !selectedResource && !showResourceStreamPreview, 'w-2': isDragging, 'w-1.5': !isDragging }"
       @mousedown="onDividerMouseDown"
     >
       <div class="w-0.5 h-8 rounded-full transition-colors" :class="isDragging ? 'bg-navy-400' : 'bg-navy-200 group-hover:bg-navy-400'"></div>
@@ -544,11 +566,14 @@ const isDragging = ref(false)
 
 // 中间面板的宽度样式（包含关闭态：width=0，由 CSS transition 驱动动画）
 const panelStyle = computed(() => {
-  if (!selectedResource.value) {
+  if (!selectedResource.value && !showResourceStreamPreview.value) {
     return { width: '0px', minWidth: '0px', marginLeft: '0px', marginRight: '0px' }
   }
   return { width: panelWidth.value + 'px', minWidth: '280px' }
 })
+
+// 是否显示资源流式生成预览（中间面板）
+const showResourceStreamPreview = computed(() => chatStore.isResourceStreaming && Object.keys(chatStore.resourceStreamBuffers).length > 0)
 
 interface DragState {
   containerLeft: number
@@ -619,7 +644,9 @@ function endDrag() {
 
 function onDividerMouseUp() { endDrag() }
 
+let refreshTimer: ReturnType<typeof setInterval> | null = null
 onUnmounted(() => {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
   if (dragState) {
     if (dragState.rafId !== null) {
       cancelAnimationFrame(dragState.rafId)
@@ -690,7 +717,7 @@ const modules = computed(() => {
     if (!moduleMap.has(r.moduleOrder)) {
       moduleMap.set(r.moduleOrder, {
         order: r.moduleOrder,
-        title: r.moduleData?.module_title || `模块 ${r.moduleOrder}`,
+        title: r.moduleData?.module_title || r.moduleData?.title || `模块 ${r.moduleOrder}`,
         estimatedHours: r.moduleData?.estimated_hours || 2,
         resourceTypes: [],
         resources: [],
@@ -1104,6 +1131,81 @@ watch(() => chatStore.lastGeneratedResources, async (resList) => {
   chatStore.lastGeneratedResources = null
 })
 
+// 监听流式资源更新 — 即时添加到侧栏
+watch(() => chatStore.streamingResources.length, () => {
+  const items = chatStore.streamingResources
+  if (!items.length) return
+  for (const { resource, content } of items) {
+    if (resources.value.some(existing => existing.id === resource.id)) continue
+    const newRes: LearningResource = {
+      id: resource.id,
+      planId,
+      parentId: null,
+      moduleOrder: resources.value.length > 0
+        ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1,
+      moduleType: resource.type || 'document',
+      moduleData: { title: resource.title, content },
+      status: 2,
+      storagePath: null,
+      generatedByAgent: 'content_orchestrator',
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    resources.value.push(newRes)
+    toggleResource(newRes)
+  }
+  chatStore.streamingResources = []
+  chatStore.isResourceStreaming = false
+})
+
+// 监听占位符创建 — 在侧栏立即显示 status=1 的占位条目
+watch(() => chatStore.streamingPlaceholders, (placeholders) => {
+  if (!placeholders.length) return
+  for (const p of placeholders) {
+    // 跳过已存在的资源
+    if (resources.value.some(r => r.id === p.id)) continue
+    const placeholderRes: LearningResource = {
+      id: p.id,
+      planId,
+      parentId: null,
+      moduleOrder: resources.value.length > 0
+        ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1,
+      moduleType: p.type || 'document',
+      moduleData: { title: p.title, content: '' },
+      status: 1,
+      storagePath: null,
+      generatedByAgent: 'content_orchestrator',
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    resources.value.push(placeholderRes)
+  }
+  // 自动选中第一个占位资源以在中间面板显示流式内容
+  if (placeholders.length > 0 && !selectedResource.value) {
+    const firstPlaceholder = resources.value.find(r => r.id === placeholders[0].id)
+    if (firstPlaceholder) {
+      selectedResourceId.value = firstPlaceholder.id
+      selectedResource.value = firstPlaceholder
+      const modIdx = modules.value.findIndex(m => m.resources.some(r => r.id === firstPlaceholder.id))
+      if (modIdx >= 0) selectedModuleIndex.value = modIdx
+    }
+  }
+}, { deep: true })
+
+// 监听多资源流式缓冲 — 实时更新侧栏资源内容
+watch(() => chatStore.resourceStreamBuffers, (buffers) => {
+  for (const [resIdStr, content] of Object.entries(buffers)) {
+    const resId = Number(resIdStr)
+    if (!content) continue
+    const existing = resources.value.find(r => r.id === resId)
+    if (existing) {
+      existing.moduleData = { ...existing.moduleData, content }
+    }
+  }
+}, { deep: true })
+
 // ==================== 滚动 ====================
 
 function scrollToBottom() {
@@ -1293,6 +1395,46 @@ onMounted(async () => {
   if (!chatStore.activeSessionId && chatStore.sessions.length > 0) {
     await chatStore.selectSession(chatStore.sessions[0].sessionId)
   }
+
+  // 定期检查后端是否在生成资源（页面刷新后 SSE 断开时，通过轮询补偿）
+  // 后端线程仍在运行并保存资源，前端通过轮询发现新资源并加载
+  const startPolling = () => {
+    if (refreshTimer) return
+    refreshTimer = setInterval(async () => {
+      if (chatStore.streaming) return // SSE 活跃时不轮询
+      try {
+        const res = await getPlanResources(planId)
+        const dbResources = res.data || []
+        parseModuleData(dbResources)
+        // 检测新增资源
+        const existingIds = new Set(resources.value.map(r => r.id))
+        const newOnes = dbResources.filter((r: LearningResource) => !existingIds.has(r.id))
+        if (newOnes.length) {
+          resources.value.push(...newOnes)
+          toggleResource(newOnes[0])
+        }
+        // 没有"生成中"状态的资源时停止轮询
+        const hasGenerating = dbResources.some((r: LearningResource) => r.status === 1)
+        if (!hasGenerating && !chatStore.streaming) {
+          if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+        }
+      } catch { /* ignore */ }
+    }, 3000)
+  }
+  // 检查是否有生成中的资源需要轮询
+  if (resources.value.some(r => r.status === 1)) startPolling()
+  // 监听 streaming 状态变化：开始流式时停止轮询，结束时启动轮询
+  watch(() => chatStore.streaming, (isStreaming) => {
+    if (isStreaming) {
+      if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+    } else {
+      startPolling()
+      // 流式结束后再轮询一轮就停止
+      setTimeout(() => {
+        if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+      }, 10000)
+    }
+  })
 })
 </script>
 
