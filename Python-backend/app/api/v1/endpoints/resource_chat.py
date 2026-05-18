@@ -22,6 +22,7 @@ from app.graph.learning_graph import get_learning_graph
 from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR
 from app.prompts import QUIZ_GRADER_PROMPT
 from app.agents.profile_maintainer import profile_maintainer_node
+from app.agents.conversation_compressor import build_chat_history_with_context, async_compress_and_save
 from app.schemas.sse_bridge import graph_step_to_sse
 from app.utils.profile_utils import ensure_learning_behavior_fields
 from app.utils.token_recorder import record_from_mimo
@@ -86,17 +87,15 @@ async def plan_chat(
     except Exception:
         pass
 
-    # 获取对话历史（按当前会话隔离）
+    # 获取对话历史（按当前会话隔离，多取以支持压缩上下文）
     chat_history = []
+    raw_history = []
     try:
-        history = java_client.get_dialogue_history(
-            user_id=user_id, plan_id=plan_id_int, session_id=session_id, limit=30
+        raw_history = java_client.get_dialogue_history(
+            user_id=user_id, plan_id=plan_id_int, session_id=session_id, limit=200
         )
-        for h in history:
-            chat_history.append({
-                "role": "user" if h.get("dialogueType") == "USER" else "assistant",
-                "content": h.get("conversationText", ""),
-            })
+        # 使用压缩上下文构建 chat_history（压缩摘要 + context 之后的所有实际对话）
+        chat_history = build_chat_history_with_context(raw_history)
     except Exception:
         pass
 
@@ -346,6 +345,13 @@ async def plan_chat(
 
             if bg_state["generated_resource_info"]:
                 _async_profile_maintenance_sync(user_id, message, chat_history, user_profile)
+
+            # 会话压缩任务（异步后台，不阻塞响应）
+            asyncio.create_task(async_compress_and_save(
+                user_id=user_id,
+                session_id=session_id,
+                plan_id=plan_id_int,
+            ))
 
             bg_state["events"].append(
                 f'data: {json.dumps({"type": "resource_generated", "resources": bg_state["generated_resource_info"]}, ensure_ascii=False)}\n\n'
