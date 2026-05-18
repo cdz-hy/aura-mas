@@ -346,12 +346,12 @@ async def plan_chat(
             if bg_state["generated_resource_info"]:
                 _async_profile_maintenance_sync(user_id, message, chat_history, user_profile)
 
-            # 会话压缩任务（异步后台，不阻塞响应）
-            asyncio.create_task(async_compress_and_save(
+            # 会话压缩任务（后台线程，不阻塞响应）
+            threading.Thread(target=lambda: asyncio.run(async_compress_and_save(
                 user_id=user_id,
                 session_id=session_id,
                 plan_id=plan_id_int,
-            ))
+            )), daemon=True).start()
 
             bg_state["events"].append(
                 f'data: {json.dumps({"type": "resource_generated", "resources": bg_state["generated_resource_info"]}, ensure_ascii=False)}\n\n'
