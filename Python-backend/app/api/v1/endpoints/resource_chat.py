@@ -317,7 +317,7 @@ async def plan_chat(
                                             mod = unpassed[idx] if idx < len(unpassed) else {}
                                             bg_state["generated_resource_info"].append({
                                                 "id": rid,
-                                                "type": mod.get("module_type", "document"),
+                                                "type": _normalize_module_type(mod.get("module_type", "text")),
                                                 "title": mod.get("title", f"模块 {idx + 1}"),
                                             })
                                             bg_state["saved_module_orders"].add(mod.get("module_order"))
@@ -418,7 +418,7 @@ async def plan_chat(
                 "module_id": gc.get("module_id", 1),
                 "title": gc.get("title", ""),
                 "content": gc.get("content", ""),
-                "module_type": gc.get("content_type", "text"),
+                "module_type": _normalize_module_type(gc.get("content_type", "text")),
                 "key_points": gc.get("key_points", []),
                 "images": gc.get("images", []),
                 "description": message,
@@ -440,15 +440,11 @@ async def plan_chat(
                     mod = new_modules[idx] if idx < len(new_modules) else {}
                     bs["generated_resource_info"].append({
                         "id": rid,
-                        "type": mod.get("module_type", "document"),
+                        "type": _normalize_module_type(mod.get("module_type", "text")),
                         "title": mod.get("title", f"模块 {idx + 1}"),
                     })
                     bs["saved_module_orders"].add(mod.get("module_order"))
                 logger.info(f"[资源持久化] 保存 {len(new_modules)} 个新增模块")
-            if parsed_breakdown and bs["generated_resource_info"]:
-                all_ids = [r["id"] for r in bs["generated_resource_info"] if r.get("id")]
-                if all_ids:
-                    _save_breakdown_dialogue(user_id, session_id, plan_id_int, parsed_breakdown, all_ids)
 
         # 网络搜索资源（无 task_breakdown 流程）：直接从 module_list 保存
         if not bs["breakdown_confirmed"] and bs["module_list"] and plan_id_int:
@@ -460,7 +456,7 @@ async def plan_chat(
                     mod = new_modules[idx] if idx < len(new_modules) else {}
                     bs["generated_resource_info"].append({
                         "id": rid,
-                        "type": mod.get("module_type", "document"),
+                        "type": _normalize_module_type(mod.get("module_type", "text")),
                         "title": mod.get("title", f"模块 {idx + 1}"),
                     })
                     bs["saved_module_orders"].add(mod.get("module_order"))
@@ -514,7 +510,7 @@ async def generate_single_resource(
     ticket: str = Query(..., description="Java 后端签发的短期 Ticket"),
     plan_id: str = Query(..., description="学习计划 ID"),
     module_id: str = Query(..., description="模块 ID"),
-    type: str = Query("document", description="资源类型: document/mindmap/quiz/code/summary"),
+    type: str = Query("text", description="资源类型: text/mindmap/quiz/code/summary"),
     title: str = Query("", description="模块标题"),
     description: str = Query("", description="模块描述"),
     session_id: str = Query("", description="会话 ID（前端传入，为空时自动生成）"),
@@ -771,7 +767,7 @@ async def generate_single_resource(
                     "module_id": gc.get("module_id", 1),
                     "title": gc.get("title", ""),
                     "content": gc.get("content", ""),
-                    "module_type": gc.get("content_type", "text"),
+                    "module_type": _normalize_module_type(gc.get("content_type", "text")),
                     "key_points": gc.get("key_points", []),
                     "images": gc.get("images", []),
                     "description": description,
@@ -1119,7 +1115,7 @@ def _build_resource_summary(module_list: list, quiz_questions: list = None, orch
     parts = []
     if module_list:
         titles = [m.get("title", "") for m in module_list if m.get("title")]
-        types = list({m.get("module_type", "document") for m in module_list})
+        types = list({_normalize_module_type(m.get("module_type", "text")) for m in module_list})
         type_label = "/".join(types)
         parts.append(f"已生成 {len(module_list)} 个{type_label}类型学习模块：{'、'.join(titles)}")
     if quiz_questions:
@@ -1407,6 +1403,20 @@ def _async_profile_maintenance_sync(
         logger.error(f"[画像维护] 更新失败: {str(e)}", exc_info=True)
 
 
+VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap"}
+
+
+def _normalize_module_type(module_type: str) -> str:
+    """将 LLM 输出的 module_type 归一化为前端支持的类型"""
+    if not module_type:
+        return "text"
+    mt = module_type.strip().lower()
+    if mt in VALID_MODULE_TYPES:
+        return mt
+    # document/mixed/其他未知类型 -> text
+    return "text"
+
+
 def _soft_delete_breakdown_dialogue(user_id: int, session_id: str, plan_id: int):
     """软删除该会话中之前的 task_breakdown 对话记录"""
     try:
@@ -1502,10 +1512,10 @@ def _create_placeholder_resources(plan_id: int, modules: list) -> dict:
 
         for i, mod in enumerate(modules):
             module_order = mod.get("module_order", i + 1)
-            module_type = "document"
+            module_type = "text"
             resources = mod.get("resources", [])
             if resources:
-                module_type = resources[0].get("resource_type", "document")
+                module_type = _normalize_module_type(resources[0].get("resource_type", "text"))
             title = mod.get("title", f"模块 {module_order}")
             module_data = {
                 "title": title,
@@ -1553,7 +1563,7 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
             # 使用模块自身的 module_order，而不是 enumerate 的索引
             module_order_in_list = mod.get("module_order", 0)
             
-            module_type = mod.get("module_type", "document")
+            module_type = _normalize_module_type(mod.get("module_type", "text"))
             module_data = {
                 "title": mod.get("title", f"模块 {module_order_in_list}"),
                 "content": mod.get("content", ""),
@@ -1592,7 +1602,7 @@ def _save_module_immediately(plan_id: int, module: dict) -> dict | None:
         existing = java_client.get_plan_resources(plan_id)
         max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
         module_order = module.get("module_order", 0)
-        module_type = module.get("module_type", "document")
+        module_type = _normalize_module_type(module.get("module_type", "text"))
         module_data = {
             "title": module.get("title", f"模块 {module_order}"),
             "content": module.get("content", ""),

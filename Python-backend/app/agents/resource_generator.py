@@ -167,6 +167,9 @@ def _generate_single_module(
     module_title = module_info.get("title", f"模块 {module_order}")
     module_desc = module_info.get("description", "")
     topic = f"{module_title}: {module_desc}" if module_desc else module_title
+    # 将学习目标作为上下文前缀，确保搜索查询不丢失原始主题限定词
+    if learning_goal and learning_goal not in topic:
+        topic = f"{learning_goal} - {topic}"
 
     logger.info(f"  [资源生成] 模块{module_order} 开始: {module_title}")
 

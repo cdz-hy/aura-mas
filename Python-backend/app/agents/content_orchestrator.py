@@ -16,6 +16,22 @@ from app.agents.llm_factory import get_content_orchestrator_llm
 from app.prompts import CONTENT_ORCHESTRATOR_BATCH_PROMPT, CONTENT_ORCHESTRATOR_PARALLEL_PROMPT
 from app.utils.token_recorder import record
 
+VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap"}
+
+
+def _normalize_module_type(module_type: str) -> str:
+    if not module_type:
+        return "text"
+    mt = module_type.strip().lower()
+    return mt if mt in VALID_MODULE_TYPES else "text"
+
+
+def _normalize_modules(modules: list) -> list:
+    for m in modules:
+        if "module_type" in m:
+            m["module_type"] = _normalize_module_type(m["module_type"])
+    return modules
+
 
 def _emit(state: dict, event_type: str, content: str):
     """通过 sse_callback 实时推送 SSE 事件"""
@@ -294,10 +310,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                     _generate_single_module,
                     module_info,
                     module_id,
-                    rag_chunks,
-                    user_profile,
                     learning_goal,
-                    chat_history,
+                    user_profile,
                     sse_cb,
                     res_id,
                 )
@@ -331,7 +345,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             
             # 按 module_order 排序
             final_modules.sort(key=lambda x: x.get("module_order", 0))
-            
+            _normalize_modules(final_modules)
+
             # 构造完整结果
             orchestrated_content = {
                 "title": task_breakdown.get("title", learning_goal),
@@ -425,10 +440,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                     _generate_single_module,
                     module,
                     module_order,
-                    rag_chunks,
-                    user_profile,
                     learning_goal,
-                    chat_history,
+                    user_profile,
                     sse_cb,
                     res_id,
                 )
@@ -461,7 +474,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             
             # 按 module_order 排序
             modules_list.sort(key=lambda x: x.get("module_order", 0))
-            
+            _normalize_modules(modules_list)
+
             # 构造完整结果
             orchestrated_content = {
                 "title": task_breakdown.get("title", learning_goal),
@@ -614,6 +628,7 @@ def _batch_orchestration(
         logger.info(f"  [内容编排智能体] 正在调用 LLM 进行批量编排...")
         result = llm.chat_json(messages, max_tokens=16384)
         modules_list = result.get("modules", [])
+        _normalize_modules(modules_list)
 
         logger.info(f"  [内容编排智能体] 批量编排完成!")
         logger.info(f"    标题: {result.get('title', '未命名')}")
