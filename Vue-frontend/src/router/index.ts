@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionStore } from '@/stores/permission'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -16,69 +17,10 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/',
+    name: 'Root',
     component: () => import('@/components/layout/AppLayout.vue'),
     meta: { requiresAuth: true },
-    children: [
-      { path: '', redirect: '/dashboard' },
-      {
-        path: 'dashboard',
-        name: 'Dashboard',
-        component: () => import('@/views/DashboardView.vue'),
-      },
-      {
-        path: 'plan/create',
-        name: 'PlanList',
-        component: () => import('@/views/PlanListView.vue'),
-      },
-      {
-        path: 'plan/:id',
-        name: 'PlanDetail',
-        component: () => import('@/views/PlanDetailView.vue'),
-        props: true,
-      },
-      {
-        path: 'notes',
-        name: 'Notes',
-        component: () => import('@/views/NoteListView.vue'),
-      },
-      {
-        path: 'notes/:id',
-        name: 'NoteDetail',
-        component: () => import('@/views/NoteDetailView.vue'),
-        props: true,
-      },
-      {
-        path: 'profile',
-        name: 'Profile',
-        component: () => import('@/views/ProfileView.vue'),
-      },
-      {
-        path: 'settings',
-        name: 'UserSettings',
-        component: () => import('@/views/UserSettingsView.vue'),
-      },
-      {
-        path: 'admin',
-        meta: { requiresRole: 'admin' },
-        children: [
-          {
-            path: '',
-            name: 'AdminDashboard',
-            component: () => import('@/views/admin/AdminDashboard.vue'),
-          },
-          {
-            path: 'kb',
-            name: 'KBManagement',
-            component: () => import('@/views/admin/KBManagement.vue'),
-          },
-          {
-            path: 'users',
-            name: 'UserManagement',
-            component: () => import('@/views/admin/UserManagement.vue'),
-          },
-        ],
-      },
-    ],
+    children: [],
   },
 ]
 
@@ -87,18 +29,32 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
+  const permissionStore = usePermissionStore()
+
+  if (to.meta.guest && authStore.isLoggedIn) {
+    next(authStore.homeRoute)
+    return
+  }
 
   if (to.meta.requiresAuth && !authStore.isLoggedIn) {
-    next('/login')
-  } else if (to.meta.guest && authStore.isLoggedIn) {
-    next('/dashboard')
-  } else if (to.meta.requiresRole && authStore.user?.role !== to.meta.requiresRole) {
-    next('/dashboard')
-  } else {
-    next()
+    next({ name: 'Login', query: { redirect: to.fullPath } })
+    return
   }
+
+  if (authStore.isLoggedIn && !permissionStore.routesAdded) {
+    const restored = permissionStore.restoreMenus()
+    if (!restored) {
+      authStore.logout()
+      next('/login')
+      return
+    }
+    next({ ...to, replace: true })
+    return
+  }
+
+  next()
 })
 
 export default router

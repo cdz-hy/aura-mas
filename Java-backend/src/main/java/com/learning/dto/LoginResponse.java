@@ -3,12 +3,15 @@ package com.learning.dto;
 import lombok.Builder;
 import lombok.Data;
 
+import java.util.List;
+
 @Data
 @Builder
 public class LoginResponse {
 
     private String token;
-    private UserDTO user;
+    private LoginResponse.UserDTO user;
+    private List<MenuNode> menus;
 
     @Data
     @Builder

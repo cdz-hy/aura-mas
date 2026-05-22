@@ -97,7 +97,7 @@ async function handleLogin() {
   error.value = ''
   try {
     await authStore.login(form.value)
-    router.push('/dashboard')
+    router.push(authStore.homeRoute)
   } catch (e: any) {
     error.value = e.message || '登录失败，请检查账号密码'
   } finally {

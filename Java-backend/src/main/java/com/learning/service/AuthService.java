@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.learning.common.ErrorCode;
 import com.learning.dto.LoginRequest;
 import com.learning.dto.LoginResponse;
+import com.learning.dto.MenuNode;
 import com.learning.dto.RegisterRequest;
 import com.learning.entity.User;
 import com.learning.exception.BusinessException;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -23,6 +25,7 @@ public class AuthService {
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
+    private final MenuService menuService;
 
     @Transactional
     public LoginResponse register(RegisterRequest request) {
@@ -43,17 +46,12 @@ public class AuthService {
         userMapper.insert(user);
 
         String token = jwtTokenProvider.generateToken(user.getId(), user.getLoginName(), user.getRole());
+        List<MenuNode> menus = menuService.getMenuTreeByRole(user.getRole());
 
         return LoginResponse.builder()
                 .token(token)
-                .user(LoginResponse.UserDTO.builder()
-                        .id(user.getId())
-                        .loginName(user.getLoginName())
-                        .nickname(user.getNickname())
-                        .email(user.getEmail())
-                        .avatarUrl(user.getAvatarUrl())
-                        .role(user.getRole())
-                        .build())
+                .user(buildUserDTO(user))
+                .menus(menus)
                 .build();
     }
 
@@ -77,17 +75,23 @@ public class AuthService {
         userMapper.updateById(user);
 
         String token = jwtTokenProvider.generateToken(user.getId(), user.getLoginName(), user.getRole());
+        List<MenuNode> menus = menuService.getMenuTreeByRole(user.getRole());
 
         return LoginResponse.builder()
                 .token(token)
-                .user(LoginResponse.UserDTO.builder()
-                        .id(user.getId())
-                        .loginName(user.getLoginName())
-                        .nickname(user.getNickname())
-                        .email(user.getEmail())
-                        .avatarUrl(user.getAvatarUrl())
-                        .role(user.getRole())
-                        .build())
+                .user(buildUserDTO(user))
+                .menus(menus)
+                .build();
+    }
+
+    private LoginResponse.UserDTO buildUserDTO(User user) {
+        return LoginResponse.UserDTO.builder()
+                .id(user.getId())
+                .loginName(user.getLoginName())
+                .nickname(user.getNickname())
+                .email(user.getEmail())
+                .avatarUrl(user.getAvatarUrl())
+                .role(user.getRole())
                 .build();
     }
 }

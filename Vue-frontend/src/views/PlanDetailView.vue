@@ -1423,13 +1423,25 @@ onMounted(async () => {
   }
   // 检查是否有生成中的资源需要轮询
   if (resources.value.some(r => r.status === 1)) startPolling()
-  // 监听 streaming 状态变化：开始流式时停止轮询，结束时启动轮询
-  watch(() => chatStore.streaming, (isStreaming) => {
+  // 监听 streaming 状态变化：开始流式时停止轮询，结束时静默刷新 + 启动轮询
+  watch(() => chatStore.streaming, async (isStreaming) => {
     if (isStreaming) {
       if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
     } else {
+      // 流式结束后立即静默刷新：用后端最终数据替换本地流式拼接内容，修复 markdown/LaTeX 渲染问题
+      try {
+        const res = await getPlanResources(planId)
+        const dbResources: LearningResource[] = res.data || []
+        parseModuleData(dbResources)
+        // 用后端数据全量替换本地资源列表（保留用户当前选中状态）
+        const selectedId = selectedResource.value?.id
+        resources.value = dbResources
+        if (selectedId) {
+          const match = dbResources.find((r: LearningResource) => r.id === selectedId)
+          if (match) selectedResource.value = match
+        }
+      } catch { /* ignore */ }
       startPolling()
-      // 流式结束后再轮询一轮就停止
       setTimeout(() => {
         if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
       }, 10000)
