@@ -26,7 +26,7 @@ from app.agents.conversation_compressor import build_chat_history_with_context, 
 from app.schemas.sse_bridge import graph_step_to_sse
 from app.utils.profile_utils import ensure_learning_behavior_fields
 from app.utils.token_recorder import record_from_mimo
-from app.services.stream_state import update_stream_text, mark_stream_done, mark_stream_error
+from app.services.stream_state import update_stream_text, mark_stream_done, mark_stream_error, request_stop, check_stop, clear_stop
 
 logger = logging.getLogger("api.resource_chat")
 router = APIRouter()
@@ -224,6 +224,13 @@ async def plan_chat(
                 graph = get_learning_graph()
                 logger.info(f"[对话流] 图执行开始 (线程: {threading.current_thread().name})")
                 async for event in graph.astream(initial_state, stream_mode="updates"):
+                    # 检查停止信号
+                    if check_stop(session_id):
+                        logger.info(f"[对话流] 会话 {session_id} 收到停止信号，终止执行")
+                        bg_state["events"].append(
+                            f'data: {json.dumps({"type": "done", "stopped": True}, ensure_ascii=False)}\n\n'
+                        )
+                        return
                     for node_name, node_output in event.items():
                         logger.info(f"[对话流] 节点完成: {node_name}, sse_callback队列长度: {len(bg_state['events'])}")
                         if node_output is None:
@@ -386,10 +393,27 @@ async def plan_chat(
                                    bg_state["ai_response_parts"], user_id, session_id, plan_id_int)
 
         finally:
+            was_stopped = check_stop(session_id)
             bg_state["finished"] = True
             mark_stream_done(session_id)
-            _save_plain_text_reply(bg_state["breakdown_confirmed"], bg_state["generated_resource_info"],
-                                   bg_state["ai_response_parts"], user_id, session_id, plan_id_int)
+            clear_stop(session_id)
+
+            # 如果是用户主动停止，记录对话说明
+            if was_stopped:
+                try:
+                    java_client.create_dialogue(
+                        user_id=user_id,
+                        session_id=session_id,
+                        conversation_text="（用户已主动停止生成）",
+                        dialogue_type="AI",
+                        intent_type="stopped",
+                        plan_id=plan_id_int,
+                    )
+                except Exception:
+                    pass
+            else:
+                _save_plain_text_reply(bg_state["breakdown_confirmed"], bg_state["generated_resource_info"],
+                                       bg_state["ai_response_parts"], user_id, session_id, plan_id_int)
 
     # 启动独立线程执行图工作流（不阻塞事件循环，SSE 可实时推送）
     threading.Thread(target=_run_graph_sync, daemon=True).start()
@@ -1673,3 +1697,26 @@ async def get_stream_state(
     if state is None:
         return {"data": None}
     return {"data": state}
+
+
+@router.post("/stop")
+async def stop_generation(
+    session_id: str = Query(..., description="会话 ID"),
+    plan_id: str = Query("", description="学习计划 ID"),
+):
+    """
+    停止指定会话的流式处理
+    前端调用后，后台线程会在下一个节点边界检查到停止信号并终止
+    """
+    request_stop(session_id)
+    logger.info(f"[停止] 会话 {session_id} 收到停止请求")
+
+    # 记录一条对话说明用户主动停止
+    try:
+        plan_id_int = int(plan_id) if plan_id and plan_id.isdigit() else None
+        # 从 ticket 获取 user_id（这里简化处理，直接用 session 关联的 user）
+        # 由于没有 ticket，暂时只记录到缓存，实际保存由后台线程完成
+    except Exception:
+        pass
+
+    return {"data": {"status": "stop_requested"}}

@@ -49,3 +49,17 @@ export async function getStreamState(sessionId: string): Promise<StreamState | n
     return null
   }
 }
+
+/**
+ * 请求停止指定会话的流式处理
+ * 调用后后端会在下一个节点边界终止执行
+ */
+export async function requestStopGeneration(sessionId: string, planId: string): Promise<void> {
+  try {
+    await fetch(`${PYTHON_AI_BASE}/api/ai/stop?session_id=${encodeURIComponent(sessionId)}&plan_id=${encodeURIComponent(planId)}`, {
+      method: 'POST',
+    })
+  } catch {
+    // 忽略错误，前端已准备断开 SSE
+  }
+}

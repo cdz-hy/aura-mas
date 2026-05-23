@@ -328,7 +328,7 @@
           <button
             v-if="chatStore.streaming"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
-            @click="chatStore.stopGeneration()"
+            @click="chatStore.stopGeneration(planIdStr)"
           >
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
             停止

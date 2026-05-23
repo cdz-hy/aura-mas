@@ -1,5 +1,5 @@
 """
-流式状态缓存 - 用于刷新后恢复流式输出动画
+流式状态缓存 - 用于刷新后恢复流式输出动画和停止信号
 内存级缓存，按 session_id 存储当前流式文本和状态
 """
 import threading
@@ -11,6 +11,10 @@ logger = logging.getLogger("stream_state")
 # 内存缓存：session_id -> {text, is_streaming, last_update, source}
 _cache: dict[str, dict] = {}
 _lock = threading.Lock()
+
+# 停止信号集合：用户主动停止的 session_id
+_stop_signals: set[str] = set()
+_stop_lock = threading.Lock()
 
 # 缓存过期时间（秒）：流式结束后保留一段时间供客户端恢复
 EXPIRE_SECONDS = 300  # 5 分钟
@@ -64,6 +68,27 @@ def get_stream_state(session_id: str) -> dict | None:
             "source": state.get("source", "chat"),
             "error": state.get("error"),
         }
+
+
+# ─── 停止信号管理 ───
+
+def request_stop(session_id: str):
+    """请求停止指定会话的流式处理"""
+    with _stop_lock:
+        _stop_signals.add(session_id)
+        logger.info(f"[停止信号] 会话 {session_id} 请求停止")
+
+
+def check_stop(session_id: str) -> bool:
+    """检查会话是否被请求停止（供后台线程调用）"""
+    with _stop_lock:
+        return session_id in _stop_signals
+
+
+def clear_stop(session_id: str):
+    """清除停止信号（处理完成后调用）"""
+    with _stop_lock:
+        _stop_signals.discard(session_id)
 
 
 def cleanup_expired():

@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { createSSEConnection, cancelSSE } from '@/utils/sse'
 import { issueTicket } from '@/api/auth'
-import { getSessions, getSessionMessages, getDialogueHistoryByPlan, deleteSession as apiDeleteSession, getStreamState } from '@/api/chat'
+import { getSessions, getSessionMessages, getDialogueHistoryByPlan, deleteSession as apiDeleteSession, getStreamState, requestStopGeneration } from '@/api/chat'
 import type { ChatSession, ChatMessage } from '@/types/chat'
 
 const moduleTypeLabels: Record<string, string> = {
@@ -592,22 +592,37 @@ export const useChatStore = defineStore('chat', () => {
     await sendMessage(message, planId, extra)
   }
 
-  function stopGeneration() {
+  async function stopGeneration(planId?: string) {
     const sessionId = activeSessionId.value
+    if (!sessionId) return
+
+    // 通知后端停止处理
+    if (planId) {
+      requestStopGeneration(sessionId, planId)
+    }
+
+    // 断开 SSE 连接
     const sse = activeSSEs.get(sessionId)
     if (sse) {
       cancelSSE(sse)
       activeSSEs.delete(sessionId)
     }
+
+    // 保存已有的流式文本
     if (streamBuffer.value) {
       messages.value.push({ role: 'assistant', content: streamBuffer.value })
       streamBuffer.value = ''
     }
+
+    // 更新状态
     streaming.value = false
     resourceStreamBuffers.value = {}
     streamingPlaceholders.value = []
     isResourceStreaming.value = false
     sessionStreams.delete(sessionId)
+
+    // 添加用户停止提示
+    messages.value.push({ role: 'assistant', content: '（已停止生成）' })
   }
 
   async function requestSupplementaryResource(
