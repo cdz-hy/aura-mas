@@ -26,6 +26,7 @@ from app.agents.conversation_compressor import build_chat_history_with_context, 
 from app.schemas.sse_bridge import graph_step_to_sse
 from app.utils.profile_utils import ensure_learning_behavior_fields
 from app.utils.token_recorder import record_from_mimo
+from app.services.stream_state import update_stream_text, mark_stream_done, mark_stream_error
 
 logger = logging.getLogger("api.resource_chat")
 router = APIRouter()
@@ -216,6 +217,8 @@ async def plan_chat(
 
     def _run_graph_sync():
         """同步执行图工作流（在独立线程中运行，不阻塞事件循环）"""
+        # 标记流式开始（即使还没生成文本，前端也能检测到后端在处理）
+        update_stream_text(session_id, "", "chat")
         try:
             async def _run():
                 graph = get_learning_graph()
@@ -326,10 +329,15 @@ async def plan_chat(
                         for sse_data in graph_step_to_sse(node_name, node_output):
                             bg_state["events"].append(sse_data)
                             _persist_profile_update(sse_data, user_id)
-                            if '"chunk"' in sse_data:
+                            if '"chunk"' in sse_data or '"stream_text"' in sse_data:
                                 try:
                                     d = json.loads(sse_data.replace("data: ", "").strip())
-                                    bg_state["ai_response_parts"].append(d.get("content", ""))
+                                    content = d.get("content", "")
+                                    if content:
+                                        bg_state["ai_response_parts"].append(content)
+                                        # 更新流式状态缓存（供刷新后恢复）
+                                        accumulated = "".join(bg_state["ai_response_parts"])
+                                        update_stream_text(session_id, accumulated, "chat")
                                 except Exception:
                                     pass
 
@@ -364,6 +372,7 @@ async def plan_chat(
         except Exception as e:
             logger.error(f"[对话流] 后台图执行异常: {e}", exc_info=True)
             bg_state["error"] = str(e)
+            mark_stream_error(session_id, str(e))
             bg_state["events"].append(
                 f'data: {json.dumps({"type": "error", "content": str(e)}, ensure_ascii=False)}\n\n'
             )
@@ -378,6 +387,7 @@ async def plan_chat(
 
         finally:
             bg_state["finished"] = True
+            mark_stream_done(session_id)
             _save_plain_text_reply(bg_state["breakdown_confirmed"], bg_state["generated_resource_info"],
                                    bg_state["ai_response_parts"], user_id, session_id, plan_id_int)
 
@@ -1646,3 +1656,20 @@ def _save_resource_content(resource_id: int, orchestrated_content: dict = None, 
         logger.info(f"[资源持久化] 资源 {resource_id} 内容已保存")
     except Exception as e:
         logger.warning(f"[资源持久化] 保存失败: {e}")
+
+
+# ─── 流式状态查询端点（用于刷新后恢复流式动画） ───
+
+@router.get("/stream-state")
+async def get_stream_state(
+    session_id: str = Query(..., description="会话 ID"),
+):
+    """
+    查询当前会话的流式输出状态
+    前端刷新后轮询此端点，获取已累积的流式文本并恢复动画
+    """
+    from app.services.stream_state import get_stream_state as _get_state
+    state = _get_state(session_id)
+    if state is None:
+        return {"data": None}
+    return {"data": state}

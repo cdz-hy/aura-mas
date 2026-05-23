@@ -5,6 +5,7 @@
       :sessions="store.sessions"
       :active-session-id="store.activeSessionId"
       :loading="store.sessionsLoading"
+      :streaming-session-ids="store.streamingSessionIds"
       @new-session="store.newSession()"
       @select="store.selectSession($event)"
       @delete="store.deleteSession($event)"
@@ -241,10 +242,22 @@ function submitModification() {
   store.confirmBreakdown(planId, text)
 }
 
-onMounted(() => {
-  store.loadSessions(planId)
-  if (!store.activeSessionId) {
-    store.newSession()
+onMounted(async () => {
+  await store.loadSessions(planId)
+
+  // 刷新后恢复：先检查后端是否仍在处理
+  let isRecovering = false
+  if (store.activeSessionId) {
+    isRecovering = await store.recoverStreaming(planId)
+  }
+
+  // 如果后端没有在处理，正常加载消息
+  if (!isRecovering) {
+    if (!store.activeSessionId) {
+      store.newSession()
+    } else if (store.messages.length === 0) {
+      await store.selectSession(store.activeSessionId)
+    }
   }
 })
 </script>

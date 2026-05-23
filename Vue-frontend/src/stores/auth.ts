@@ -48,6 +48,10 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    // 清理持久化的会话状态
+    localStorage.removeItem('chat_activeSessionId')
+    localStorage.removeItem('chat_currentPlanId')
+    localStorage.removeItem('planCreate_activeSessionId')
   }
 
   function restoreSession() {
