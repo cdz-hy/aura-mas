@@ -2,6 +2,7 @@ package com.learning.controller;
 
 import com.learning.common.Result;
 import com.learning.service.StatsService;
+import com.learning.util.AuthUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -23,7 +24,7 @@ public class StatsController {
     @Operation(summary = "获取仪表盘统计数据")
     @GetMapping("/dashboard")
     public Result<Map<String, Object>> getDashboard(Authentication authentication) {
-        Long userId = (Long) authentication.getPrincipal();
+        Long userId = AuthUtils.getCurrentUserId(authentication);
         return Result.success(statsService.getDashboardStats(userId));
     }
 }

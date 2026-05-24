@@ -111,11 +111,14 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { getPlans } from '@/api/plan'
+import { getDashboardStats } from '@/api/stats'
+import type { DashboardStats } from '@/api/stats'
 import type { LearningPlan } from '@/types/plan'
 import dayjs from 'dayjs'
 
 const authStore = useAuthStore()
 const plans = ref<LearningPlan[]>([])
+const statsData = ref<DashboardStats | null>(null)
 
 const greeting = computed(() => {
   const h = new Date().getHours()
@@ -127,10 +130,10 @@ const greeting = computed(() => {
 })
 
 const stats = computed(() => [
-  { label: '学习计划', value: plans.value.length, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>', bgClass: 'bg-blue-50', iconClass: 'text-blue-500' },
-  { label: '已完成', value: plans.value.filter(p => p.status === 4).length, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', bgClass: 'bg-emerald-50', iconClass: 'text-emerald-500' },
-  { label: '学习资源', value: plans.value.length * 3, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', bgClass: 'bg-amber-50', iconClass: 'text-amber-500' },
-  { label: '学习时长', value: '12.5h', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', bgClass: 'bg-purple-50', iconClass: 'text-purple-500' },
+  { label: '学习计划', value: statsData.value?.totalPlans ?? plans.value.length, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>', bgClass: 'bg-blue-50', iconClass: 'text-blue-500' },
+  { label: '已完成', value: statsData.value?.completedPlans ?? plans.value.filter(p => p.status === 4).length, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', bgClass: 'bg-emerald-50', iconClass: 'text-emerald-500' },
+  { label: '学习资源', value: statsData.value?.totalResources ?? 0, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', bgClass: 'bg-amber-50', iconClass: 'text-amber-500' },
+  { label: '学习时长', value: statsData.value?.totalStudyHours != null ? `${statsData.value.totalStudyHours}h` : '--', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', bgClass: 'bg-purple-50', iconClass: 'text-purple-500' },
 ])
 
 const weekDays = [
@@ -165,8 +168,12 @@ function statusClass(status: number) {
 
 onMounted(async () => {
   try {
-    const res = await getPlans({ page: 1, size: 50 })
-    plans.value = res.data?.records || []
+    const [plansRes, statsRes] = await Promise.all([
+      getPlans({ page: 1, size: 50 }),
+      getDashboardStats().catch(() => null),
+    ])
+    plans.value = plansRes.data?.records || []
+    if (statsRes) statsData.value = statsRes.data
   } catch {
     // Use empty state
   }

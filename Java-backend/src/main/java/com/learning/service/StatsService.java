@@ -12,6 +12,7 @@ import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -84,6 +85,33 @@ public class StatsService {
                         .eq(UserLearningProgress::getUserId, userId)
                         .eq(UserLearningProgress::getStatus, 2));
         stats.put("completedResources", completedResources);
+
+        // 用户所有学习计划对应的学习资源总数
+        List<Long> planIds = planMapper.selectList(
+                new LambdaQueryWrapper<LearningPlan>()
+                        .select(LearningPlan::getId)
+                        .eq(LearningPlan::getUserId, userId))
+                .stream()
+                .map(LearningPlan::getId)
+                .collect(Collectors.toList());
+
+        long totalResources = 0;
+        if (!planIds.isEmpty()) {
+            totalResources = resourceMapper.selectCount(
+                    new LambdaQueryWrapper<LearningResource>()
+                            .in(LearningResource::getPlanId, planIds));
+        }
+        stats.put("totalResources", totalResources);
+
+        // 学习时长转为小时
+        double totalStudyHours = totalSeconds / 3600.0;
+        stats.put("totalStudyHours", Math.round(totalStudyHours * 10) / 10.0);
+
+        // 答题正确率
+        double quizAccuracy = quizCount > 0
+                ? Math.round((double) correctQuizCount / quizCount * 1000) / 10.0
+                : 0;
+        stats.put("quizAccuracy", quizAccuracy);
 
         return stats;
     }
