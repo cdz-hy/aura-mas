@@ -173,7 +173,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted } from 'vue'
+import { ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { parseMarkdown } from '@/utils/markdown'
 import { useChatStore } from '@/stores/chat'
@@ -259,5 +259,9 @@ onMounted(async () => {
       await store.selectSession(store.activeSessionId)
     }
   }
+})
+
+onUnmounted(() => {
+  store.stopRecovering()
 })
 </script>

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { createSSEConnection, cancelSSE } from '@/utils/sse'
 import { issueTicket } from '@/api/auth'
 import { getSessions, getSessionMessages, getDialogueHistoryByPlan, deleteSession as apiDeleteSession, getStreamState, requestStopGeneration } from '@/api/chat'
@@ -78,14 +78,23 @@ export const useChatStore = defineStore('chat', () => {
 
   let currentPlanId = localStorage.getItem('chat_currentPlanId') || ''
 
-  // 计算属性：哪些会话正在流式输出（供侧边栏显示状态）
-  const streamingSessionIds = computed(() => {
+  // 哪些会话正在流式输出（供侧边栏显示绿点指示）
+  // 手动管理而非 computed，因 sessionStreams 为原始 Map 无法被 Vue 追踪
+  const streamingSessionIds = ref(new Set<string>())
+
+  function _syncStreamingSessions() {
     const ids = new Set<string>()
+    if (streaming.value && activeSessionId.value) {
+      ids.add(activeSessionId.value)
+    }
     for (const [id, state] of sessionStreams) {
       if (state.streaming) ids.add(id)
     }
-    return ids
-  })
+    streamingSessionIds.value = ids
+  }
+
+  // 流式状态或活跃会话变化时自动更新指示器
+  watch([streaming, activeSessionId], () => _syncStreamingSessions())
 
   // ─── 持久化 ───
   function persistSessionState() {
@@ -116,6 +125,7 @@ export const useChatStore = defineStore('chat', () => {
       streamingPlaceholders: [...streamingPlaceholders.value],
       isResourceStreaming: isResourceStreaming.value,
     })
+    _syncStreamingSessions()
   }
 
   function restoreStreamState(sessionId: string) {
@@ -153,6 +163,7 @@ export const useChatStore = defineStore('chat', () => {
       cancelSSE(sse)
       activeSSEs.delete(sessionId)
     }
+    _syncStreamingSessions()
   }
 
   function generateSessionId(): string {
@@ -163,7 +174,7 @@ export const useChatStore = defineStore('chat', () => {
    * 刷新后恢复流式输出：轮询后端 stream-state 端点，获取已累积的文本并恢复动画
    * @returns true 如果检测到后端仍在流式处理中
    */
-  let _recoverTimer: ReturnType<typeof setInterval> | null = null
+  const _recoverTimer = ref<ReturnType<typeof setInterval> | null>(null)
 
   async function recoverStreaming(planId: string): Promise<boolean> {
     const sessionId = activeSessionId.value
@@ -176,10 +187,11 @@ export const useChatStore = defineStore('chat', () => {
     // 后端正流式中，恢复前端状态
     streaming.value = true
     streamBuffer.value = state.text || ''
-    hasStreamText = !!state.text  // 有文本时标记，避免 onChunk 重复追加
+    hasStreamText = !!state.text
+    _syncStreamingSessions()
 
     // 持续轮询更新
-    _recoverTimer = setInterval(async () => {
+    _recoverTimer.value = setInterval(async () => {
       try {
         const s = await getStreamState(sessionId)
         if (!s) {
@@ -217,9 +229,9 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function _stopRecover() {
-    if (_recoverTimer) {
-      clearInterval(_recoverTimer)
-      _recoverTimer = null
+    if (_recoverTimer.value) {
+      clearInterval(_recoverTimer.value)
+      _recoverTimer.value = null
     }
   }
 
@@ -369,12 +381,13 @@ export const useChatStore = defineStore('chat', () => {
     const sessionId = activeSessionId.value
     if (!sessionId) {
       activeSessionId.value = generateSessionId()
-      persistSessionState()
     }
+    persistSessionState()
 
     const capturedSessionId = activeSessionId.value
     messages.value.push({ role: 'user', content: text })
     streaming.value = true
+    _syncStreamingSessions()
     streamBuffer.value = ''
     hasStreamText = false
     awaitingConfirmation.value = false
@@ -620,6 +633,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingPlaceholders.value = []
     isResourceStreaming.value = false
     sessionStreams.delete(sessionId)
+    _syncStreamingSessions()
 
     // 添加用户停止提示
     messages.value.push({ role: 'assistant', content: '（已停止生成）' })
@@ -637,9 +651,11 @@ export const useChatStore = defineStore('chat', () => {
     }
     const typeLabel = typeLabels[resourceType] || resourceType
     const capturedSessionId = activeSessionId.value
+    persistSessionState()
 
     messages.value.push({ role: 'user', content: `请为「${moduleContext.title}」生成${typeLabel}` })
     streaming.value = true
+    _syncStreamingSessions()
     streamBuffer.value = ''
     let supHasStreamText = false
 
@@ -782,5 +798,6 @@ export const useChatStore = defineStore('chat', () => {
     stopGeneration,
     requestSupplementaryResource,
     recoverStreaming,
+    stopRecovering: _stopRecover,
   }
 })

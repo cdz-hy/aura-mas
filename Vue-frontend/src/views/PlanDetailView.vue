@@ -649,6 +649,7 @@ function onDividerMouseUp() { endDrag() }
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 onUnmounted(() => {
+  chatStore.stopRecovering()
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
   if (dragState) {
     if (dragState.rafId !== null) {
@@ -1379,6 +1380,8 @@ function parseModuleData(res: LearningResource[]) {
 // ==================== 生命周期 ====================
 
 onMounted(async () => {
+  // 保存 activeSessionId，resetForPlan 可能在跨计划时清空它
+  const savedSessionId = chatStore.activeSessionId
   chatStore.resetForPlan(planIdStr)
 
   try {
@@ -1395,6 +1398,11 @@ onMounted(async () => {
 
   // 加载会话列表
   await chatStore.loadSessions(planIdStr)
+
+  // 如果 resetForPlan 清空了会话 ID，恢复之
+  if (!chatStore.activeSessionId && savedSessionId) {
+    chatStore.activeSessionId = savedSessionId
+  }
 
   // 刷新后恢复：先检查后端是否仍在处理，再决定加载策略
   let isRecovering = false

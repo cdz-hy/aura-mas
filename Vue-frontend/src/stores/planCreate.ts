@@ -130,8 +130,8 @@ export const usePlanCreateStore = defineStore('planCreate', () => {
 
     if (!activeSessionId.value) {
       activeSessionId.value = generateSessionId()
-      persistSessionState()
     }
+    persistSessionState()
 
     messages.value.push({ role: 'user', content: text })
     streaming.value = true
