@@ -9,6 +9,7 @@ import concurrent.futures
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_resource_generator_llm
+from app.agents.search_utils import search_tavily, execute_searches
 from app.prompts import RESOURCE_GENERATOR_PROMPT, SEARCH_PLANNING_PROMPT
 from app.core.config import settings
 from app.utils.token_recorder import record_from_mimo
@@ -24,82 +25,6 @@ def _emit(state: dict, event_type: str, content: str):
             pass
 
 logger = logging.getLogger("agents.resource_generator")
-
-
-
-
-# ==================== Tavily 搜索 ====================
-
-def _search_tavily(query: str, max_results: int = 5) -> tuple:
-    """Tavily 网页搜索，返回 (文本结果列表, 图片URL列表)"""
-    try:
-        from tavily import TavilyClient
-        client = TavilyClient(api_key=settings.TAVILY_API_KEY)
-        resp = client.search(query, max_results=max_results, include_images=True, include_image_descriptions=True)
-        results = []
-        for r in resp.get("results", []):
-            results.append({
-                "title": r.get("title", ""),
-                "snippet": r.get("content") or "",
-                "url": r.get("url", ""),
-            })
-        # 收集图片：resp 顶层有 images 列表，result 内也可能有 images
-        images = []
-        seen_img_urls = set()
-        for img in resp.get("images", []):
-            if isinstance(img, dict):
-                img_url = img.get("url", "")
-                img_desc = img.get("description", "")
-            else:
-                img_url = str(img)
-                img_desc = ""
-            if img_url and img_url not in seen_img_urls:
-                seen_img_urls.add(img_url)
-                images.append({"url": img_url, "description": img_desc})
-        for r in resp.get("results", []):
-            for img in r.get("images", []):
-                if isinstance(img, dict):
-                    img_url = img.get("url", "")
-                    img_desc = img.get("description", "")
-                else:
-                    img_url = str(img)
-                    img_desc = ""
-                if img_url and img_url not in seen_img_urls:
-                    seen_img_urls.add(img_url)
-                    images.append({"url": img_url, "description": img_desc})
-        logger.info(f"  [Tavily] '{query}' -> {len(results)} 条文本, {len(images)} 张图片")
-        return results, images
-    except Exception as e:
-        logger.warning(f"  [Tavily] 搜索失败 '{query}': {str(e)[:120]}")
-        return [], []
-
-
-def _execute_searches(queries: List[str]) -> tuple:
-    """并行执行所有搜索查询，返回 (去重后的文本结果列表, 去重后的图片列表)"""
-    all_results: List[Dict[str, str]] = []
-    all_images: List[Dict[str, str]] = []
-    seen_urls: set = set()
-    seen_img_urls: set = set()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(_search_tavily, q): q for q in queries}
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                items, images = future.result()
-                for item in items:
-                    url = item.get("url", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        all_results.append(item)
-                for img in images:
-                    img_url = img.get("url", "")
-                    if img_url and img_url not in seen_img_urls:
-                        seen_img_urls.add(img_url)
-                        all_images.append(img)
-            except Exception as e:
-                logger.warning(f"  [搜索] 任务执行异常: {str(e)[:120]}")
-
-    return all_results, all_images
 
 
 def _format_search_results(results: List[Dict[str, str]]) -> str:
@@ -228,7 +153,7 @@ def _generate_single_module(
             if not queries:
                 break
 
-            round_results, round_images = _execute_searches(queries)
+            round_results, round_images = execute_searches(queries)
 
             existing_urls = {r.get("url", "") for r in all_search_results}
             new_items = [item for item in round_results if item.get("url", "") not in existing_urls]

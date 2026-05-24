@@ -107,6 +107,7 @@ async def plan_chat(
             conversation_text=message,
             dialogue_type="USER",
             plan_id=plan_id_int,
+            intent_type="plan_chat",
         )
     except Exception as e:
         logger.warning(f"记录用户消息失败: {e}")
@@ -1049,6 +1050,135 @@ async def submit_quiz(
     )
 
 
+@router.get("/tutor/chat")
+async def tutor_chat(
+    ticket: str = Query(..., description="Java 后端签发的短期 Ticket"),
+    plan_id: str = Query(..., description="学习计划 ID"),
+    resource_id: str = Query(..., description="当前模块资源 ID"),
+    message: str = Query(..., description="用户消息"),
+    session_id: str = Query("", description="会话 ID"),
+):
+    """
+    智能辅导对话 - SSE 流式输出
+    针对用户当前点击的模块内容进行个性化辅导
+    """
+    try:
+        ticket_info = java_client.validate_ticket(ticket)
+        user_id = ticket_info["user_id"]
+    except Exception as e:
+        logger.error(f"Ticket 验证失败: {e}")
+        return StreamingResponse(
+            _error_stream(f"认证失败: {str(e)}"),
+            media_type="text/event-stream",
+        )
+
+    plan_id_int = int(plan_id) if plan_id and plan_id.isdigit() else 0
+    resource_id_int = int(resource_id) if resource_id and resource_id.isdigit() else 0
+
+    if not session_id:
+        session_id = f"tutor-{plan_id}-{user_id}"
+
+    logger.info(f"[智能辅导] 用户 {user_id}, 计划 {plan_id_int}, 资源 {resource_id_int}, 会话 {session_id}")
+
+    # 记录用户消息
+    try:
+        java_client.create_dialogue(
+            user_id=user_id,
+            session_id=session_id,
+            conversation_text=message,
+            dialogue_type="USER",
+            plan_id=plan_id_int,
+            intent_type="chat",
+        )
+    except Exception as e:
+        logger.warning(f"[智能辅导] 记录用户消息失败: {e}")
+
+    # 共享事件队列（tutor_agent 通过 sse_callback 推入，stream 从队列读取）
+    bg_state = {
+        "events": [],
+        "finished": False,
+        "ai_response": "",
+    }
+
+    def _sse_callback(data):
+        bg_state["events"].append(data)
+
+    def _run_tutor_sync():
+        """在独立线程中执行辅导智能体"""
+        try:
+            from app.agents.tutor_agent import tutor_chat as _tutor_chat
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            ai_response = loop.run_until_complete(_tutor_chat(
+                user_id=user_id,
+                plan_id=plan_id_int,
+                session_id=session_id,
+                resource_id=resource_id_int,
+                user_message=message,
+                sse_callback=_sse_callback,
+            ))
+            loop.close()
+
+            bg_state["ai_response"] = ai_response or ""
+
+            # 保存 AI 回复
+            if ai_response:
+                try:
+                    java_client.create_dialogue(
+                        user_id=user_id,
+                        session_id=session_id,
+                        conversation_text=ai_response,
+                        dialogue_type="AI",
+                        plan_id=plan_id_int,
+                        intent_type="chat",
+                    )
+                except Exception as e:
+                    logger.warning(f"[智能辅导] 记录 AI 回复失败: {e}")
+
+            # 后台会话压缩
+            threading.Thread(target=lambda: asyncio.run(async_compress_and_save(
+                user_id=user_id,
+                session_id=session_id,
+                plan_id=plan_id_int,
+            )), daemon=True).start()
+
+        except Exception as e:
+            logger.error(f"[智能辅导] 执行异常: {e}", exc_info=True)
+            bg_state["events"].append(
+                f'data: {json.dumps({"type": "error", "content": str(e)}, ensure_ascii=False)}\n\n'
+            )
+        finally:
+            bg_state["finished"] = True
+
+    threading.Thread(target=_run_tutor_sync, daemon=True).start()
+
+    async def stream():
+        """SSE 流：从事件队列读取并推送给客户端"""
+        try:
+            while True:
+                if bg_state["events"]:
+                    sse_data = bg_state["events"].pop(0)
+                    if sse_data:
+                        yield sse_data
+                elif bg_state["finished"]:
+                    break
+                else:
+                    await asyncio.sleep(0.05)
+        except GeneratorExit:
+            logger.warning("[智能辅导] 客户端断开")
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 def _check_answer(user_answer, correct_answer: str, question_type: str, options: list) -> bool:
     """比对选择/判断题答案"""
     if user_answer is None:
@@ -1245,14 +1375,14 @@ def _persist_generated_resources(
 def _search_videos(module_title: str) -> list:
     """搜索与模块相关的教学视频"""
     try:
-        from app.agents.resource_generator import _search_tavily
+        from app.agents.search_utils import search_tavily
     except ImportError:
-        logger.warning("[视频搜索] 无法导入 _search_tavily")
+        logger.warning("[视频搜索] 无法导入 search_tavily")
         return []
 
     # 中英文双语搜索
-    results_cn, _ = _search_tavily(f"{module_title} 教学视频", max_results=5)
-    results_en, _ = _search_tavily(f"{module_title} tutorial video", max_results=3)
+    results_cn, _ = search_tavily(f"{module_title} 教学视频", max_results=5)
+    results_en, _ = search_tavily(f"{module_title} tutorial video", max_results=3)
 
     # 视频平台白名单
     video_domains = [
@@ -1346,6 +1476,7 @@ def _save_plain_text_reply(breakdown_confirmed, generated_resource_info,
                     conversation_text=ai_response,
                     dialogue_type="AI",
                     plan_id=plan_id_int,
+                    intent_type="plan_chat",
                 )
             except Exception as e:
                 logger.warning(f"记录 AI 回复失败: {e}")
