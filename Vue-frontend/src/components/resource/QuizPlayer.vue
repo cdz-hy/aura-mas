@@ -29,11 +29,11 @@
     <!-- Questions -->
     <div class="space-y-6">
       <div v-for="(q, qi) in data.questions" :key="qi" class="border border-navy-100/50 rounded-xl p-5 transition-all"
-        :class="submitted ? (isCorrect(qi) ? 'border-emerald-200 bg-emerald-50/30' : 'border-red-200 bg-red-50/30') : 'hover:border-navy-200'">
+        :class="questionBorderClass(qi)">
         <!-- Question header -->
         <div class="flex items-start gap-3 mb-4">
           <span class="w-7 h-7 rounded-full text-xs flex items-center justify-center font-bold flex-shrink-0"
-            :class="submitted ? (isCorrect(qi) ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white') : 'bg-navy-100 text-navy-600'">
+            :class="questionBadgeClass(qi)">
             {{ qi + 1 }}
           </span>
           <div class="flex-1">
@@ -243,11 +243,50 @@ function optionClass(qi: number, oi: number) {
   return 'border-transparent bg-navy-50/30'
 }
 
+// 是否为可自动判分的题型（选择题、判断题）
+function isAutoGradable(qi: number) {
+  const t = props.data?.questions[qi]?.type
+  return t === 'single_choice' || t === 'multiple_choice' || t === 'true_false'
+}
+
+// 题目序号颜色：选择题/判断题提交后立刻显示；其它题型等批改结果
+function questionBadgeClass(qi: number) {
+  if (!submitted.value) return 'bg-navy-100 text-navy-600'
+  if (isAutoGradable(qi)) {
+    return isCorrect(qi) ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
+  }
+  // 需要 AI 批改的题型
+  if (props.questionResults?.[qi]) {
+    return props.questionResults[qi].is_correct ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
+  }
+  return 'bg-navy-100 text-navy-600' // 结果未出，保持原色
+}
+
+// 题目边框颜色
+function questionBorderClass(qi: number) {
+  if (!submitted.value) return 'hover:border-navy-200'
+  if (isAutoGradable(qi)) {
+    return isCorrect(qi) ? 'border-emerald-200 bg-emerald-50/30' : 'border-red-200 bg-red-50/30'
+  }
+  if (props.questionResults?.[qi]) {
+    return props.questionResults[qi].is_correct ? 'border-emerald-200 bg-emerald-50/30' : 'border-red-200 bg-red-50/30'
+  }
+  return 'border-navy-100/50' // 结果未出，保持原色
+}
+
 function isCorrect(qi: number) {
   const q = props.data?.questions[qi]
   if (!q) return false
   const a = answers.value[qi]
-  if (q.type === 'single_choice') return String(a) === String(q.correctAnswer)
+  const hasAnswer = a !== undefined && a !== '' && !(Array.isArray(a) && a.length === 0)
+  if (!hasAnswer) return false
+  if (q.correctAnswer == null || q.correctAnswer === '') return false
+
+  if (q.type === 'single_choice') {
+    const s = String(q.correctAnswer).trim()
+    const letter = 'ABCDE'[a as number]
+    return /^[A-E]$/.test(s) ? s === letter : s === String(a)
+  }
   if (q.type === 'multiple_choice') {
     // correctAnswer 可能是数组 [0,2] 或字符串 "A,C" / "0,2"
     let correct: number[] = []
@@ -255,7 +294,6 @@ function isCorrect(qi: number) {
       correct = (q.correctAnswer as unknown as number[]).slice().sort()
     } else {
       const s = String(q.correctAnswer).trim()
-      // "A,C" 格式 -> 索引
       if (/^[A-E](,[A-E])*$/.test(s)) {
         correct = s.split(',').map(c => ' ABCDE'.indexOf(c.trim())).sort()
       } else {
@@ -265,7 +303,13 @@ function isCorrect(qi: number) {
     const given = ((a as unknown as number[]) || []).slice().sort()
     return JSON.stringify(correct) === JSON.stringify(given)
   }
-  if (q.type === 'true_false') return a === q.correctAnswer
+  if (q.type === 'true_false') {
+    const ca = q.correctAnswer
+    // correctAnswer 可能是: true/false, "true"/"false", "正确"/"错误", "A"/"B"
+    const trueValues = [true, 'true', '正确', 'A', 'a', '1']
+    const correctVal = trueValues.includes(ca) ? '正确' : '错误'
+    return a === correctVal
+  }
   return String(a).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase()
 }
 

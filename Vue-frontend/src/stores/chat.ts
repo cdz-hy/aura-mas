@@ -240,8 +240,11 @@ export const useChatStore = defineStore('chat', () => {
     currentPlanId = planId
     persistSessionState()
     try {
-      const res = await getSessions(undefined, Number(planId))
-      sessions.value = res.data || []
+      const res = await getSessions(undefined as any, Number(planId))
+      // 过滤掉辅导会话（intentType=chat 或 sessionId 以 tutor- 开头）
+      sessions.value = (res.data || []).filter(
+        (s: any) => s.intentType !== 'chat' && !s.sessionId?.startsWith('tutor-')
+      )
     } catch (e) {
       console.error('Failed to load sessions:', e)
     } finally {
