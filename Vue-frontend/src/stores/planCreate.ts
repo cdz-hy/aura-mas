@@ -17,7 +17,7 @@ interface Message {
 export const usePlanCreateStore = defineStore('planCreate', () => {
   // Session
   const sessions = ref<ChatSession[]>([])
-  const activeSessionId = ref('')
+  const activeSessionId = ref(localStorage.getItem('planCreate_activeSessionId') || '')
   const sessionsLoading = ref(false)
 
   // Chat
@@ -41,6 +41,15 @@ export const usePlanCreateStore = defineStore('planCreate', () => {
   // SSE
   let currentSSE: EventSource | null = null
 
+  // 持久化会话状态
+  function persistSessionState() {
+    if (activeSessionId.value) {
+      localStorage.setItem('planCreate_activeSessionId', activeSessionId.value)
+    } else {
+      localStorage.removeItem('planCreate_activeSessionId')
+    }
+  }
+
   // ─── Session ops ───
 
   function generateSessionId(): string {
@@ -63,6 +72,7 @@ export const usePlanCreateStore = defineStore('planCreate', () => {
     cancelSSE(currentSSE)
     currentSSE = null
     activeSessionId.value = generateSessionId()
+    persistSessionState()
     messages.value = []
     streamBuffer.value = ''
     progressLogs.value = []
@@ -82,6 +92,7 @@ export const usePlanCreateStore = defineStore('planCreate', () => {
     streaming.value = false
     streamBuffer.value = ''
     activeSessionId.value = sessionId
+    persistSessionState()
 
     // Check if session already has a linked plan
     const existingSession = sessions.value.find(s => s.sessionId === sessionId)
@@ -119,6 +130,7 @@ export const usePlanCreateStore = defineStore('planCreate', () => {
 
     if (!activeSessionId.value) {
       activeSessionId.value = generateSessionId()
+      persistSessionState()
     }
 
     messages.value.push({ role: 'user', content: text })

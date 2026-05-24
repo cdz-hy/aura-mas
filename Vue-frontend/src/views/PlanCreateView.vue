@@ -211,10 +211,13 @@ function sendMessage() {
   store.sendMessage(text)
 }
 
-onMounted(() => {
-  store.loadSessions()
+onMounted(async () => {
+  await store.loadSessions()
   if (!store.activeSessionId) {
     store.newSession()
+  } else if (store.messages.length === 0) {
+    // 刷新后恢复：有持久化的会话 ID 但消息丢失，重新加载
+    await store.selectSession(store.activeSessionId)
   }
 })
 </script>

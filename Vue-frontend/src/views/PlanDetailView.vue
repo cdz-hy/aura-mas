@@ -338,7 +338,7 @@
           <button
             v-if="chatStore.streaming"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
-            @click="chatStore.stopGeneration()"
+            @click="chatStore.stopGeneration(planIdStr)"
           >
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
             停止
@@ -366,7 +366,10 @@
                 </svg>
               </div>
               <div class="flex-1 min-w-0">
-                <p class="text-sm text-navy-700 truncate">{{ session.title }}</p>
+                <p class="text-sm text-navy-700 truncate flex items-center gap-1.5">
+                  {{ session.title }}
+                  <span v-if="chatStore.streamingSessionIds.has(session.sessionId)" class="inline-block w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse flex-shrink-0"></span>
+                </p>
                 <p class="text-[11px] text-navy-400 mt-0.5">{{ session.messageCount }} 条消息 · {{ formatTime(session.lastMessageAt) }}</p>
               </div>
               <button
@@ -1836,10 +1839,22 @@ onMounted(async () => {
     console.error('[PlanDetail] 加载失败:', e)
   }
 
-  // 加载会话列表，如果已有活跃会话则不重新加载消息（避免中断流式输出）
+  // 加载会话列表
   await chatStore.loadSessions(planIdStr)
-  if (!chatStore.activeSessionId && chatStore.sessions.length > 0) {
-    await chatStore.selectSession(chatStore.sessions[0].sessionId)
+
+  // 刷新后恢复：先检查后端是否仍在处理，再决定加载策略
+  let isRecovering = false
+  if (chatStore.activeSessionId) {
+    isRecovering = await chatStore.recoverStreaming(planIdStr)
+  }
+
+  // 如果后端没有在处理，正常加载消息
+  if (!isRecovering) {
+    if (!chatStore.activeSessionId && chatStore.sessions.length > 0) {
+      await chatStore.selectSession(chatStore.sessions[0].sessionId)
+    } else if (chatStore.activeSessionId && chatStore.messages.length === 0) {
+      await chatStore.selectSession(chatStore.activeSessionId)
+    }
   }
 
   // 定期检查后端是否在生成资源（页面刷新后 SSE 断开时，通过轮询补偿）
