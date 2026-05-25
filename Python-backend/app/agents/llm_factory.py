@@ -14,11 +14,13 @@ class MIMOClient:
     # 模型配置：编排智能体用标准模型，其余用 pro 模型
     MODEL_STANDARD = settings.MIMO_MODEL_NAME        # 编排智能体
     MODEL_PRO = settings.MIMO_MODEL_PRO_NAME         # 其余智能体
+    MODEL_FLASH = settings.MIMO_MODEL_FLASH_NAME     # 轻量快速模型（异常检测等）
 
     # 各模型的上下文窗口上限（max_completion_tokens 上限）
     CONTEXT_WINDOWS = {
         settings.MIMO_MODEL_NAME: settings.MIMO_CONTEXT_WINDOW,
         settings.MIMO_MODEL_PRO_NAME: settings.MIMO_CONTEXT_WINDOW,
+        settings.MIMO_MODEL_FLASH_NAME: settings.MIMO_CONTEXT_WINDOW,
     }
 
     # 为输出预留的默认比例（占上下文窗口的 25%），避免输入大时溢出
@@ -583,7 +585,7 @@ def get_controller_llm() -> MIMOClient:
 def get_task_decomposer_llm() -> MIMOClient:
     """任务分解智能体 - pro 模型，启用思维链"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=3072,
-                      thinking=THINKING_ENABLED)
+                      thinking=THINKING_DISABLED)
 
 
 def get_simple_answer_llm() -> MIMOClient:
@@ -613,7 +615,7 @@ def get_reviewer_llm() -> MIMOClient:
 def get_resource_generator_llm() -> MIMOClient:
     """多模态资源自主生成智能体 - pro 模型，启用思维链"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=6144,
-                      thinking=THINKING_ENABLED)
+                      thinking=THINKING_DISABLED)
 
 
 def get_quiz_generator_llm() -> MIMOClient:

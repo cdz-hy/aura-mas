@@ -104,6 +104,11 @@ class AgentState(TypedDict, total=False):
     sse_callback: Any  # Callable[[str], None] - 实时推送 SSE 事件的回调函数
     create_placeholder_callback: Any  # Callable[[list], dict] - 创建占位资源记录的回调函数
 
+    # ==================== 智能体自主异常检测 ====================
+    agent_anomaly: bool  # 智能体自主检测到内容偏离/异常，需中断回主控
+    anomaly_reason: str  # 异常原因描述
+    anomaly_clarify: bool  # 主控已处理异常，简答智能体进入追问澄清模式
+
     # ==================== 循环控制 ====================
     iteration_count: int  # 当前迭代次数（防止无限循环）
     max_iterations: int  # 最大迭代次数

@@ -34,8 +34,20 @@ logger = logging.getLogger("graph.learning")
 
 # ==================== 路由函数 ====================
 
+def _route_if_anomaly(state: AgentState) -> str | None:
+    """如果智能体报告了异常，统一路由回主控"""
+    if state.get("agent_anomaly"):
+        logger.warning(f"  [路由] 智能体报告异常: {state.get('anomaly_reason', '')} -> 回到主控")
+        return NODE_CONTROLLER
+    return None
+
+
 def route_after_controller(state: AgentState) -> str:
     """主控智能体之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     next_node = state.get("next_node", NODE_SIMPLE_ANSWER)
     iteration = state.get("iteration_count", 0)
     max_iter = state.get("max_iterations", 15)
@@ -50,6 +62,10 @@ def route_after_controller(state: AgentState) -> str:
 
 def route_after_rag(state: AgentState) -> str:
     """RAG 检索之后的路由 - 审查与编排并行"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     rag_sufficient = state.get("rag_sufficient", False)
     if not rag_sufficient:
         logger.info(f"  [路由] RAG 检索不足 (低分/无关内容已过滤) -> 资源自主生成智能体")
@@ -60,6 +76,10 @@ def route_after_rag(state: AgentState) -> str:
 
 def route_after_review_orchestrate(state: AgentState) -> str:
     """审查编排并行之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     error = state.get("error")
     if error:
         logger.warning(f"  [路由] 审查编排未通过 -> 主控智能体 (重新决策)")
@@ -86,6 +106,10 @@ def route_after_review_orchestrate(state: AgentState) -> str:
 
 def route_after_simple_answer(state: AgentState) -> str:
     """简答之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     profile_update_needed = state.get("profile_update_needed", False)
     rag_sufficient = state.get("rag_sufficient", True)
     intent = state.get("intent", "")
@@ -107,6 +131,10 @@ def route_after_simple_answer(state: AgentState) -> str:
 
 def route_after_task_decomposer(state: AgentState) -> str:
     """任务分解之后的路由 - 根据是否需要分解决定是否走确认流程"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     task_breakdown = state.get("task_breakdown", {})
     needs_decomposition = task_breakdown.get("needs_decomposition", True)
 
@@ -122,6 +150,10 @@ def route_after_task_decomposer(state: AgentState) -> str:
 
 def route_after_human_confirm(state: AgentState) -> str:
     """用户确认之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     human_feedback = state.get("human_feedback")
     task_breakdown = state.get("task_breakdown")
 
@@ -140,12 +172,20 @@ def route_after_human_confirm(state: AgentState) -> str:
 
 def route_after_quiz_generator(state: AgentState) -> str:
     """题目生成之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     logger.info(f"  [路由] 题目生成完成 -> END")
     return END
 
 
 def route_after_resource_type_generator(state: AgentState) -> str:
     """类型资源生成之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     error = state.get("error")
     if error:
         logger.info(f"  [路由] 类型资源生成失败 -> END")
@@ -156,6 +196,10 @@ def route_after_resource_type_generator(state: AgentState) -> str:
 
 def route_after_quiz_grader(state: AgentState) -> str:
     """题目判定之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     # 题目判定完成 → 路由到画像维护智能体
     logger.info(f"  [路由] 题目判定完成 -> 画像维护智能体")
     return NODE_PROFILE_MAINTAINER
@@ -163,12 +207,20 @@ def route_after_quiz_grader(state: AgentState) -> str:
 
 def route_after_resource_generator(state: AgentState) -> str:
     """自主生成之后的路由 -> 直接结束（网络资源跳过审查）"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     logger.info(f"  [路由] 资源自主生成完成 -> END")
     return END
 
 
 def route_after_profile_maintainer(state: AgentState) -> str:
     """画像维护之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
     logger.info(f"  [路由] 画像维护完成 -> END")
     return END
 
@@ -237,7 +289,15 @@ def review_and_orchestrate_node(state: AgentState) -> Dict[str, Any]:
                 "current_step": "审查编排节点: 编排异常",
                 "stream_events": stream_events,
             }
-            
+
+        # 传播子智能体的异常信号
+        if isinstance(review_result, dict) and review_result.get("agent_anomaly"):
+            logger.warning(f"  [审查编排节点] 审查器报告异常，向上传播")
+            return review_result
+        if isinstance(orchestrate_result, dict) and orchestrate_result.get("agent_anomaly"):
+            logger.warning(f"  [审查编排节点] 编排器报告异常，向上传播")
+            return orchestrate_result
+
     except Exception as e:
         logger.error(f"  [审查编排节点] 并行执行异常: {str(e)}")
         return {
@@ -352,6 +412,11 @@ def _sequential_review_orchestrate(state: AgentState, generated_content: dict) -
     logger.info(f"  [审查编排节点] Phase 1: 编排(含自主生成内容)...")
     orchestrate_result = content_orchestrator_node(state)
 
+    # 传播编排器的异常信号
+    if orchestrate_result.get("agent_anomaly"):
+        logger.warning(f"  [审查编排节点] 编排器报告异常，向上传播")
+        return orchestrate_result
+
     orchestrate_error = orchestrate_result.get("error")
     if orchestrate_error:
         logger.error(f"  [审查编排节点] 编排出错: {orchestrate_error}")
@@ -374,6 +439,11 @@ def _sequential_review_orchestrate(state: AgentState, generated_content: dict) -
     review_state["module_list"] = module_list
 
     review_result = reviewer_node(review_state)
+
+    # 传播审查器的异常信号
+    if review_result.get("agent_anomaly"):
+        logger.warning(f"  [审查编排节点] 审查器报告异常，向上传播")
+        return review_result
 
     stream_events.extend(review_result.get("stream_events", []))
 
@@ -492,6 +562,7 @@ def build_learning_graph() -> StateGraph:
         {
             NODE_HUMAN_CONFIRM: NODE_HUMAN_CONFIRM,
             NODE_RAG_RETRIEVER: NODE_RAG_RETRIEVER,
+            NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
         }
     )
 
@@ -513,6 +584,7 @@ def build_learning_graph() -> StateGraph:
         {
             NODE_REVIEW_ORCHESTRATE: NODE_REVIEW_ORCHESTRATE,
             NODE_RESOURCE_GENERATOR: NODE_RESOURCE_GENERATOR,
+            NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
         }
     )
 
@@ -527,50 +599,66 @@ def build_learning_graph() -> StateGraph:
         }
     )
 
-    # 简答 -> 结束、画像维护或自主生成
+    # 简答 -> 结束、画像维护、自主生成、或异常回主控
     graph.add_conditional_edges(
         NODE_SIMPLE_ANSWER,
         route_after_simple_answer,
         {
             NODE_PROFILE_MAINTAINER: NODE_PROFILE_MAINTAINER,
             NODE_RESOURCE_GENERATOR: NODE_RESOURCE_GENERATOR,
+            NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
             END: END,
         }
     )
 
-    # 题目生成 -> 结束
+    # 题目生成 -> 结束或异常回主控
     graph.add_conditional_edges(
         NODE_QUIZ_GENERATOR,
         route_after_quiz_generator,
-        {END: END}
+        {
+            NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
+            END: END,
+        }
     )
 
-    # 类型资源生成 -> 结束
+    # 类型资源生成 -> 结束或异常回主控
     graph.add_conditional_edges(
         NODE_RESOURCE_TYPE_GENERATOR,
         route_after_resource_type_generator,
-        {END: END}
+        {
+            NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
+            END: END,
+        }
     )
 
-    # 题目判定 -> 画像维护
+    # 题目判定 -> 画像维护或异常回主控
     graph.add_conditional_edges(
         NODE_QUIZ_GRADER,
         route_after_quiz_grader,
-        {NODE_PROFILE_MAINTAINER: NODE_PROFILE_MAINTAINER}
+        {
+            NODE_PROFILE_MAINTAINER: NODE_PROFILE_MAINTAINER,
+            NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
+        }
     )
 
-    # 自主生成 -> 直接结束（网络资源跳过审查）
+    # 自主生成 -> 直接结束或异常回主控（网络资源跳过审查）
     graph.add_conditional_edges(
         NODE_RESOURCE_GENERATOR,
         route_after_resource_generator,
-        {END: END}
+        {
+            NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
+            END: END,
+        }
     )
 
-    # 画像维护 -> 结束
+    # 画像维护 -> 结束或异常回主控
     graph.add_conditional_edges(
         NODE_PROFILE_MAINTAINER,
         route_after_profile_maintainer,
-        {END: END}
+        {
+            NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
+            END: END,
+        }
     )
 
     logger.info("工作流图构建完成")

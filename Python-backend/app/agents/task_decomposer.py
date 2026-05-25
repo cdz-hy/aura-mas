@@ -116,6 +116,28 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"    模块数量: {len(modules)}")
         for i, m in enumerate(modules):
             logger.info(f"      模块{i+1}: {m.get('title', '')} - {m.get('description', '')[:50]}")
+
+        # 自主异常检测：检查分解内容是否与原始目标偏离
+        anomaly_summary = f"标题: {result.get('title', '')}; 模块: " + "; ".join(
+            f"{m.get('title', '')}: {m.get('description', '')}" for m in modules[:3]
+        )
+        from app.agents.anomaly_checker import check_content_alignment
+        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary)
+        if not is_aligned:
+            logger.warning(f"  [任务分解智能体] 自主检测到内容偏离: {anomaly_reason}")
+            logger.warning(f"  [任务分解智能体] 中断当前流程 -> 回到主控")
+            return {
+                "agent_anomaly": True,
+                "anomaly_reason": anomaly_reason,
+                "current_step": f"任务分解智能体: 检测到内容偏离 - {anomaly_reason}",
+                "stream_events": [{
+                    "event_type": "thinking",
+                    "agent": "task_decomposer",
+                    "data": {"message": f"检测到分解内容与原始目标偏离: {anomaly_reason}"},
+                    "step_description": f"异常中断: {anomaly_reason}"
+                }],
+            }
+
         logger.info(f"{'='*60}")
 
         if needs_decomposition:

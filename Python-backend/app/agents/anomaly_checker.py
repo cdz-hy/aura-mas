@@ -1,0 +1,48 @@
+"""
+异常检测工具 - 供各智能体调用，检测生成/检索内容是否与原始目标对齐
+"""
+import logging
+from typing import Tuple
+
+logger = logging.getLogger("agents.anomaly_checker")
+
+
+def check_content_alignment(original_goal: str, content_summary: str) -> Tuple[bool, str]:
+    """
+    检查生成/检索的内容是否与原始学习目标对齐。
+
+    Args:
+        original_goal: 用户原始学习目标 / user_message
+        content_summary: 智能体输出内容的摘要
+
+    Returns:
+        (is_aligned, reason) — is_aligned=True 表示对齐，False 表示根本性偏离
+    """
+    if not original_goal or not content_summary:
+        return True, ""
+
+    from app.agents.llm_factory import MIMOClient, THINKING_DISABLED
+    from app.prompts.anomaly_checker import ANOMALY_CHECK_PROMPT
+
+    llm = MIMOClient(
+        model=MIMOClient.MODEL_STANDARD,
+        temperature=0,
+        max_tokens=128,
+        thinking=THINKING_DISABLED,
+    )
+
+    messages = [
+        {"role": "system", "content": ANOMALY_CHECK_PROMPT},
+        {"role": "user", "content": f"原始目标: {original_goal}\n\n生成/检索内容摘要: {content_summary}"},
+    ]
+
+    try:
+        result = llm.chat_json(messages, max_tokens=128)
+        is_aligned = result.get("is_aligned", True)
+        reason = result.get("reason", "")
+        if not is_aligned:
+            logger.warning(f"  [异常检测] 检测到内容偏离: {reason}")
+        return is_aligned, reason
+    except Exception as e:
+        logger.warning(f"  [异常检测] 检测调用失败: {str(e)[:120]}，默认放行")
+        return True, ""

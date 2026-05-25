@@ -62,6 +62,14 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  [简答智能体] 开始处理")
     logger.info(f"  用户输入: {user_message[:100]}")
 
+    # 检查是否为异常追问模式：智能体发现内容偏离，需要向用户澄清
+    is_anomaly_clarify = state.get("anomaly_clarify", False)
+    anomaly_reason = state.get("anomaly_reason", "")
+
+    if is_anomaly_clarify and anomaly_reason:
+        logger.info(f"  [简答智能体] 异常追问模式: {anomaly_reason}")
+        return _generate_anomaly_clarification(state, anomaly_reason, chat_history, user_message)
+
     llm = get_simple_answer_llm()
 
     # 构建对话历史文本（包含更多轮次以便 LLM 理解上下文）
@@ -74,7 +82,7 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
     # 判断是否应该主动询问画像（低频率触发）
     should_ask_profile = _should_ask_profile(chat_history, user_profile)
     profile_hint = ""
-    
+
     if should_ask_profile:
         dim, question = _pick_profile_question(user_profile)
         profile_hint = f"\n\n[系统建议] 可以考虑询问用户关于 {dim} 维度的学习风格，参考问题: {question}"
@@ -168,6 +176,100 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
                 "step_description": "简答智能体回复（降级）"
             }],
             "current_step": f"简答智能体: 生成异常 - {str(e)}",
+        }
+
+
+ANOMALY_CLARIFY_PROMPT = """你是一个友好的 AI 学习助手。系统在处理用户请求时发现了一些问题，需要你向用户追问澄清。
+
+## 背景
+上一轮智能体处理时，检测到以下问题：{anomaly_reason}
+
+用户的原始请求是：{user_message}
+
+## 你的任务
+1. 用友好、自然的语气告诉用户遇到了什么问题（用自己的话简要说明，不要照搬系统术语）
+2. 向用户追问，帮助澄清 TA 的真实需求
+3. 给出 1-2 个具体的澄清方向或建议
+
+## 规则
+- 语气友好自然，不要让用户觉得是"系统出错了"
+- 保持专业但亲切
+- 严禁使用 emoji
+- 使用中文回复
+- 回复控制在 3-5 句话
+
+严格输出 JSON：
+{
+  "action": "clarify",
+  "response": "你的追问文本"
+}"""
+
+
+def _generate_anomaly_clarification(
+    state: AgentState,
+    anomaly_reason: str,
+    chat_history: list,
+    user_message: str,
+) -> Dict[str, Any]:
+    """生成异常追问澄清的回复"""
+    llm = get_simple_answer_llm()
+
+    history_text = ""
+    recent = chat_history[-10:]
+    for msg in recent:
+        role = "用户" if msg["role"] == "user" else "助手"
+        history_text += f"{role}: {msg['content']}\n"
+
+    prompt = ANOMALY_CLARIFY_PROMPT.format(
+        anomaly_reason=anomaly_reason,
+        user_message=user_message,
+    )
+
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": f"对话历史:\n{history_text}\n\n请生成追问澄清的回复，输出 JSON:"},
+    ]
+
+    try:
+        result = llm.chat_json(messages, max_tokens=512)
+        from app.utils.token_recorder import record_from_mimo
+        record_from_mimo(llm, state.get("user_id", 0), "anomaly_clarify", state.get("task_id"))
+        response = result.get("response", f"抱歉，我在处理你的请求时遇到了一些困惑。能否请你再详细说明一下你的需求？")
+
+        logger.info(f"  [简答智能体] 异常追问: {response[:150]}")
+        logger.info(f"{'='*60}")
+
+        new_history = list(chat_history)
+        new_history.append({"role": "assistant", "content": response})
+
+        return {
+            "anomaly_clarify": False,  # 清除异常追问标记
+            "anomaly_reason": "",
+            "chat_history": new_history,
+            "current_step": "简答智能体: 异常追问澄清",
+            "stream_events": [{
+                "event_type": "content",
+                "agent": "simple_answer",
+                "data": {"text": response, "action": "clarify"},
+                "step_description": "异常追问澄清"
+            }],
+        }
+    except Exception as e:
+        logger.error(f"  [简答智能体] 异常追问生成失败: {str(e)}")
+        fallback = f"抱歉，我在处理你的请求时遇到了一些困惑：「{anomaly_reason}」。能否请你换一种方式描述你的需求？"
+        new_history = list(chat_history)
+        new_history.append({"role": "assistant", "content": fallback})
+        return {
+            "anomaly_clarify": False,
+            "anomaly_reason": "",
+            "chat_history": new_history,
+            "current_step": f"简答智能体: 异常追问降级 - {str(e)}",
+            "stream_events": [{
+                "event_type": "content",
+                "agent": "simple_answer",
+                "data": {"text": fallback, "action": "clarify"},
+                "step_description": "异常追问澄清（降级）"
+            }],
         }
 
 

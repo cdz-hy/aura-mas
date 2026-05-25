@@ -372,6 +372,33 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             _flush_module_usage(new_modules, state.get("user_id", 0),
                                 "content_orchestration", state.get("task_id"))
 
+            # 自主异常检测：重试模式下检查编排内容是否偏离
+            content_previews = []
+            for m in final_modules[:3]:
+                c = m.get("content", "")
+                if isinstance(c, str):
+                    content_previews.append(f"{m.get('title', '')}: {c[:120]}")
+            if content_previews:
+                from app.agents.anomaly_checker import check_content_alignment
+                is_aligned, anomaly_reason = check_content_alignment(
+                    learning_goal, "重试编排模块: " + "; ".join(content_previews)
+                )
+                if not is_aligned:
+                    logger.warning(f"  [内容编排智能体] 重试编排检测到内容偏离: {anomaly_reason}")
+                    return {
+                        "agent_anomaly": True,
+                        "anomaly_reason": anomaly_reason,
+                        "module_list": final_modules,
+                        "orchestrated_content": orchestrated_content,
+                        "current_step": f"内容编排智能体: 重试编排检测到内容偏离 - {anomaly_reason}",
+                        "stream_events": [{
+                            "event_type": "thinking",
+                            "agent": "content_orchestrator",
+                            "data": {"message": f"检测到编排内容与目标偏离: {anomaly_reason}"},
+                            "step_description": f"异常中断: {anomaly_reason}"
+                        }],
+                    }
+
             return {
                 "orchestrated_content": orchestrated_content,
                 "module_list": final_modules,
@@ -501,6 +528,33 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             _flush_module_usage(modules_list, state.get("user_id", 0),
                                 "content_orchestration", state.get("task_id"))
 
+            # 自主异常检测：检查编排内容是否与学习目标偏离
+            content_previews = []
+            for m in modules_list[:3]:
+                c = m.get("content", "")
+                if isinstance(c, str):
+                    content_previews.append(f"{m.get('title', '')}: {c[:120]}")
+            if content_previews:
+                from app.agents.anomaly_checker import check_content_alignment
+                is_aligned, anomaly_reason = check_content_alignment(
+                    learning_goal, "编排模块: " + "; ".join(content_previews)
+                )
+                if not is_aligned:
+                    logger.warning(f"  [内容编排智能体] 检测到编排内容偏离: {anomaly_reason}")
+                    return {
+                        "agent_anomaly": True,
+                        "anomaly_reason": anomaly_reason,
+                        "module_list": modules_list,
+                        "orchestrated_content": orchestrated_content,
+                        "current_step": f"内容编排智能体: 检测到内容偏离 - {anomaly_reason}",
+                        "stream_events": [{
+                            "event_type": "thinking",
+                            "agent": "content_orchestrator",
+                            "data": {"message": f"检测到编排内容与目标偏离: {anomaly_reason}"},
+                            "step_description": f"异常中断: {anomaly_reason}"
+                        }],
+                    }
+
             return {
                 "orchestrated_content": orchestrated_content,
                 "module_list": modules_list,
@@ -533,6 +587,35 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                             state.get("user_id", 0),
                             "content_orchestration", state.get("task_id"),
                             extra_records=extra_records)
+
+        # 自主异常检测：批量模式
+        batch_modules = batch_result.get("module_list", [])
+        content_previews = []
+        for m in batch_modules[:3]:
+            c = m.get("content", "")
+            if isinstance(c, str):
+                content_previews.append(f"{m.get('title', '')}: {c[:120]}")
+        if content_previews:
+            from app.agents.anomaly_checker import check_content_alignment
+            is_aligned, anomaly_reason = check_content_alignment(
+                learning_goal, "批量编排模块: " + "; ".join(content_previews)
+            )
+            if not is_aligned:
+                logger.warning(f"  [内容编排智能体] 批量编排检测到内容偏离: {anomaly_reason}")
+                return {
+                    "agent_anomaly": True,
+                    "anomaly_reason": anomaly_reason,
+                    "module_list": batch_modules,
+                    "orchestrated_content": batch_result.get("orchestrated_content"),
+                    "current_step": f"内容编排智能体: 批量编排检测到内容偏离 - {anomaly_reason}",
+                    "stream_events": [{
+                        "event_type": "thinking",
+                        "agent": "content_orchestrator",
+                        "data": {"message": f"检测到编排内容与目标偏离: {anomaly_reason}"},
+                        "step_description": f"异常中断: {anomaly_reason}"
+                    }],
+                }
+
         return batch_result
 
 

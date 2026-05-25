@@ -29,6 +29,27 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  用户输入: {user_message[:100]}")
     logger.info(f"{'='*60}")
 
+    # 智能体自主异常检测：任何智能体发现内容偏离，中断回到主控，主控转入追问模式
+    if state.get("agent_anomaly"):
+        anomaly_reason = state.get("anomaly_reason", "未知原因")
+        logger.warning(f"  [主控智能体] 智能体报告异常: {anomaly_reason}")
+        logger.warning(f"  [主控智能体] -> 转入简答追问模式，向用户澄清需求")
+        return {
+            "intent": INTENT_FOLLOW_UP,
+            "next_node": NODE_SIMPLE_ANSWER,
+            "agent_anomaly": False,  # 清除异常标记（避免路由死循环）
+            "anomaly_clarify": True,  # 简答智能体用此标记进入追问澄清模式
+            "anomaly_reason": anomaly_reason,
+            "current_step": f"主控智能体: 智能体报告处理异常，转入追问澄清模式",
+            "iteration_count": iteration + 1,
+            "stream_events": [{
+                "event_type": "thinking",
+                "agent": "controller",
+                "data": {"message": f"检测到处理异常: {anomaly_reason}，将向用户追问澄清需求"},
+                "step_description": f"异常中断: {anomaly_reason}"
+            }],
+        }
+
     # 检查是否有需要重试的模块（模块级别重试）
     retry_module_ids = state.get("retry_module_ids", [])
     rag_retry_count = state.get("rag_retry_count", 0)

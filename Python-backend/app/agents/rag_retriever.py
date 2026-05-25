@@ -225,6 +225,32 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"    检索充足: {'是' if rag_sufficient else '否 (结果不足或均为低分无关内容)'}")
         if poor_module_ids:
             logger.info(f"    需自主生成的模块: {poor_module_ids}")
+
+        # 自主异常检测：当所有模块检索结果都不足时，检查是否与目标根本偏离
+        if not rag_sufficient and len(poor_module_ids) == len(modules_to_retrieve) and len(modules_to_retrieve) > 0:
+            chunk_headings = []
+            for c in deduped_chunks[:5]:
+                h = " > ".join(c.get("heading", []))
+                if h:
+                    chunk_headings.append(h)
+            anomaly_summary = f"检索目标: {user_message[:200]}; 检索到内容主题: {'; '.join(chunk_headings) if chunk_headings else '无有效结果'}"
+            from app.agents.anomaly_checker import check_content_alignment
+            is_aligned, anomaly_reason = check_content_alignment(user_message, anomaly_summary)
+            if not is_aligned:
+                logger.warning(f"  [RAG检索智能体] 自主检测到检索内容偏离: {anomaly_reason}")
+                return {
+                    "agent_anomaly": True,
+                    "anomaly_reason": anomaly_reason,
+                    "rag_sufficient": False,
+                    "current_step": f"RAG检索智能体: 检测到检索偏离 - {anomaly_reason}",
+                    "stream_events": [{
+                        "event_type": "thinking",
+                        "agent": "rag_retriever",
+                        "data": {"message": f"检测到检索结果与目标偏离: {anomaly_reason}"},
+                        "step_description": f"异常中断: {anomaly_reason}"
+                    }],
+                }
+
         logger.info(f"{'='*60}")
 
         return {

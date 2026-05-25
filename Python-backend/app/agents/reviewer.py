@@ -339,6 +339,32 @@ def _review_rag_content(
         if suggestions:
             logger.info(f"    优化建议: {', '.join(suggestions[:3])}")
         logger.info(f"    总结: {summary[:150]}")
+
+        # 自主异常检测：当 RAG 批量审查评分极低时，检查是否与目标根本偏离
+        if not passed and score < 20 and critical_issues:
+            from app.agents.anomaly_checker import check_content_alignment
+            issue_descriptions = "; ".join(i.get("description", "") for i in critical_issues[:3])
+            is_aligned, anomaly_reason = check_content_alignment(
+                learning_goal,
+                f"审查结果: 评分{score}/100, 关键问题: {issue_descriptions}"
+            )
+            if not is_aligned:
+                logger.warning(f"  [审查智能体] 检测到检索内容与目标根本偏离: {anomaly_reason}")
+                logger.info(f"{'='*60}")
+                return {
+                    "_usage_records": llm.get_usage_records(),
+                    "agent_anomaly": True,
+                    "anomaly_reason": anomaly_reason,
+                    "review_passed": False,
+                    "current_step": f"审查智能体: 检测到内容根本偏离 - {anomaly_reason}",
+                    "stream_events": [{
+                        "event_type": "thinking",
+                        "agent": "reviewer",
+                        "data": {"message": f"检测到检索内容与目标根本偏离: {anomaly_reason}"},
+                        "step_description": f"异常中断: {anomaly_reason}"
+                    }],
+                }
+
         logger.info(f"{'='*60}")
 
         return {

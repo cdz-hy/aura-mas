@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     MIMO_BASE_URL: str = "https://token-plan-cn.xiaomimimo.com/v1"
     MIMO_MODEL_NAME: str = "mimo-v2.5"
     MIMO_MODEL_PRO_NAME: str = "mimo-v2.5-pro"
+    MIMO_MODEL_FLASH_NAME: str = "mimo-v2-flash"
     MIMO_CONTEXT_WINDOW: int = 131072
 
     # Tavily 搜索 API

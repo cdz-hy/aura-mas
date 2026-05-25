@@ -377,6 +377,36 @@ def resource_generator_node(state: AgentState) -> Dict[str, Any]:
     }
 
     logger.info(f"  [资源生成智能体] 全部完成: {len(module_list)} 个模块")
+
+    # 自主异常检测：检查生成内容是否与学习目标根本偏离
+    # 尤其当所有模块都生成失败或有错误时，高度可疑
+    error_count = sum(1 for m in module_list if m.get("error"))
+    content_previews = []
+    for m in module_list[:3]:
+        content = m.get("content", "")
+        if isinstance(content, str):
+            content_previews.append(f"{m.get('title', '')}: {content[:150]}")
+    anomaly_summary = f"目标: {learning_goal[:200]}; 生成模块: {'; '.join(content_previews)}"
+    if error_count == len(module_list) and len(module_list) > 0:
+        anomaly_summary += " (警告: 所有模块生成均失败)"
+
+    from app.agents.anomaly_checker import check_content_alignment
+    is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary)
+    if not is_aligned:
+        logger.warning(f"  [资源生成智能体] 自主检测到内容偏离: {anomaly_reason}")
+        return {
+            "agent_anomaly": True,
+            "anomaly_reason": anomaly_reason,
+            "module_list": module_list,
+            "current_step": f"资源生成智能体: 检测到生成内容偏离 - {anomaly_reason}",
+            "stream_events": [{
+                "event_type": "thinking",
+                "agent": "resource_generator",
+                "data": {"message": f"检测到生成内容与目标偏离: {anomaly_reason}"},
+                "step_description": f"异常中断: {anomaly_reason}"
+            }],
+        }
+
     logger.info(f"{'='*60}")
 
     return {

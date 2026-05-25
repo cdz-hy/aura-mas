@@ -36,15 +36,25 @@ async def lifespan(app: FastAPI):
 
     logger.info("正在启动 MQ 消费者...")
     await mq_consumer.start()
-    # 如果 MQ 未就绪（start 内部失败），consumer.running 为 False，不影响应用启动
+
+    # 后台保活任务
+    keepalive_task = None
     if mq_consumer.running:
-        # 后台保活任务
         async def keepalive():
             while mq_consumer.running:
                 await asyncio.sleep(5)
-        asyncio.create_task(keepalive())
+        keepalive_task = asyncio.create_task(keepalive())
+
     yield
-    # 关闭时清理
+
+    # 关闭时清理：先取消保活任务，再关闭连接
+    if keepalive_task and not keepalive_task.done():
+        keepalive_task.cancel()
+        try:
+            await keepalive_task
+        except asyncio.CancelledError:
+            pass
+
     await mq_consumer.stop()
     logger.info("MQ 消费者已关闭")
 
