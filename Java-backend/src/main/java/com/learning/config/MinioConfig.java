@@ -5,7 +5,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-@Configuration
+// @Configuration  // 暂时禁用 MinIO，使用本地文件存储
 public class MinioConfig {
 
     @Value("${minio.endpoint}")

@@ -29,9 +29,12 @@ public class QuizRecordController {
         record.setUserId(Long.valueOf(body.get("userId").toString()));
         record.setPlanId(Long.valueOf(body.get("planId").toString()));
         record.setQuestionType((String) body.get("questionType"));
+        record.setQuestionText((String) body.get("questionText"));
         record.setCorrectAnswer((String) body.get("correctAnswer"));
         record.setUserAnswer((String) body.get("userAnswer"));
+        record.setScore(body.get("score") != null ? Double.valueOf(body.get("score").toString()) : null);
         record.setIsCorrect(Integer.valueOf(body.get("isCorrect").toString()));
+        record.setFeedback((String) body.get("feedback"));
         record.setDifficulty(body.get("difficulty") != null ? Integer.valueOf(body.get("difficulty").toString()) : 3);
         record.setAnswerTime(LocalDateTime.now());
         quizRecordMapper.insert(record);
@@ -67,11 +70,16 @@ public class QuizRecordController {
         long total = records.size();
         long correct = records.stream().filter(r -> r.getIsCorrect() != null && r.getIsCorrect() == 1).count();
         double accuracy = total > 0 ? (double) correct / total : 0;
+        double avgScore = records.stream()
+                .filter(r -> r.getScore() != null)
+                .mapToDouble(QuizRecord::getScore)
+                .average().orElse(0);
 
         return Result.success(Map.of(
                 "totalQuestions", total,
                 "correctAnswers", correct,
-                "accuracy", accuracy
+                "accuracy", accuracy,
+                "avgScore", Math.round(avgScore * 1000) / 10.0
         ));
     }
 }

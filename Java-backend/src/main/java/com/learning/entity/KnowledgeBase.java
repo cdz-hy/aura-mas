@@ -24,6 +24,8 @@ public class KnowledgeBase {
 
     private String collectionName;
 
+    private String mineruTaskId;
+
     private Long uploadUserId;
 
     private LocalDateTime uploadTime;

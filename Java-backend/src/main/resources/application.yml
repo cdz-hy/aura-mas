@@ -2,10 +2,12 @@ server:
   port: 8080
 
 spring:
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
   datasource:
     url: jdbc:mysql://localhost:3306/learning_system?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
     username: root
-    password: 12344321
+    password: ${DB_PASSWORD:changeme}
     driver-class-name: com.mysql.cj.jdbc.Driver
   sql:
     init:
@@ -40,17 +42,20 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 jwt:
-  secret: Y2xhc3Jvb20tbGVhcm5pbmctc3lzdGVtLWp3dC1zZWNyZXQta2V5LWZvci1oc21hYzI1Ni1hbGdvcml0aG0
+  secret: ${JWT_SECRET:change-this-jwt-secret}
   expiration: 86400000
   ticket-expiration: 300000
 
 internal:
-  secret: learning-system-internal-service-secret-2024
+  secret: ${INTERNAL_SECRET:change-this-internal-secret}
+
+file:
+  upload-dir: ${FILE_UPLOAD_DIR:./uploads}
 
 minio:
   endpoint: http://localhost:9000
-  access-key: minioadmin
-  secret-key: minioadmin
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
   bucket-name: learning-resources
 
 qiniu:

@@ -310,8 +310,10 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                     _generate_single_module,
                     module_info,
                     module_id,
-                    learning_goal,
+                    rag_chunks,
                     user_profile,
+                    learning_goal,
+                    chat_history,
                     sse_cb,
                     res_id,
                 )
@@ -467,8 +469,10 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                     _generate_single_module,
                     module,
                     module_order,
-                    learning_goal,
+                    rag_chunks,
                     user_profile,
+                    learning_goal,
+                    chat_history,
                     sse_cb,
                     res_id,
                 )

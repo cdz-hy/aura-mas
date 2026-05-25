@@ -1,5 +1,7 @@
 <template>
   <div class="flex h-screen overflow-hidden bg-cream-50">
+    <!-- Global Toast -->
+    <Toast />
     <!-- Sidebar -->
     <AppSidebar />
 
@@ -33,6 +35,7 @@
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
 import NoteSidebar from '@/components/note/NoteSidebar.vue'
+import Toast from '@/components/common/Toast.vue'
 import { useUiStore } from '@/stores/ui'
 
 const uiStore = useUiStore()

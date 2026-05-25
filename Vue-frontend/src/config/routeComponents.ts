@@ -89,11 +89,5 @@ export function buildRoutes(menus: MenuItem[]): RouteRecordRaw[] {
   extract(menus)
   routes.push(...buildImplicitRoutes(menuCodes))
 
-  routes.push({
-    path: ':pathMatch(.*)*',
-    name: 'NotFound',
-    component: () => import('@/views/NotFoundView.vue'),
-  })
-
   return routes
 }

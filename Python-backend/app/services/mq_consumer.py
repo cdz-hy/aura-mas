@@ -203,9 +203,21 @@ class MQConsumer:
         orchestrated = final_state.get("orchestrated_content", {})
         module_list = final_state.get("module_list", [])
         generated_content = final_state.get("generated_content")
+        quiz_questions = final_state.get("quiz_questions")
+        quiz_config = final_state.get("quiz_config") or {}
 
         # 3. 持久化到 Java 后端 + MQ
-        if generated_content and is_type_resource:
+        if quiz_questions:
+            # quiz 资源：将题目列表存入 module_data.questions
+            result_data = {
+                "title": quiz_config.get("title", module_title),
+                "description": quiz_config.get("description", resource_desc),
+                "questions": quiz_questions,
+                "total_questions": quiz_config.get("total", len(quiz_questions)),
+            }
+            module_data_json = json.dumps(result_data, ensure_ascii=False)
+            logger.info("  [MQ 消费] quiz 资源: %d 道题目", len(quiz_questions))
+        elif generated_content and is_type_resource:
             # 类型资源（mindmap/summary/code）
             result_data = {
                 "title": generated_content.get("title", module_title),

@@ -118,28 +118,40 @@ class DocumentProcessor:
                             ai_caption = await loop.run_in_executor(_executor, self.ai_analyzer.analyze_image, local_img_path, parent_context)
                             if ai_caption:
                                 print(f"  [{idx}/{total}] AI 分析完成: {ai_caption[:40]}...")
-                                # 更新并保存缓存
+                                # 更新并保存缓存（移到线程池，避免阻塞事件循环）
                                 with self.cache_lock:
                                     self.image_cache[img_hash] = ai_caption
-                                    self._save_cache()
+                                await loop.run_in_executor(_executor, self._save_cache)
 
                         if ai_caption:
                             chunk["image_caption"] = ai_caption
-                            # 同步更新对应存储在 JSON 里的 parent 内容
                             parent_chunks[chunk["parent_id"]] = f"AI 图片描述：{ai_caption}"
+                        else:
+                            print(f"  [{idx}/{total}] AI 分析返回空，跳过图片。")
+                            skipped += 1
+                            continue
 
                         # 1. 上传至七牛云
                         print(f"  [{idx}/{total}] 正在上传图片至七牛云...")
                         file_ext = os.path.splitext(local_img_path)[1]
                         remote_name = f"docs/{doc_id}/{uuid.uuid4()}{file_ext}"
-                        qiniu_url = await loop.run_in_executor(_executor, self.oss_service.upload_file, local_img_path, remote_name)
-                        print(f"  [{idx}/{total}] 七牛云上传成功: {qiniu_url}")
-                        
+                        try:
+                            qiniu_url = await asyncio.wait_for(
+                                loop.run_in_executor(_executor, self.oss_service.upload_file, local_img_path, remote_name),
+                                timeout=30
+                            )
+                            print(f"  [{idx}/{total}] 七牛云上传成功: {qiniu_url}")
+                        except Exception as e:
+                            print(f"  [{idx}/{total}] 七牛云上传失败: {e}, 跳过图片。")
+                            skipped += 1
+                            continue
+
                         # 2. 向量化
+                        print(f"  [{idx}/{total}] 正在向量化图片...")
                         dense_task = loop.run_in_executor(_executor, self.embedding_service.embed_image, local_img_path, chunk["image_caption"])
                         sparse_task = loop.run_in_executor(_executor, self.sparse_embedding_service.embed_text, chunk["image_caption"])
                         dense_vector, sparse_vector = await asyncio.gather(dense_task, sparse_task)
-                        
+
                         payload = chunk.copy()
                         payload["image_path"] = qiniu_url
                         print(f"  [{idx}/{total}] 图片块向量化完成。")

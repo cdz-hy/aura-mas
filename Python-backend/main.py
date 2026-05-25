@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api.v1.endpoints import upload, query, agent_chat
 from app.api.v1.endpoints import profile_builder, plan_generator, resource_chat
+from app.api.v1.endpoints import kb
 from app.core.config import settings
 from app.services.mq_consumer import mq_consumer
 import uvicorn
@@ -80,6 +81,9 @@ app.include_router(agent_chat.router, prefix="/api/v1/agent", tags=["多智能�
 app.include_router(profile_builder.router, prefix="/api/ai/profile", tags=["画像构建"])
 app.include_router(plan_generator.router, prefix="/api/ai/plan", tags=["计划生成"])
 app.include_router(resource_chat.router, prefix="/api/ai", tags=["资源对话"])
+
+# 路由注册 - 知识库管理接口
+app.include_router(kb.router, prefix="/api/v1/kb", tags=["知识库管理"])
 
 # 挂载静态文件（用于测试 UI）
 app.mount("/static", StaticFiles(directory="static"), name="static")

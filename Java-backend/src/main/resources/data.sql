@@ -16,6 +16,9 @@ INSERT IGNORE INTO menu (code, name, path, icon, type, sort_order) VALUES
 ('kb-management',  '知识库管理','/admin/kb',     'book',      'menu', 102),
 ('user-management','用户管理',  '/admin/users',  'users',     'menu', 103);
 
+-- 确保管理菜单没有父级（避免残留的 parent_id 导致路由异常）
+UPDATE menu SET parent_id = NULL WHERE code IN ('admin-dashboard', 'kb-management', 'user-management');
+
 -- ============================================================
 -- Seed data: role_menu 角色菜单分配
 -- ============================================================

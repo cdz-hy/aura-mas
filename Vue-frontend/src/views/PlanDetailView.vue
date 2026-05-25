@@ -182,7 +182,7 @@
               :initial-answers="quizSubmittedAnswers"
               :initial-submitted="!!quizSubmittedAnswers"
               :grading="quizSubmitting"
-              :result-score="gradingResult?.correct ?? null"
+              :result-score="gradingResult?.score ?? null"
               :question-results="questionResults"
               @submit="onQuizSubmit"
               @retake="retakeQuiz"
@@ -193,10 +193,10 @@
 
             <!-- 批改总分 -->
             <div v-if="gradingResult" class="mt-4 p-4 rounded-xl border border-navy-100/50 text-center">
-              <div class="text-3xl font-bold" :class="(gradingResult.correct || 0) >= (gradingResult.total || 1) * 0.8 ? 'text-emerald-600' : (gradingResult.correct || 0) >= (gradingResult.total || 1) * 0.6 ? 'text-amber-600' : 'text-red-500'">
-                {{ gradingResult.correct ?? 0 }} / {{ gradingResult.total ?? 0 }}
+              <div class="text-3xl font-bold" :class="(gradingResult.score ?? 0) >= 80 ? 'text-emerald-600' : (gradingResult.score ?? 0) >= 60 ? 'text-amber-600' : 'text-red-500'">
+                {{ gradingResult.score ?? '—' }}<span class="text-lg text-navy-400">分</span>
               </div>
-              <p class="text-sm text-navy-500 mt-1">答对 {{ gradingResult.correct ?? 0 }} 题，共 {{ gradingResult.total ?? 0 }} 题</p>
+              <p class="text-sm text-navy-500 mt-1">答对 {{ gradingResult.correct ?? 0 }} / {{ gradingResult.total ?? 0 }} 题</p>
             </div>
           </template>
 
@@ -996,6 +996,7 @@ function toggleResource(res: LearningResource) {
     if (lr && lr.details) {
       quizSubmittedAnswers.value = lr.answers || {}
       gradingResult.value = {
+        score: lr.score,
         total: lr.total,
         correct: lr.correct,
         details: lr.details,
@@ -1163,6 +1164,7 @@ function onQuizSubmit(userAnswers: Record<number, any>) {
         },
         onQuizResult(result) {
           gradingResult.value = {
+            score: result.score,
             total: result.total,
             correct: result.correct,
             details: result.details,
@@ -1219,29 +1221,51 @@ async function loadQuizRecords(resourceId: number) {
     const answers: Record<number, any> = {}
     const details: any[] = []
     let correctCount = 0
+    let scoreSum = 0
+
+    const questions = quizData.value?.questions || []
 
     latestBatch.forEach((record, i) => {
-      answers[i] = record.userAnswer
+      // 选择题：将文本答案还原为索引
+      const q = questions[i]
+      if (q && (q.type === 'single_choice' || q.type === 'multiple_choice') && q.options) {
+        if (q.type === 'single_choice') {
+          const idx = q.options.indexOf(record.userAnswer)
+          answers[i] = idx >= 0 ? idx : record.userAnswer
+        } else {
+          // 多选：逗号分隔的文本 -> 索引数组
+          const texts = record.userAnswer.split(',').map((s: string) => s.trim())
+          answers[i] = texts.map((t: string) => q.options!.indexOf(t)).filter((idx: number) => idx >= 0)
+        }
+      } else {
+        answers[i] = record.userAnswer
+      }
+
       const isCorrect = record.isCorrect === 1
       if (isCorrect) correctCount++
+      const score = record.score ?? (isCorrect ? 1 : 0)
+      scoreSum += score
       details.push({
         index: i,
         question_type: record.questionType,
+        question: record.questionText || q?.question || '',
         user_answer: record.userAnswer,
         correct_answer: record.correctAnswer,
         is_correct: isCorrect,
-        score: isCorrect ? 1 : 0,
-        feedback: isCorrect ? '回答正确' : `回答错误，正确答案: ${record.correctAnswer}`,
-        key_points_hit: isCorrect ? [] : [],
-        key_points_missed: isCorrect ? [] : [],
+        score,
+        feedback: record.feedback || (isCorrect ? '回答正确' : `回答错误，正确答案: ${record.correctAnswer}`),
+        key_points_hit: [],
+        key_points_missed: [],
         improvement_suggestions: isCorrect ? [] : [`正确答案: ${record.correctAnswer}`],
-        explanation: '',
+        explanation: q?.explanation || '',
       })
     })
 
+    const total = expectedCount || latestBatch.length
     quizSubmittedAnswers.value = answers
     gradingResult.value = {
-      total: expectedCount || latestBatch.length,
+      score: total > 0 ? Math.round(scoreSum / total * 100) : 0,
+      total,
       correct: correctCount,
       details,
     }

@@ -63,6 +63,9 @@ class JavaBackendClient:
     def _request(self, method: str, path: str, **kwargs) -> Any:
         url = f"{self.base_url}{path}"
         kwargs.setdefault("timeout", self.timeout)
+        headers = kwargs.pop("headers", {})
+        headers["X-Service-Secret"] = settings.JAVA_SERVICE_SECRET
+        kwargs["headers"] = headers
         try:
             resp = requests.request(method, url, **kwargs)
             if resp.status_code == 200:
@@ -218,6 +221,9 @@ class JavaBackendClient:
         user_answer: str,
         is_correct: int,
         difficulty: int = 3,
+        question_text: str = "",
+        score: float = None,
+        feedback: str = "",
     ) -> Dict[str, Any]:
         """创建答题记录"""
         return self._request("POST", "/api/quiz/internal/create", json={
@@ -225,9 +231,12 @@ class JavaBackendClient:
             "userId": user_id,
             "planId": plan_id,
             "questionType": question_type,
+            "questionText": question_text,
             "correctAnswer": correct_answer,
             "userAnswer": user_answer,
+            "score": score,
             "isCorrect": is_correct,
+            "feedback": feedback,
             "difficulty": difficulty,
         })
 
@@ -330,6 +339,27 @@ class JavaBackendClient:
         return self._request("PUT", f"/api/task/internal/{task_id}", json={
             "taskStatus": task_status,
         })
+
+    # ==================== 知识库管理 ====================
+
+    def update_kb_status(self, kb_id: int, status: int, chunk_count: int = None, mineru_task_id: str = None, collection_name: str = None):
+        """更新知识库记录状态"""
+        body = {"parseStatus": status}
+        if chunk_count is not None:
+            body["chunkCount"] = chunk_count
+        if mineru_task_id is not None:
+            body["mineruTaskId"] = mineru_task_id
+        if collection_name is not None:
+            body["collectionName"] = collection_name
+        return self._request("PUT", f"/api/admin/kb/internal/{kb_id}/status", json=body)
+
+    def get_kb_by_id(self, kb_id: int) -> Dict[str, Any]:
+        """获取知识库记录"""
+        return self._request("GET", f"/api/admin/kb/internal/{kb_id}")
+
+    def delete_kb_by_id(self, kb_id: int):
+        """删除知识库记录"""
+        return self._request("DELETE", f"/api/admin/kb/internal/{kb_id}")
 
     # ==================== Token 消耗 ====================
 

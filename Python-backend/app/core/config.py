@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     MIMO_MODEL_FLASH_NAME: str = "mimo-v2-flash"
     MIMO_CONTEXT_WINDOW: int = 131072
 
+    # MinerU 文档解析 API
+    MINERU_API_KEY: str = ""
+    MINERU_API_BASE: str = "https://mineru.net/api/v4"
+
     # Tavily 搜索 API
     TAVILY_API_KEY: str = ""
 
@@ -40,6 +44,7 @@ class Settings(BaseSettings):
 
     # Java 后端设置 (多智能体系统数据持久化)
     JAVA_BACKEND_URL: str = "http://localhost:8080"
+    JAVA_SERVICE_SECRET: str = "learning-system-internal-service-secret-2024"
 
     # 应用基础设置
     DEBUG: bool = True

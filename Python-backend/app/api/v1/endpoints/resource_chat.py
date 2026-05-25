@@ -950,11 +950,13 @@ async def submit_quiz(
     async def stream():
         from app.agents.llm_factory import get_quiz_grader_llm
 
-        llm = get_quiz_grader_llm()
         total = len(raw_questions)
         correct_count = 0
-        details = []
+        score_sum = 0.0
+        details = [None] * total  # 预分配，按索引填充
 
+        # ---------- 1. 预处理所有题目数据 ----------
+        prepared = []
         for i, q in enumerate(raw_questions):
             question_text = q.get("question_text", q.get("question", ""))
             question_type = q.get("question_type", q.get("type", "short_answer"))
@@ -962,42 +964,64 @@ async def submit_quiz(
             explanation = q.get("explanation", "")
             difficulty = q.get("difficulty", 3)
 
-            # 获取用户答案
             raw_ans = user_answers.get(str(i), user_answers.get(i, None))
             if raw_ans is None:
                 user_answer_text = "未作答"
             elif isinstance(raw_ans, list):
-                # 多选题：索引列表 -> 选项文本
                 options = q.get("options", [])
                 if options and all(isinstance(a, int) for a in raw_ans):
-                    user_answer_text = ", ".join(options[a] for a in raw_ans if a < len(options))
+                    user_answer_text = ", ".join(options[a] for a in raw_ans if 0 <= a < len(options))
                 else:
                     user_answer_text = ", ".join(str(a) for a in raw_ans)
             elif isinstance(raw_ans, int) and q.get("options"):
-                # 单选题：索引 -> 选项文本
                 opts = q.get("options", [])
-                user_answer_text = opts[raw_ans] if raw_ans < len(opts) else str(raw_ans)
+                user_answer_text = opts[raw_ans] if 0 <= raw_ans < len(opts) else str(raw_ans)
             else:
                 user_answer_text = str(raw_ans)
 
-            # 推送进度
-            yield f'data: {json.dumps({"type": "progress", "content": f"正在批改第 {i + 1}/{total} 题..."}, ensure_ascii=False)}\n\n'
+            prepared.append({
+                "index": i,
+                "question_text": question_text,
+                "question_type": question_type,
+                "correct_answer": json.dumps(correct_answer, ensure_ascii=False) if isinstance(correct_answer, list) else str(correct_answer),
+                "explanation": explanation,
+                "difficulty": difficulty,
+                "user_answer_text": user_answer_text,
+            })
 
-            # 批改 - 所有题型统一走 LLM，生成具体分析
+        # 通知前端所有题目开始并行批改
+        yield f'data: {json.dumps({"type": "grading_started", "total": total}, ensure_ascii=False)}\n\n'
+
+        # ---------- 2. 并行批改 + 每题流式推送 ----------
+        event_queue: asyncio.Queue = asyncio.Queue()
+
+        async def grade_one(idx: int, prep: dict, llm):
+            """单题批改协程：流式收集 token，完成后存 DB 并推送结果"""
+            def on_token(token: str):
+                """LLM 每输出一个 token，通过 queue 推送给 SSE"""
+                try:
+                    event_queue.put_nowait({
+                        "type": "grading_token",
+                        "index": idx,
+                        "token": token,
+                    })
+                except Exception:
+                    pass
+
             messages = [
                 {"role": "system", "content": QUIZ_GRADER_PROMPT},
-                {"role": "user", "content": f"题目: {question_text}\n题型: {question_type}\n参考答案: {correct_answer}\n答案解析: {explanation}\n\n用户回答: {user_answer_text}\n\n请批改并输出 JSON:"},
+                {"role": "user", "content": f"题目: {prep['question_text']}\n题型: {prep['question_type']}\n参考答案: {prep['correct_answer']}\n答案解析: {prep['explanation']}\n\n用户回答: {prep['user_answer_text']}\n\n请批改并输出 JSON:"},
             ]
+
             try:
                 loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, lambda: llm.chat_json(messages, max_tokens=2048))
+                result = await loop.run_in_executor(
+                    None, lambda: llm.chat_json_stream(messages, on_chunk=on_token, max_tokens=2048)
+                )
             except Exception as e:
-                logger.error(f"[测验批改] LLM 批改异常: {e}")
-                result = {"score": 0, "is_correct": False, "feedback": f"批改异常: {str(e)}", "key_points_hit": [], "key_points_missed": [], "improvement_suggestions": []}
-
-            is_correct_flag = result.get("is_correct", False)
-            if is_correct_flag:
-                correct_count += 1
+                logger.error(f"[测验批改] Q{idx + 1} LLM 批改异常: {e}")
+                result = {"score": 0, "is_correct": False, "feedback": f"批改异常: {str(e)}",
+                          "key_points_hit": [], "key_points_missed": [], "improvement_suggestions": []}
 
             # 保存到 quiz_record 表
             try:
@@ -1005,44 +1029,81 @@ async def submit_quiz(
                     resource_id=resource_id_int,
                     user_id=user_id,
                     plan_id=plan_id_int,
-                    question_type=question_type,
-                    correct_answer=str(correct_answer),
-                    user_answer=user_answer_text,
-                    is_correct=1 if is_correct_flag else 0,
-                    difficulty=difficulty,
+                    question_type=prep["question_type"],
+                    question_text=prep["question_text"],
+                    correct_answer=prep["correct_answer"],
+                    user_answer=prep["user_answer_text"],
+                    score=result.get("score", 0),
+                    is_correct=1 if result.get("is_correct", False) else 0,
+                    feedback=result.get("feedback", ""),
+                    difficulty=prep["difficulty"],
                 )
             except Exception as e:
-                logger.warning(f"[测验批改] 保存答题记录失败: {e}")
+                logger.warning(f"[测验批改] Q{idx + 1} 保存答题记录失败: {e}")
 
             detail = {
-                "index": i,
-                "question": question_text,
-                "question_type": question_type,
-                "user_answer": user_answer_text,
-                "correct_answer": str(correct_answer),
+                "index": idx,
+                "question": prep["question_text"],
+                "question_type": prep["question_type"],
+                "user_answer": prep["user_answer_text"],
+                "correct_answer": prep["correct_answer"],
                 "score": result.get("score", 0),
-                "is_correct": is_correct_flag,
+                "is_correct": result.get("is_correct", False),
                 "feedback": result.get("feedback", ""),
                 "key_points_hit": result.get("key_points_hit", []),
                 "key_points_missed": result.get("key_points_missed", []),
                 "improvement_suggestions": result.get("improvement_suggestions", []),
-                "explanation": explanation,
+                "explanation": prep["explanation"],
             }
-            details.append(detail)
 
-            # SSE 推送该题结果
-            yield f'data: {json.dumps({"type": "quiz_question_result", "index": i, "result": detail}, ensure_ascii=False)}\n\n'
+            # 推送该题最终结果
+            event_queue.put_nowait({
+                "type": "quiz_question_result",
+                "index": idx,
+                "result": detail,
+            })
+            return idx, detail
 
-        # 记录所有批改 LLM 调用的 token 消耗
-        record_from_mimo(llm, user_id, "quiz_grading", plan_id_int)
+        # 启动所有批改任务（每题独立 LLM 实例，完全并行）
+        async def run_all():
+            nonlocal correct_count, score_sum
+            tasks = []
+            for idx, prep in enumerate(prepared):
+                llm = get_quiz_grader_llm()
+                tasks.append(asyncio.create_task(grade_one(idx, prep, llm)))
 
-        # 总体结果
-        overall_score = round(correct_count / total * 100) if total > 0 else 0
+            completed = 0
+            for coro in asyncio.as_completed(tasks):
+                idx, detail = await coro
+                completed += 1
+                details[idx] = detail
+                if detail.get("is_correct"):
+                    correct_count += 1
+                score_sum += detail.get("score", 0)
+                logger.info(f"[测验批改] Q{idx + 1} 完成 ({completed}/{total})")
+
+            # 全部完成，推送结束信号
+            event_queue.put_nowait(None)
+
+        # 并行任务在后台运行
+        asyncio.create_task(run_all())
+
+        # ---------- 3. 从 queue 消费事件，yield 给 SSE ----------
+        while True:
+            event = await event_queue.get()
+            if event is None:
+                break
+            yield f'data: {json.dumps(event, ensure_ascii=False)}\n\n'
+
+        # 记录 token 消耗（每个 LLM 实例各自记录，此处无需额外操作）
+
+        # 总体结果（基于每题 score 加权平均）
+        overall_score = round(score_sum / total * 100) if total > 0 else 0
         summary = {
             "score": overall_score,
             "total": total,
             "correct": correct_count,
-            "details": details,
+            "details": [d for d in details if d is not None],
         }
         yield f'data: {json.dumps({"type": "quiz_result", "result": summary}, ensure_ascii=False)}\n\n'
 
@@ -1054,7 +1115,7 @@ async def submit_quiz(
                 "score": overall_score,
                 "total": total,
                 "correct": correct_count,
-                "details": details,
+                "details": summary["details"],
                 "submittedAt": datetime.now().isoformat(),
             }
             java_client.update_resource_content(resource_id_int, json.dumps(updated_module_data, ensure_ascii=False))
@@ -1062,7 +1123,7 @@ async def submit_quiz(
         except Exception as e:
             logger.warning(f"[测验批改] 写入 module_data 失败: {e}")
 
-        # 后台画像维护（在线程中执行，不阻塞 SSE 流）
+        # 后台画像维护
         threading.Thread(target=_async_profile_maintenance_sync, kwargs={
             "user_id": user_id,
             "user_message": f"完成测验，得分 {overall_score}",
@@ -1213,6 +1274,11 @@ async def tutor_chat(
     )
 
 
+def _letter_to_index(letter: str) -> int:
+    """字母转0-based索引: A->0, B->1, ..., E->4"""
+    return ord(letter.upper()) - ord('A')
+
+
 def _check_answer(user_answer, correct_answer: str, question_type: str, options: list) -> bool:
     """比对选择/判断题答案"""
     if user_answer is None:
@@ -1223,24 +1289,39 @@ def _check_answer(user_answer, correct_answer: str, question_type: str, options:
         if isinstance(user_answer, int):
             correct_text = correct_answer.strip()
             # correctAnswer 可能是 "A" 格式或选项文本
-            if correct_text in ("A", "B", "C", "D", "E"):
-                return "ABCD E".index(correct_text) == user_answer
+            if len(correct_text) == 1 and correct_text.upper() in "ABCDE":
+                return _letter_to_index(correct_text) == user_answer
             # 或者是选项文本
-            return options[user_answer].strip() == correct_text if user_answer < len(options) else False
+            return options[user_answer].strip() == correct_text if 0 <= user_answer < len(options) else False
         return str(user_answer).strip().lower() == str(correct_answer).strip().lower()
 
     elif question_type == "multiple_choice":
         if isinstance(user_answer, list) and options:
             # 索引列表 -> 排序后比对
             selected = sorted(user_answer)
-            # correctAnswer 可能是 "A,C" 格式或选项文本列表
+            # correctAnswer 可能是 "A,C" 格式、JSON数组 '["A","C"]'、或选项文本列表
             ca = str(correct_answer).strip()
-            if all(c in "ABCDE," for c in ca):
-                correct_indices = sorted(" ABCDE".index(c) for c in ca.split(",") if c.strip())
+            # 处理 Python 列表表示 "['A', 'C']"
+            if ca.startswith("[") and ca.endswith("]"):
+                try:
+                    import json as _json
+                    arr = _json.loads(ca.replace("'", '"'))
+                    if isinstance(arr, list):
+                        if all(isinstance(x, int) for x in arr):
+                            return selected == sorted(arr)
+                        indices = sorted(_letter_to_index(x) if isinstance(x, str) and len(x) == 1 and x.upper() in "ABCDE" else int(x) if str(x).isdigit() else -1 for x in arr)
+                        indices = [i for i in indices if i >= 0]
+                        return selected == indices
+                except Exception:
+                    pass
+            # 字母逗号分隔 "A,C"
+            parts = [p.strip() for p in ca.replace("，", ",").split(",") if p.strip()]
+            if all(len(p) == 1 and p.upper() in "ABCDE" for p in parts):
+                correct_indices = sorted(_letter_to_index(p) for p in parts)
                 return selected == correct_indices
             # 选项文本比对
-            selected_texts = sorted(options[i].strip() for i in selected if i < len(options))
-            correct_texts = sorted(t.strip() for t in ca.split(","))
+            selected_texts = sorted(options[i].strip() for i in selected if 0 <= i < len(options))
+            correct_texts = sorted(t.strip() for t in parts)
             return selected_texts == correct_texts
         return False
 
