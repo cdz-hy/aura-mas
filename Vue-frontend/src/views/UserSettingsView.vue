@@ -6,7 +6,8 @@
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <!-- Avatar card -->
-      <div class="card p-6 text-center">
+      <div class="card p-6 text-center flex flex-col">
+        <div>
         <h2 class="font-display text-lg font-semibold text-navy-800 mb-4">头像</h2>
         <div class="relative inline-block mb-4">
           <div class="w-28 h-28 rounded-full overflow-hidden border-4 border-navy-50 shadow-lg mx-auto">
@@ -49,6 +50,17 @@
         >
           清空头像
         </button>
+        </div>
+
+        <!-- Delete account -->
+        <div class="mt-auto pt-5 border-t border-navy-100">
+          <button
+            class="text-xs text-navy-300 hover:text-red-500 transition-colors"
+            @click="showDeleteDialog = true"
+          >
+            注销账号
+          </button>
+        </div>
       </div>
 
       <!-- User info form -->
@@ -188,19 +200,103 @@
       @confirm="confirmClearAvatar"
       @cancel="clearDialogVisible = false"
     />
+
+    <!-- Delete account confirm dialog (3 steps) -->
+    <Teleport to="body">
+      <transition name="fade">
+        <div v-if="showDeleteDialog" class="fixed inset-0 z-50 flex items-center justify-center">
+          <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" @click="cancelDelete" />
+          <div class="relative bg-white rounded-2xl shadow-2xl w-[400px] max-w-[85vw] p-6 animate-scale-in">
+            <div class="flex justify-center mb-4">
+              <div class="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center">
+                <svg class="w-6 h-6 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/>
+                  <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+              </div>
+            </div>
+            <h3 class="text-center text-base font-semibold text-navy-800 mb-1">{{ deleteDialogTitle }}</h3>
+            <p class="text-center text-sm text-navy-400 mb-2">{{ deleteDialogMessage }}</p>
+            <p class="text-center text-xs text-red-400 mb-4">确认次数 {{ deleteConfirmStep }}/3</p>
+            <div class="flex gap-3">
+              <button
+                class="flex-1 py-2.5 rounded-lg text-sm border border-navy-200 text-navy-600 hover:bg-navy-50 transition-colors font-medium"
+                @click="cancelDelete"
+              >
+                取消
+              </button>
+              <button
+                class="flex-1 py-2.5 rounded-lg text-sm text-white bg-red-500 hover:bg-red-600 transition-colors font-medium"
+                :disabled="deleting"
+                @click="handleDeleteStep"
+              >
+                <span v-if="deleting" class="inline-flex items-center gap-2">
+                  <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"/><path d="M4 12a8 8 0 018-8" stroke="currentColor" stroke-width="4" stroke-linecap="round" class="opacity-75"/></svg>
+                  注销中...
+                </span>
+                <span v-else>{{ deleteConfirmButtonText }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { getCurrentUser, getCurrentProfile, updateUserInfo, uploadAvatar, clearAvatar, updateProfile } from '@/api/user'
+import { getCurrentUser, getCurrentProfile, updateUserInfo, uploadAvatar, clearAvatar, deleteAccount, updateProfile } from '@/api/user'
 import AvatarCropper from '@/components/common/AvatarCropper.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import type { User } from '@/types/user'
 import type { StudentProfile } from '@/types/profile'
 
 const authStore = useAuthStore()
+const router = useRouter()
+
+// Delete account state
+const showDeleteDialog = ref(false)
+const deleteConfirmStep = ref(1)
+const deleting = ref(false)
+
+const deleteMessages = [
+  { title: '注销账号', msg: '确定要注销账号吗？所有相关资源将会被清空！', btn: '继续' },
+  { title: '警告', msg: '此操作不可撤销！所有学习计划、笔记、对话记录等数据将被永久删除！', btn: '继续' },
+  { title: '最后确认', msg: '你真的要永久注销此账号吗？一旦确认，所有数据将无法恢复！', btn: '确认注销' },
+]
+
+const deleteDialogTitle = computed(() => deleteMessages[deleteConfirmStep.value - 1].title)
+const deleteDialogMessage = computed(() => deleteMessages[deleteConfirmStep.value - 1].msg)
+const deleteConfirmButtonText = computed(() => deleteMessages[deleteConfirmStep.value - 1].btn)
+
+function cancelDelete() {
+  showDeleteDialog.value = false
+  deleteConfirmStep.value = 1
+}
+
+async function handleDeleteStep() {
+  if (deleteConfirmStep.value < 3) {
+    deleteConfirmStep.value++
+    return
+  }
+
+  deleting.value = true
+  try {
+    await deleteAccount()
+    showDeleteDialog.value = false
+    deleteConfirmStep.value = 1
+    authStore.logout()
+    router.push({ path: '/login', query: { deleted: '1' } })
+  } catch {
+    // Keep dialog open for retry
+  } finally {
+    deleting.value = false
+  }
+}
 
 const avatarUrl = ref('')
 const uploading = ref(false)
@@ -418,3 +514,17 @@ async function saveAll() {
 
 onMounted(loadUser)
 </script>
+
+<style scoped>
+.animate-scale-in {
+  animation: scaleIn 0.2s ease-out;
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+</style>
