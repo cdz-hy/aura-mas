@@ -112,6 +112,7 @@ class MQConsumer:
         module_type = resource_info.get("moduleType", "document") if isinstance(resource_info, dict) else "document"
         module_title = ""
         resource_desc = ""
+        source_resource_content = ""
         if isinstance(resource_info, dict) and resource_info.get("moduleData"):
             try:
                 md = resource_info["moduleData"]
@@ -120,6 +121,7 @@ class MQConsumer:
                 if isinstance(md, dict):
                     module_title = md.get("module_title", "")
                     resource_desc = md.get("module_description", "")
+                    source_resource_content = md.get("content", "")
             except Exception:
                 pass
 
@@ -131,16 +133,29 @@ class MQConsumer:
         logger.info("    计划: %s, 模块: %s, 类型: %s", plan_title, module_title, module_type)
 
         # 2. 运行 LangGraph 工作流（非流式，收集完整结果）
+        # 路由决策：quiz/类型资源/通用资源
+        is_type_resource = module_type in ("mindmap", "summary", "code")
+        if module_type == "quiz":
+            intent = "generate_quiz"
+            next_node = "quiz_generator"
+        elif is_type_resource:
+            intent = "generate_type_resource"
+            next_node = "resource_type_generator"
+        else:
+            intent = "generate_resource"
+            next_node = "rag_retriever"
+
         initial_state: AgentState = {
             "user_id": user_id,
             "plan_id": plan_id,
+            "task_id": task_id,
             "session_id": f"mq-task-{task_id}",
             "user_message": user_message,
             "human_feedback": None,
             "chat_history": [],
             "user_profile": user_profile,
-            "intent": "generate_resource",
-            "next_node": "rag_retriever",
+            "intent": intent,
+            "next_node": next_node,
             "needs_human_confirm": False,
             "profile_update_needed": False,
             "learning_goal": user_message,
@@ -175,6 +190,7 @@ class MQConsumer:
             "iteration_count": 0,
             "max_iterations": 10,
             "accumulated_context": "",
+            "source_resource_content": source_resource_content,
         }
 
         graph = get_learning_graph()
@@ -186,9 +202,31 @@ class MQConsumer:
 
         orchestrated = final_state.get("orchestrated_content", {})
         module_list = final_state.get("module_list", [])
+        generated_content = final_state.get("generated_content")
+        quiz_questions = final_state.get("quiz_questions")
+        quiz_config = final_state.get("quiz_config") or {}
 
-        # 3. 如果编排成功，持久化到 Java 后端 + MQ
-        if orchestrated or module_list:
+        # 3. 持久化到 Java 后端 + MQ
+        if quiz_questions:
+            # quiz 资源：将题目列表存入 module_data.questions
+            result_data = {
+                "title": quiz_config.get("title", module_title),
+                "description": quiz_config.get("description", resource_desc),
+                "questions": quiz_questions,
+                "total_questions": quiz_config.get("total", len(quiz_questions)),
+            }
+            module_data_json = json.dumps(result_data, ensure_ascii=False)
+            logger.info("  [MQ 消费] quiz 资源: %d 道题目", len(quiz_questions))
+        elif generated_content and is_type_resource:
+            # 类型资源（mindmap/summary/code）
+            result_data = {
+                "title": generated_content.get("title", module_title),
+                "description": generated_content.get("description", resource_desc),
+                "content": generated_content.get("content", ""),
+                "module_title": generated_content.get("title", module_title),
+            }
+            module_data_json = json.dumps(result_data, ensure_ascii=False)
+        elif orchestrated or module_list:
             result_data = {
                 "title": orchestrated.get("title", module_title),
                 "description": orchestrated.get("description", resource_desc),
@@ -196,21 +234,21 @@ class MQConsumer:
                 "summary": orchestrated.get("summary", ""),
             }
             module_data_json = json.dumps(result_data, ensure_ascii=False)
-
-            # 通过 Java 内部 API 持久化资源内容并更新任务状态（内部触发 SSE 推送）
-            try:
-                java_client.update_resource_content(resource_id, module_data_json, 2)
-                java_client.update_generation_task(task_id, 2)
-                logger.info("  [MQ 消费] 资源内容已通过内部 API 持久化")
-            except Exception as e:
-                logger.error("  [MQ 消费] 内部 API 落库失败: %s", e)
-                raise
-
-            logger.info("  [MQ 消费] 资源生成完成！")
-            logger.info("    taskId=%s, resourceId=%s, 模块数=%s",
-                        task_id, resource_id, len(module_list) if module_list else 0)
         else:
             raise Exception("工作流未生成有效内容")
+
+        # 通过 Java 内部 API 持久化资源内容并更新任务状态（内部触发 SSE 推送）
+        try:
+            java_client.update_resource_content(resource_id, module_data_json, 2)
+            java_client.update_generation_task(task_id, 2)
+            logger.info("  [MQ 消费] 资源内容已通过内部 API 持久化")
+        except Exception as e:
+            logger.error("  [MQ 消费] 内部 API 落库失败: %s", e)
+            raise
+
+        logger.info("  [MQ 消费] 资源生成完成！")
+        logger.info("    taskId=%s, resourceId=%s, 模块数=%s",
+                    task_id, resource_id, len(module_list) if module_list else 0)
 
     async def _fail_task(self, task_id: int, user_id: int, reason: str):
         """任务失败处理（更新任务状态，内部触发 SSE 推送）"""

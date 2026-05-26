@@ -34,6 +34,8 @@ export interface QuizOverallResult {
 
 export interface QuizSubmitHandlers {
   onProgress?: (content: string) => void
+  onGradingStarted?: (total: number) => void
+  onToken?: (index: number, token: string) => void
   onQuestionResult?: (index: number, result: QuizQuestionResult) => void
   onQuizResult?: (result: QuizOverallResult) => void
   onDone?: () => void
@@ -63,6 +65,12 @@ export function submitQuizSSE(
       switch (data.type) {
         case 'progress':
           handlers.onProgress?.(data.content)
+          break
+        case 'grading_started':
+          handlers.onGradingStarted?.(data.total)
+          break
+        case 'grading_token':
+          handlers.onToken?.(data.index, data.token)
           break
         case 'quiz_question_result':
           handlers.onQuestionResult?.(data.index, data.result)

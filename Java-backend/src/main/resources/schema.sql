@@ -1,7 +1,7 @@
 CREATE DATABASE IF NOT EXISTS learning_system DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE learning_system;
 
-CREATE TABLE `user` (
+CREATE TABLE IF NOT EXISTS `user` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `login_name` VARCHAR(100) NOT NULL UNIQUE,
     `password` VARCHAR(255) NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE `user` (
     KEY `idx_login_name` (`login_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
 
-CREATE TABLE `learning_plan` (
+CREATE TABLE IF NOT EXISTS `learning_plan` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '计划ID',
     `title` VARCHAR(255) NOT NULL COMMENT '标题',
     `learning_goal` JSON DEFAULT NULL COMMENT '学习目标',
@@ -35,7 +35,7 @@ CREATE TABLE `learning_plan` (
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学习计划表';
 
-CREATE TABLE `learning_resource` (
+CREATE TABLE IF NOT EXISTS `learning_resource` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `plan_id` BIGINT UNSIGNED NOT NULL,
     `parent_id` BIGINT UNSIGNED DEFAULT NULL,
@@ -56,7 +56,7 @@ CREATE TABLE `learning_resource` (
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学习资源表';
 
-CREATE TABLE `ai_dialogue` (
+CREATE TABLE IF NOT EXISTS `ai_dialogue` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '用户ID',
     `session_id` VARCHAR(36) NOT NULL COMMENT '会话ID(UUID)',
@@ -76,17 +76,20 @@ CREATE TABLE `ai_dialogue` (
     KEY `idx_dialogue_time` (`dialogue_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='交互式AI对话表';
 
-CREATE TABLE `quiz_record` (
+CREATE TABLE IF NOT EXISTS `quiz_record` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    `resource_id` BIGINT UNSIGNED NOT NULL,
-    `user_id` BIGINT UNSIGNED NOT NULL,
-    `plan_id` BIGINT UNSIGNED NOT NULL,
-    `question_type` VARCHAR(30) DEFAULT NULL,
-    `difficulty` TINYINT DEFAULT NULL,
-    `correct_answer` TEXT,
-    `user_answer` TEXT,
-    `is_correct` TINYINT DEFAULT NULL,
-    `answer_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `resource_id` BIGINT UNSIGNED NOT NULL COMMENT '学习资源ID（必须对应题目模块）',
+    `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
+    `plan_id` BIGINT UNSIGNED NOT NULL COMMENT '学习计划ID',
+    `question_type` VARCHAR(30) DEFAULT NULL COMMENT '题型: single_choice,multiple_choice,true_false,fill_blank,short_answer',
+    `difficulty` TINYINT DEFAULT NULL COMMENT '难度 1-5',
+    `question_text` TEXT DEFAULT NULL COMMENT '题目内容',
+    `correct_answer` TEXT COMMENT '正确答案',
+    `user_answer` TEXT COMMENT '用户作答',
+    `score` DOUBLE DEFAULT NULL COMMENT 'LLM 评分 0-1',
+    `is_correct` TINYINT DEFAULT NULL COMMENT '0错误 1正确',
+    `feedback` TEXT DEFAULT NULL COMMENT 'LLM 详细反馈',
+    `answer_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '作答时间',
     `is_deleted` TINYINT DEFAULT 0,
     `deleted_at` DATETIME DEFAULT NULL,
     PRIMARY KEY (`id`),
@@ -95,7 +98,7 @@ CREATE TABLE `quiz_record` (
     KEY `idx_plan_id` (`plan_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='答题表';
 
-CREATE TABLE `user_profile` (
+CREATE TABLE IF NOT EXISTS `user_profile` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED NOT NULL,
     `version` INT NOT NULL,
@@ -111,7 +114,7 @@ CREATE TABLE `user_profile` (
     KEY `idx_user_version` (`user_id`, `version`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户画像表';
 
-CREATE TABLE `note` (
+CREATE TABLE IF NOT EXISTS `note` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED NOT NULL,
     `note_name` VARCHAR(255) NOT NULL,
@@ -124,7 +127,7 @@ CREATE TABLE `note` (
     KEY `idx_user_id` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='笔记表';
 
-CREATE TABLE `note_resource_rel` (
+CREATE TABLE IF NOT EXISTS `note_resource_rel` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `note_id` BIGINT UNSIGNED NOT NULL,
     `resource_id` BIGINT UNSIGNED NOT NULL,
@@ -133,7 +136,7 @@ CREATE TABLE `note_resource_rel` (
     KEY `idx_resource_id` (`resource_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='笔记学习资源关联表';
 
-CREATE TABLE `knowledge_base` (
+CREATE TABLE IF NOT EXISTS `knowledge_base` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `doc_name` VARCHAR(255) NOT NULL,
     `file_path` VARCHAR(500) NOT NULL,
@@ -141,6 +144,7 @@ CREATE TABLE `knowledge_base` (
     `chunk_count` INT DEFAULT NULL,
     `parse_status` TINYINT NOT NULL DEFAULT 0,
     `collection_name` VARCHAR(255) DEFAULT NULL,
+    `mineru_task_id` VARCHAR(100) DEFAULT NULL,
     `upload_user_id` BIGINT UNSIGNED NOT NULL,
     `upload_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `is_deleted` TINYINT DEFAULT 0,
@@ -149,7 +153,7 @@ CREATE TABLE `knowledge_base` (
     KEY `idx_upload_user` (`upload_user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识库管理表';
 
-CREATE TABLE `ai_kb_generation` (
+CREATE TABLE IF NOT EXISTS `ai_kb_generation` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `api_call_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `result_path` VARCHAR(500) DEFAULT NULL,
@@ -160,7 +164,7 @@ CREATE TABLE `ai_kb_generation` (
     KEY `idx_operator` (`operator_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI知识库补充生成表';
 
-CREATE TABLE `system_log` (
+CREATE TABLE IF NOT EXISTS `system_log` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED DEFAULT NULL,
     `operation_type` VARCHAR(50) NOT NULL,
@@ -172,7 +176,7 @@ CREATE TABLE `system_log` (
     KEY `idx_operation` (`operation_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统操作日志表';
 
-CREATE TABLE `ai_token_usage` (
+CREATE TABLE IF NOT EXISTS `ai_token_usage` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED NOT NULL,
     `task_id` BIGINT UNSIGNED DEFAULT NULL,
@@ -187,7 +191,7 @@ CREATE TABLE `ai_token_usage` (
     KEY `idx_task_id` (`task_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI Token消耗表';
 
-CREATE TABLE `learning_duration` (
+CREATE TABLE IF NOT EXISTS `learning_duration` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED NOT NULL,
     `plan_id` BIGINT UNSIGNED NOT NULL,
@@ -202,7 +206,7 @@ CREATE TABLE `learning_duration` (
     KEY `idx_resource` (`resource_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户学习时长记录表';
 
-CREATE TABLE `ai_feedback` (
+CREATE TABLE IF NOT EXISTS `ai_feedback` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED NOT NULL,
     `target_type` VARCHAR(50) NOT NULL,
@@ -218,7 +222,7 @@ CREATE TABLE `ai_feedback` (
     KEY `idx_target` (`target_type`, `target_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI内容反馈表';
 
-CREATE TABLE `user_learning_progress` (
+CREATE TABLE IF NOT EXISTS `user_learning_progress` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED NOT NULL,
     `plan_id` BIGINT UNSIGNED NOT NULL,
@@ -235,7 +239,7 @@ CREATE TABLE `user_learning_progress` (
     KEY `idx_plan_status` (`plan_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户学习进度表';
 
-CREATE TABLE `resource_generation_task` (
+CREATE TABLE IF NOT EXISTS `resource_generation_task` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `plan_id` BIGINT UNSIGNED NOT NULL,
     `resource_id` BIGINT UNSIGNED NOT NULL,
@@ -248,3 +252,28 @@ CREATE TABLE `resource_generation_task` (
     KEY `idx_plan_resource` (`plan_id`, `resource_id`),
     KEY `idx_status` (`task_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='资源生成任务表';
+
+CREATE TABLE IF NOT EXISTS `menu` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `code` VARCHAR(100) NOT NULL,
+    `name` VARCHAR(100) NOT NULL,
+    `path` VARCHAR(255) DEFAULT NULL,
+    `icon` VARCHAR(100) DEFAULT NULL,
+    `parent_id` BIGINT UNSIGNED DEFAULT NULL,
+    `type` VARCHAR(20) NOT NULL DEFAULT 'menu',
+    `sort_order` INT NOT NULL DEFAULT 0,
+    `is_deleted` TINYINT DEFAULT 0,
+    `deleted_at` DATETIME DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_code` (`code`),
+    KEY `idx_parent` (`parent_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='菜单权限表';
+
+CREATE TABLE IF NOT EXISTS `role_menu` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `role` VARCHAR(30) NOT NULL,
+    `menu_id` BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_role_menu` (`role`, `menu_id`),
+    KEY `idx_role` (`role`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='角色菜单关联表';

@@ -18,6 +18,7 @@ NODE_REVIEW_ONLY = "review_only"
 NODE_RESOURCE_GENERATOR = "resource_generator"
 NODE_QUIZ_GENERATOR = "quiz_generator"
 NODE_QUIZ_GRADER = "quiz_grader"
+NODE_RESOURCE_TYPE_GENERATOR = "resource_type_generator"
 NODE_PROFILE_MAINTAINER = "profile_maintainer"
 NODE_HUMAN_CONFIRM = "human_confirm"
 
@@ -36,6 +37,7 @@ class AgentState(TypedDict, total=False):
     # ==================== 请求基础信息 ====================
     user_id: int
     plan_id: Optional[int]
+    task_id: Optional[int]
     session_id: str
     user_message: str  # 当前用户输入
 
@@ -83,9 +85,11 @@ class AgentState(TypedDict, total=False):
     orchestrated_content: Optional[Dict[str, Any]]  # 编排后的模块化内容
     module_list: List[Dict[str, Any]]  # 生成的学习资源模块列表
     use_parallel_orchestration: bool  # 是否使用并行编排模式（默认 True）
+    placeholder_resource_map: Dict[int, Dict[str, Any]]  # module_order -> {id, type, title} 占位资源映射
 
     # ==================== 自主生成 ====================
     generated_content: Optional[Dict[str, Any]]  # 自主生成的内容
+    source_resource_content: str  # 源资源全文（用于类型资源生成）
 
     # ==================== 题目相关 ====================
     quiz_config: Optional[Dict[str, Any]]  # 题目生成配置
@@ -97,6 +101,13 @@ class AgentState(TypedDict, total=False):
     stream_events: List[Dict[str, Any]]  # 流式事件队列
     current_step: str  # 当前处理步骤描述
     error: Optional[str]  # 错误信息
+    sse_callback: Any  # Callable[[str], None] - 实时推送 SSE 事件的回调函数
+    create_placeholder_callback: Any  # Callable[[list], dict] - 创建占位资源记录的回调函数
+
+    # ==================== 智能体自主异常检测 ====================
+    agent_anomaly: bool  # 智能体自主检测到内容偏离/异常，需中断回主控
+    anomaly_reason: str  # 异常原因描述
+    anomaly_clarify: bool  # 主控已处理异常，简答智能体进入追问澄清模式
 
     # ==================== 循环控制 ====================
     iteration_count: int  # 当前迭代次数（防止无限循环）

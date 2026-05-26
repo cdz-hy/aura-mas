@@ -26,6 +26,10 @@ export function clearAvatar() {
   return request.delete('/user/avatar')
 }
 
+export function deleteAccount() {
+  return request.delete('/user/account')
+}
+
 export function updateProfile(data: {
   gender?: string | null
   age?: string | null

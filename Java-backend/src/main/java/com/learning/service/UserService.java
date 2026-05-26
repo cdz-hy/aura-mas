@@ -6,12 +6,13 @@ import com.learning.common.ErrorCode;
 import com.learning.entity.User;
 import com.learning.entity.UserProfile;
 import com.learning.exception.BusinessException;
-import com.learning.mapper.UserMapper;
-import com.learning.mapper.UserProfileMapper;
+import com.learning.mapper.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -20,6 +21,19 @@ public class UserService {
 
     private final UserMapper userMapper;
     private final UserProfileMapper userProfileMapper;
+    private final LearningPlanMapper planMapper;
+    private final LearningResourceMapper resourceMapper;
+    private final ResourceGenerationTaskMapper taskMapper;
+    private final NoteMapper noteMapper;
+    private final NoteResourceRelMapper noteResourceRelMapper;
+    private final AiDialogueMapper dialogueMapper;
+    private final AiFeedbackMapper feedbackMapper;
+    private final AiTokenUsageMapper tokenUsageMapper;
+    private final QuizRecordMapper quizRecordMapper;
+    private final LearningDurationMapper learningDurationMapper;
+    private final UserLearningProgressMapper progressMapper;
+    private final SystemLogMapper systemLogMapper;
+    private final KnowledgeBaseMapper knowledgeBaseMapper;
 
     public User getUserById(Long userId) {
         User user = userMapper.selectById(userId);
@@ -83,6 +97,67 @@ public class UserService {
                 .eq(User::getId, userId)
                 .set(User::getAvatarUrl, null));
         return oldUrl;
+    }
+
+    @Transactional
+    public void deleteAccount(Long userId) {
+        // Get all plan IDs owned by this user
+        List<Long> planIds = planMapper.selectList(
+                new LambdaQueryWrapper<com.learning.entity.LearningPlan>()
+                        .eq(com.learning.entity.LearningPlan::getUserId, userId)
+                        .select(com.learning.entity.LearningPlan::getId))
+                .stream().map(com.learning.entity.LearningPlan::getId).toList();
+
+        // Delete resources and tasks associated with user's plans
+        if (!planIds.isEmpty()) {
+            resourceMapper.delete(new LambdaQueryWrapper<com.learning.entity.LearningResource>()
+                    .in(com.learning.entity.LearningResource::getPlanId, planIds));
+            taskMapper.delete(new LambdaQueryWrapper<com.learning.entity.ResourceGenerationTask>()
+                    .in(com.learning.entity.ResourceGenerationTask::getPlanId, planIds));
+        }
+
+        // Delete note-resource relations for user's notes
+        List<Long> noteIds = noteMapper.selectList(
+                new LambdaQueryWrapper<com.learning.entity.Note>()
+                        .eq(com.learning.entity.Note::getUserId, userId)
+                        .select(com.learning.entity.Note::getId))
+                .stream().map(com.learning.entity.Note::getId).toList();
+        if (!noteIds.isEmpty()) {
+            noteResourceRelMapper.delete(new LambdaQueryWrapper<com.learning.entity.NoteResourceRel>()
+                    .in(com.learning.entity.NoteResourceRel::getNoteId, noteIds));
+        }
+
+        // Delete user-owned data
+        noteMapper.delete(new LambdaQueryWrapper<com.learning.entity.Note>()
+                .eq(com.learning.entity.Note::getUserId, userId));
+        dialogueMapper.delete(new LambdaQueryWrapper<com.learning.entity.AiDialogue>()
+                .eq(com.learning.entity.AiDialogue::getUserId, userId));
+        feedbackMapper.delete(new LambdaQueryWrapper<com.learning.entity.AiFeedback>()
+                .eq(com.learning.entity.AiFeedback::getUserId, userId));
+        tokenUsageMapper.delete(new LambdaQueryWrapper<com.learning.entity.AiTokenUsage>()
+                .eq(com.learning.entity.AiTokenUsage::getUserId, userId));
+        quizRecordMapper.delete(new LambdaQueryWrapper<com.learning.entity.QuizRecord>()
+                .eq(com.learning.entity.QuizRecord::getUserId, userId));
+        learningDurationMapper.delete(new LambdaQueryWrapper<com.learning.entity.LearningDuration>()
+                .eq(com.learning.entity.LearningDuration::getUserId, userId));
+        progressMapper.delete(new LambdaQueryWrapper<com.learning.entity.UserLearningProgress>()
+                .eq(com.learning.entity.UserLearningProgress::getUserId, userId));
+        systemLogMapper.delete(new LambdaQueryWrapper<com.learning.entity.SystemLog>()
+                .eq(com.learning.entity.SystemLog::getUserId, userId));
+        userProfileMapper.delete(new LambdaQueryWrapper<UserProfile>()
+                .eq(UserProfile::getUserId, userId));
+        knowledgeBaseMapper.delete(new LambdaQueryWrapper<com.learning.entity.KnowledgeBase>()
+                .eq(com.learning.entity.KnowledgeBase::getUploadUserId, userId));
+
+        // Delete plans
+        planMapper.delete(new LambdaQueryWrapper<com.learning.entity.LearningPlan>()
+                .eq(com.learning.entity.LearningPlan::getUserId, userId));
+
+        // Finally soft-delete the user (set is_deleted + deletedAt in one shot)
+        userMapper.update(null, new LambdaUpdateWrapper<User>()
+                .eq(User::getId, userId)
+                .set(User::getIsDeleted, 1)
+                .set(User::getDeletedAt, LocalDateTime.now()));
     }
 
     public void updateProfile(Long userId, UserProfile profile) {

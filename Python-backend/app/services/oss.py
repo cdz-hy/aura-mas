@@ -1,5 +1,5 @@
 import os
-from qiniu import Auth, put_file, etag
+from qiniu import Auth, put_data, etag
 from app.core.config import settings
 
 class QiniuOSSService:
@@ -14,10 +14,13 @@ class QiniuOSSService:
         """
         # 1. 生成上传 Token
         token = self.q.upload_token(self.bucket_name, remote_file_name, 3600)
-        
-        # 2. 执行上传
-        ret, info = put_file(token, remote_file_name, local_file_path, version='v2')
-        
+
+        # 2. 读取文件内容，用 put_data 代替 put_file（更可控）
+        with open(local_file_path, "rb") as f:
+            data = f.read()
+
+        ret, info = put_data(token, remote_file_name, data)
+
         if info.status_code == 200:
             # 3. 构造基础 URL (直接返回，不带签名)
             base_url = self.domain if self.domain.endswith('/') else f"{self.domain}/"

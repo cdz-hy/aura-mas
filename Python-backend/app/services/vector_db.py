@@ -67,3 +67,46 @@ class QdrantService:
             except Exception as e:
                 print(f" [失败: {e}]")
                 raise e
+
+    def get_collection_stats(self) -> dict:
+        """返回集合级别的统计信息"""
+        info = self.client.get_collection(self.collection_name)
+        count = self.client.count(self.collection_name, exact=True)
+        return {
+            "collection_name": self.collection_name,
+            "total_points": count.count,
+            "status": str(info.status),
+        }
+
+    def get_document_chunks(self, doc_id: int) -> list:
+        """滚动获取指定doc_id的所有切片点"""
+        all_points = []
+        offset = None
+        while True:
+            result = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=models.Filter(
+                    must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
+                ),
+                limit=100,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            points, next_offset = result
+            all_points.extend(points)
+            if next_offset is None:
+                break
+            offset = next_offset
+        return all_points
+
+    def delete_document_chunks(self, doc_id: int):
+        """删除指定doc_id的所有切片点"""
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
+                )
+            )
+        )

@@ -6,6 +6,7 @@ import json
 import base64
 import logging
 import requests
+import httpx
 from typing import Optional, List, Dict, Any
 from app.core.config import settings
 
@@ -63,6 +64,9 @@ class JavaBackendClient:
     def _request(self, method: str, path: str, **kwargs) -> Any:
         url = f"{self.base_url}{path}"
         kwargs.setdefault("timeout", self.timeout)
+        headers = kwargs.pop("headers", {})
+        headers["X-Service-Secret"] = settings.JAVA_SERVICE_SECRET
+        kwargs["headers"] = headers
         try:
             resp = requests.request(method, url, **kwargs)
             if resp.status_code == 200:
@@ -77,6 +81,28 @@ class JavaBackendClient:
         except requests.exceptions.ConnectionError:
             raise Exception(f"无法连接 Java 后端: {url}")
         except requests.exceptions.Timeout:
+            raise Exception(f"Java 后端请求超时: {url}")
+
+    async def _arequest(self, method: str, path: str, **kwargs) -> Any:
+        """异步版本 _request，使用 httpx.AsyncClient"""
+        url = f"{self.base_url}{path}"
+        headers = kwargs.pop("headers", {})
+        headers["X-Service-Secret"] = settings.JAVA_SERVICE_SECRET
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.request(method, url, headers=headers, **kwargs)
+            if resp.status_code == 200:
+                result = resp.json()
+                code = result.get("code", 200)
+                if code == 200 or code == 0:
+                    return result.get("data", result)
+                else:
+                    raise Exception(f"Java 后端返回错误: {result.get('msg', '未知错误')}")
+            else:
+                raise Exception(f"Java 后端请求失败 ({resp.status_code}): {resp.text}")
+        except httpx.ConnectError:
+            raise Exception(f"无法连接 Java 后端: {url}")
+        except httpx.TimeoutException:
             raise Exception(f"Java 后端请求超时: {url}")
 
     # ==================== 对话记录 ====================
@@ -106,6 +132,11 @@ class JavaBackendClient:
     def update_dialogue_resource_id(self, dialogue_id: int, resource_id: int):
         """更新对话记录的资源ID"""
         return self._request("PUT", f"/api/internal/dialogue/{dialogue_id}/resource", params={"resourceId": resource_id})
+
+    def update_dialogue_context(self, dialogue_id: int, conversation_context: str):
+        """更新对话记录的上下文压缩字段"""
+        return self._request("PUT", f"/api/internal/dialogue/{dialogue_id}/context",
+                             json={"conversationContext": conversation_context})
 
     def delete_dialogue(self, dialogue_id: int):
         """软删除对话记录"""
@@ -213,6 +244,9 @@ class JavaBackendClient:
         user_answer: str,
         is_correct: int,
         difficulty: int = 3,
+        question_text: str = "",
+        score: float = None,
+        feedback: str = "",
     ) -> Dict[str, Any]:
         """创建答题记录"""
         return self._request("POST", "/api/quiz/internal/create", json={
@@ -220,9 +254,12 @@ class JavaBackendClient:
             "userId": user_id,
             "planId": plan_id,
             "questionType": question_type,
+            "questionText": question_text,
             "correctAnswer": correct_answer,
             "userAnswer": user_answer,
+            "score": score,
             "isCorrect": is_correct,
+            "feedback": feedback,
             "difficulty": difficulty,
         })
 
@@ -325,6 +362,38 @@ class JavaBackendClient:
         return self._request("PUT", f"/api/task/internal/{task_id}", json={
             "taskStatus": task_status,
         })
+
+    # ==================== 知识库管理 ====================
+
+    def update_kb_status(self, kb_id: int, status: int, chunk_count: int = None, mineru_task_id: str = None, collection_name: str = None):
+        """更新知识库记录状态"""
+        body = {"parseStatus": status}
+        if chunk_count is not None:
+            body["chunkCount"] = chunk_count
+        if mineru_task_id is not None:
+            body["mineruTaskId"] = mineru_task_id
+        if collection_name is not None:
+            body["collectionName"] = collection_name
+        return self._request("PUT", f"/api/admin/kb/internal/{kb_id}/status", json=body)
+
+    def get_kb_by_id(self, kb_id: int) -> Dict[str, Any]:
+        """获取知识库记录"""
+        return self._request("GET", f"/api/admin/kb/internal/{kb_id}")
+
+    def delete_kb_by_id(self, kb_id: int):
+        """删除知识库记录"""
+        return self._request("DELETE", f"/api/admin/kb/internal/{kb_id}")
+
+    async def update_kb_status_async(self, kb_id: int, status: int, chunk_count: int = None, mineru_task_id: str = None, collection_name: str = None):
+        """异步更新知识库记录状态"""
+        body = {"parseStatus": status}
+        if chunk_count is not None:
+            body["chunkCount"] = chunk_count
+        if mineru_task_id is not None:
+            body["mineruTaskId"] = mineru_task_id
+        if collection_name is not None:
+            body["collectionName"] = collection_name
+        return await self._arequest("PUT", f"/api/admin/kb/internal/{kb_id}/status", json=body)
 
     # ==================== Token 消耗 ====================
 

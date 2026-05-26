@@ -9,6 +9,7 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from app.agents.schemas import ChatRequest, AgentState
+from app.agents.conversation_compressor import build_chat_history_with_context, async_compress_and_save
 from app.graph.learning_graph import get_learning_graph
 from app.services.db.java_client import java_client
 
@@ -40,21 +41,18 @@ async def agent_chat(request: ChatRequest):
             except Exception as e:
                 logger.warning(f"  [API] 用户画像获取失败: {str(e)}")
 
-            # 2. 获取对话历史
+            # 2. 获取对话历史（带压缩上下文）
             logger.info(f"  [API] 正在获取对话历史...")
             chat_history = []
             try:
+                from app.agents.conversation_compressor import build_chat_history_with_context
                 history = java_client.get_dialogue_history(
                     user_id=request.user_id,
                     plan_id=request.plan_id,
                     session_id=request.session_id,
-                    limit=30,
+                    limit=200,
                 )
-                for h in history:
-                    chat_history.append({
-                        "role": "user" if h.get("dialogueType") == "USER" else "assistant",
-                        "content": h.get("conversationText", ""),
-                    })
+                chat_history = build_chat_history_with_context(history)
                 logger.info(f"  [API] 获取对话历史: {len(chat_history)} 条")
             except Exception as e:
                 logger.warning(f"  [API] 对话历史获取失败: {str(e)}")
@@ -127,8 +125,16 @@ async def agent_chat(request: ChatRequest):
             all_events = []
             ai_response_parts = []
             node_count = 0
+            raw_sse_queue = []
+
+            # 注入 sse_callback，使智能体的流式 JSON 输出能实时推送
+            initial_state["sse_callback"] = lambda data: raw_sse_queue.append(data)
 
             async for event in graph.astream(initial_state, stream_mode="updates"):
+                # 先推送 sse_callback 收集的实时事件（如 raw_chunk）
+                while raw_sse_queue:
+                    yield raw_sse_queue.pop(0)
+
                 for node_name, node_output in event.items():
                     if node_output is None:
                         continue
@@ -149,6 +155,10 @@ async def agent_chat(request: ChatRequest):
                         # 持久化画像更新
                         if evt.get("event_type") == "profile_update":
                             _persist_profile_update_raw(evt, request.user_id)
+
+                    # 节点完成后也推送可能残留的 sse_callback 事件
+                    while raw_sse_queue:
+                        yield raw_sse_queue.pop(0)
 
                     step = node_output.get("current_step", "")
                     if step:
@@ -197,6 +207,13 @@ async def agent_chat(request: ChatRequest):
                 logger.info(f"  [API] AI 回复记录成功")
             except Exception as e:
                 logger.warning(f"  [API] AI 回复记录失败: {str(e)}")
+
+            # 7. 会话压缩任务（异步后台）
+            asyncio.create_task(async_compress_and_save(
+                user_id=request.user_id,
+                session_id=request.session_id,
+                plan_id=request.plan_id or 0,
+            ))
 
             yield _sse_event({
                 "event_type": "done",
@@ -250,13 +267,9 @@ async def confirm_task(request: ChatRequest):
                     user_id=request.user_id,
                     plan_id=request.plan_id,
                     session_id=request.session_id,
-                    limit=30,
+                    limit=200,
                 )
-                for h in history:
-                    chat_history.append({
-                        "role": "user" if h.get("dialogueType") == "USER" else "assistant",
-                        "content": h.get("conversationText", ""),
-                    })
+                chat_history = build_chat_history_with_context(history)
             except Exception:
                 pass
 
@@ -359,6 +372,13 @@ async def confirm_task(request: ChatRequest):
                 )
             except Exception:
                 pass
+
+            # 会话压缩任务（异步后台）
+            asyncio.create_task(async_compress_and_save(
+                user_id=request.user_id,
+                session_id=request.session_id,
+                plan_id=request.plan_id or 0,
+            ))
 
             yield _sse_event({
                 "event_type": "done",

@@ -26,42 +26,44 @@
 
     <!-- Navigation -->
     <nav class="flex-1 py-4 space-y-1 overflow-y-auto" :class="uiStore.sidebarCollapsed ? 'px-2' : 'px-3'">
-      <router-link
-        v-for="item in navItems"
-        :key="item.path"
-        :to="item.path"
-        class="sidebar-link group"
-        :class="[
-          { 'sidebar-link-active': isActive(item.path) },
-          uiStore.sidebarCollapsed ? 'justify-center px-0' : '',
-        ]"
-      >
-        <div class="w-5 h-5 flex-shrink-0" v-html="item.icon"></div>
-        <transition name="fade">
-          <span v-if="!uiStore.sidebarCollapsed" class="whitespace-nowrap">{{ item.label }}</span>
-        </transition>
-      </router-link>
+      <template v-for="item in permissionStore.menus" :key="item.code">
+        <!-- Section header with children -->
+        <template v-if="item.type === 'section' && item.children?.length">
+          <div class="pt-4 mt-4 border-t border-navy-100/50">
+            <p v-if="!uiStore.sidebarCollapsed" class="px-4 pb-2 text-xs font-semibold text-navy-300 uppercase tracking-wider">
+              {{ item.name }}
+            </p>
+            <router-link
+              v-for="child in item.children"
+              :key="child.code"
+              :to="child.path || '/'"
+              class="sidebar-link"
+              :class="[
+                { 'sidebar-link-active': isActive(child.path || '') },
+                uiStore.sidebarCollapsed ? 'justify-center px-0' : '',
+              ]"
+            >
+              <div class="w-5 h-5 flex-shrink-0" v-html="getIcon(child.icon)"></div>
+              <span v-if="!uiStore.sidebarCollapsed" class="whitespace-nowrap">{{ child.name }}</span>
+            </router-link>
+          </div>
+        </template>
 
-      <!-- Admin section -->
-      <template v-if="authStore.isAdmin">
-        <div class="pt-4 mt-4 border-t border-navy-100/50">
-          <p v-if="!uiStore.sidebarCollapsed" class="px-4 pb-2 text-xs font-semibold text-navy-300 uppercase tracking-wider">
-            管理
-          </p>
-          <router-link
-            v-for="item in adminNavItems"
-            :key="item.path"
-            :to="item.path"
-            class="sidebar-link"
-            :class="[
-              { 'sidebar-link-active': isActive(item.path) },
-              uiStore.sidebarCollapsed ? 'justify-center px-0' : '',
-            ]"
-          >
-            <div class="w-5 h-5 flex-shrink-0" v-html="item.icon"></div>
-            <span v-if="!uiStore.sidebarCollapsed" class="whitespace-nowrap">{{ item.label }}</span>
-          </router-link>
-        </div>
+        <!-- Regular menu item with path -->
+        <router-link
+          v-else-if="item.path"
+          :to="item.path"
+          class="sidebar-link group"
+          :class="[
+            { 'sidebar-link-active': isActive(item.path) },
+            uiStore.sidebarCollapsed ? 'justify-center px-0' : '',
+          ]"
+        >
+          <div class="w-5 h-5 flex-shrink-0" v-html="getIcon(item.icon)"></div>
+          <transition name="fade">
+            <span v-if="!uiStore.sidebarCollapsed" class="whitespace-nowrap">{{ item.name }}</span>
+          </transition>
+        </router-link>
       </template>
     </nav>
 
@@ -89,7 +91,7 @@
         <transition name="fade">
           <div v-if="!uiStore.sidebarCollapsed" class="overflow-hidden">
             <p class="text-sm font-medium text-navy-800 truncate">{{ authStore.user?.nickname || '用户' }}</p>
-            <p class="text-xs text-navy-400 truncate">{{ authStore.user?.role === 'admin' ? '管理员' : '学生' }}</p>
+            <p class="text-xs text-navy-400 truncate">{{ roleLabel }}</p>
           </div>
         </transition>
       </div>
@@ -98,58 +100,36 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionStore } from '@/stores/permission'
 
 const route = useRoute()
 const uiStore = useUiStore()
 const authStore = useAuthStore()
+const permissionStore = usePermissionStore()
+
+const roleLabel = computed(() => authStore.user?.role === 'admin' ? '管理员' : '学生')
 
 function isActive(path: string) {
-  return route.path === path || route.path.startsWith(path + '/')
+  return route.path === path
 }
 
-const navItems = [
-  {
-    path: '/dashboard',
-    label: '学习概览',
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
-  },
-  {
-    path: '/plan/create',
-    label: '学习计划',
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
-  },
-  {
-    path: '/notes',
-    label: '我的笔记',
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
-  },
-  {
-    path: '/profile',
-    label: '我的画像',
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
-  },
-]
+const iconMap: Record<string, string> = {
+  dashboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+  plan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
+  notes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+  profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  admin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>',
+  book: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
+  users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+}
 
-const adminNavItems = [
-  {
-    path: '/admin',
-    label: '管理概览',
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>',
-  },
-  {
-    path: '/admin/kb',
-    label: '知识库管理',
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
-  },
-  {
-    path: '/admin/users',
-    label: '用户管理',
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-  },
-]
+function getIcon(code: string | null): string {
+  return iconMap[code || ''] || iconMap.dashboard
+}
 </script>
 
 <style scoped>

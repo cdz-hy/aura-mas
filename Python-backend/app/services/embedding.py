@@ -4,11 +4,18 @@ import requests
 from typing import List, Optional, Dict, Any
 from app.core.config import settings
 
+# 配置 fastembed 模型缓存目录（避免每次启动都下载）
+# 优先使用环境变量，否则默认为项目目录下的 .model_cache
+CACHE_DIR = os.environ.get("FASTEMBED_CACHE_PATH") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".model_cache"
+)
+os.environ.setdefault("FASTEMBED_CACHE_PATH", CACHE_DIR)
+
 class BailianEmbeddingService:
     def __init__(self):
         self.api_key = settings.DASHSCOPE_API_KEY
-        self.model_name = "qwen3-vl-embedding"
-        self.url = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+        self.model_name = settings.QWEN_EMBEDDING_MODEL
+        self.url = settings.QWEN_EMBEDDING_URL
 
     def _encode_image(self, image_path: str) -> str:
         """读取本地图片并转换为 Base64 编码"""
@@ -67,6 +74,7 @@ from fastembed import SparseTextEmbedding
 class SparseEmbeddingService:
     def __init__(self):
         # 使用 Qdrant 提供的 BM25 预训练模型
+        # fastembed 会自动使用 FASTEMBED_CACHE_PATH 环境变量指定的缓存目录
         self.model = SparseTextEmbedding(model_name="Qdrant/bm25")
 
     def embed_text(self, text: str) -> Dict[str, Any]:

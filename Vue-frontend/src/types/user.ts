@@ -1,3 +1,5 @@
+import type { MenuItem } from './menu'
+
 export interface User {
   id: number
   loginName: string
@@ -25,4 +27,5 @@ export interface RegisterRequest {
 export interface LoginResponse {
   token: string
   user: User
+  menus: MenuItem[]
 }

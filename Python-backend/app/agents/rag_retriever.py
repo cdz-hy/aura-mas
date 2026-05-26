@@ -6,6 +6,8 @@ import asyncio
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState, NODE_CONTROLLER, NODE_REVIEWER
 from app.agents.llm_factory import get_rag_retriever_llm
+from app.prompts import RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT
+from app.utils.token_recorder import record_from_mimo
 from app.services.retrieval import HybridRetrievalService
 
 logger = logging.getLogger("agents.rag_retriever")
@@ -88,16 +90,7 @@ def _optimize_search_queries(modules: List[Dict[str, Any]], user_message: str, l
         history_text = "\n".join(history_lines)
 
     messages = [
-        {"role": "system", "content": """你是检索词优化专家。根据学习模块的描述和对话上下文，为每个模块生成最有效的搜索查询词。
-严格输出 JSON 对象，格式如下：
-{"queries": ["查询词1", "查询词2", "查询词3"]}
-规则：
-1. 查询词要精炼、具体，适合向量检索
-2. 包含核心概念和关键词
-3. 适合搜索教学资料
-4. 结合对话历史理解用户的真实学习需求
-5. queries 数组的元素个数必须与模块数相同
-严禁使用 emoji。严禁输出 JSON 以外的任何内容。"""},
+        {"role": "system", "content": RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT},
         {"role": "user", "content": f"""用户学习目标: {user_message}
 
 对话历史（请结合上下文理解用户需求）:
@@ -111,6 +104,7 @@ def _optimize_search_queries(modules: List[Dict[str, Any]], user_message: str, l
 
     try:
         result = llm.chat_json(messages)
+        record_from_mimo(llm, state.get("user_id", 0), "rag_query_optimization", state.get("task_id"))
         if isinstance(result, dict) and "queries" in result:
             queries = result["queries"]
         elif isinstance(result, list):
@@ -231,6 +225,32 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"    检索充足: {'是' if rag_sufficient else '否 (结果不足或均为低分无关内容)'}")
         if poor_module_ids:
             logger.info(f"    需自主生成的模块: {poor_module_ids}")
+
+        # 自主异常检测：当所有模块检索结果都不足时，检查是否与目标根本偏离
+        if not rag_sufficient and len(poor_module_ids) == len(modules_to_retrieve) and len(modules_to_retrieve) > 0:
+            chunk_headings = []
+            for c in deduped_chunks[:5]:
+                h = " > ".join(c.get("heading", []))
+                if h:
+                    chunk_headings.append(h)
+            anomaly_summary = f"检索目标: {user_message[:200]}; 检索到内容主题: {'; '.join(chunk_headings) if chunk_headings else '无有效结果'}"
+            from app.agents.anomaly_checker import check_content_alignment
+            is_aligned, anomaly_reason = check_content_alignment(user_message, anomaly_summary)
+            if not is_aligned:
+                logger.warning(f"  [RAG检索智能体] 自主检测到检索内容偏离: {anomaly_reason}")
+                return {
+                    "agent_anomaly": True,
+                    "anomaly_reason": anomaly_reason,
+                    "rag_sufficient": False,
+                    "current_step": f"RAG检索智能体: 检测到检索偏离 - {anomaly_reason}",
+                    "stream_events": [{
+                        "event_type": "thinking",
+                        "agent": "rag_retriever",
+                        "data": {"message": f"检测到检索结果与目标偏离: {anomaly_reason}"},
+                        "step_description": f"异常中断: {anomaly_reason}"
+                    }],
+                }
+
         logger.info(f"{'='*60}")
 
         return {

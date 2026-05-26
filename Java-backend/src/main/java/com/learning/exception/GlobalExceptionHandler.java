@@ -1,6 +1,7 @@
 package com.learning.exception;
 
 import com.learning.common.Result;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
@@ -18,8 +19,16 @@ import java.util.stream.Collectors;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)
-    public Result<Void> handleBusinessException(BusinessException e) {
+    public Result<Void> handleBusinessException(BusinessException e, jakarta.servlet.http.HttpServletResponse response) {
         log.warn("Business exception: {}", e.getMessage());
+        // 为常见的 HTTP 错误码设置对应的状态码
+        if (e.getCode() == 401) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        } else if (e.getCode() == 403) {
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        } else if (e.getCode() == 404) {
+            response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+        }
         return Result.error(e.getCode(), e.getMessage());
     }
 

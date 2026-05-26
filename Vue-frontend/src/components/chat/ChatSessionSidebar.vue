@@ -42,7 +42,10 @@
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
         <div class="flex-1 min-w-0">
-          <p class="text-sm truncate">{{ session.title || '新对话' }}</p>
+          <p class="text-sm truncate flex items-center gap-1.5">
+            {{ session.title || '新对话' }}
+            <span v-if="streamingSessionIds?.has(session.sessionId)" class="inline-block w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse flex-shrink-0"></span>
+          </p>
           <p class="text-[10px] text-navy-400 mt-0.5">{{ formatTime(session.lastMessageAt) }}</p>
         </div>
         <!-- Delete button -->
@@ -67,6 +70,7 @@ defineProps<{
   sessions: ChatSession[]
   activeSessionId: string
   loading?: boolean
+  streamingSessionIds?: Set<string>
 }>()
 
 const emit = defineEmits<{

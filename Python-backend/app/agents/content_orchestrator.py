@@ -8,109 +8,71 @@
 - 默认使用并行模式，提升性能和可靠性
 """
 import logging
+import json
 import asyncio
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_content_orchestrator_llm
+from app.prompts import CONTENT_ORCHESTRATOR_BATCH_PROMPT, CONTENT_ORCHESTRATOR_PARALLEL_PROMPT
+from app.utils.token_recorder import record
+
+VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap"}
+
+
+def _normalize_module_type(module_type: str) -> str:
+    if not module_type:
+        return "text"
+    mt = module_type.strip().lower()
+    return mt if mt in VALID_MODULE_TYPES else "text"
+
+
+def _normalize_modules(modules: list) -> list:
+    for m in modules:
+        if "module_type" in m:
+            m["module_type"] = _normalize_module_type(m["module_type"])
+    return modules
+
+
+def _emit(state: dict, event_type: str, content: str):
+    """通过 sse_callback 实时推送 SSE 事件"""
+    cb = state.get("sse_callback")
+    if cb:
+        try:
+            cb(f'data: {json.dumps({"type": event_type, "content": content}, ensure_ascii=False)}\n\n')
+        except Exception:
+            pass
+
+
+def _emit_resource_stream(sse_callback, event_type: str, resource_id: int, content: str):
+    """通过 sse_callback 推送带资源 ID 的流式事件"""
+    if sse_callback:
+        try:
+            sse_callback(f'data: {json.dumps({"type": event_type, "resource_id": resource_id, "content": content}, ensure_ascii=False)}\n\n')
+        except Exception:
+            pass
+
 
 logger = logging.getLogger("agents.content_orchestrator")
 
-SYSTEM_PROMPT_BATCH = """你是一个专业的内容编排专家。你的任务是将检索到的多模态知识内容，按照合理美观的顺序和模块化结构编排为学习资源。
 
-## 编排要求
-1. 按照逻辑顺序组织内容模块，由浅入深
-2. 每个模块结构清晰，标题层次分明
-3. 图片资源要附带说明注解，使用 Markdown 图片格式
-4. 代码块要标注语言类型
-5. 重要概念用加粗或引用格式标注
-6. 模块间要有合理的过渡说明
-
-## 输出格式
-严格输出 JSON：
-{
-  "title": "学习资源总标题",
-  "description": "简要描述",
-  "modules": [
-    {
-      "module_order": 1,
-      "module_type": "text",
-      "title": "模块标题",
-      "content": "模块内容（Markdown格式）",
-      "metadata": {
-        "key_concepts": ["概念1", "概念2"],
-        "has_images": true,
-        "has_code": false,
-        "estimated_read_time": "5分钟"
-      }
-    }
-  ],
-  "total_modules": 5,
-  "summary": "学习资源总结"
-}
-
-## module_type 取值
-- text: 文本内容
-- image: 图片说明
-- diagram: 流程图/思维导图描述
-- code: 代码示例（含完整注释和运行说明，使用带语言标签的代码块）
-- summary: 总结回顾（提炼核心要点，适合快速复习）
-- mindmap: 思维导图（使用 Markdown 缩进列表或 Mermaid mindmap 语法表示层级关系）
-
-## 规则
-- 严禁使用 emoji 表情符号
-- 所有文本使用中文
-- 图片使用 Markdown 格式: ![描述](URL)
-- 内容要完整充实，不要过于简略
-- 模块标题必须是实际内容名称，严禁使用「第一章」「第二章」「模块一」「Part 1」等章节编号前缀，也不要使用「XXX:」等冒号后缀。标题只写实际内容名即可
-- 严禁生成 quiz（题目/练习题）类型的模块！题目只能由专门的题目生成智能体单独生成，编排智能体不允许产出任何题目内容"""
+def _flush_module_usage(modules_list: list, user_id: int, scene: str, task_id=None,
+                         extra_records: list = None):
+    """收集模块生成过程中的 token 消耗并统一记录"""
+    all_records = list(extra_records or [])
+    for m in modules_list:
+        records = m.pop("_usage_records", None) or []
+        all_records.extend(records)
+    for rec in all_records:
+        record(
+            user_id=user_id,
+            scene=scene,
+            model_name=rec["model"],
+            input_tokens=rec["input_tokens"],
+            output_tokens=rec["output_tokens"],
+            task_id=task_id,
+        )
 
 
-SYSTEM_PROMPT_PARALLEL = """你是一个专业的内容编排专家。你的任务是为单个学习模块编排生成高质量的学习内容。
-
-## 编排要求
-1. 内容结构清晰，标题层次分明
-2. 图片资源要附带说明注解，使用 Markdown 图片格式
-3. 代码块要标注语言类型
-4. 重要概念用加粗或引用格式标注
-5. 内容要完整充实，适合独立学习
-
-## 输出格式
-严格输出 JSON，确保所有字符串字段中的特殊字符（引号、换行符、反斜杠等）都正确转义：
-{
-  "module_type": "text",
-  "title": "模块标题",
-  "content": "模块内容（Markdown格式，换行符必须转义为\\n）",
-  "description": "模块简要描述（单行文本）",
-  "metadata": {
-    "key_concepts": ["概念1", "概念2"],
-    "has_images": true,
-    "has_code": false,
-    "estimated_read_time": "5分钟"
-  }
-}
-
-## module_type 取值
-- text: 文本内容
-- image: 图片说明
-- diagram: 流程图/思维导图描述
-- code: 代码示例（含完整注释和运行说明，使用带语言标签的代码块）
-- summary: 总结回顾（提炼核心要点，适合快速复习）
-- mindmap: 思维导图（使用 Markdown 缩进列表或 Mermaid mindmap 语法表示层级关系）
-
-## JSON 格式规则
-- content 字段中的所有换行符必须转义为 \\n
-- 所有字符串中的双引号必须转义为 \"
-- 所有字符串中的反斜杠必须转义为 \\\\
-- description 字段必须是单行文本
-- 确保输出的是合法的 JSON 格式
-
-## 内容规则
-- 严禁使用 emoji 表情符号
-- 所有文本使用中文
-- 图片使用 Markdown 格式: ![描述](URL)
-- 内容要完整充实，不要过于简略
-- 模块标题必须是实际内容名称，严禁使用「第一章」「第二章」「模块一」等章节编号前缀
-- 严禁生成 quiz（题目/练习题）类型的模块！"""
 
 def _generate_single_module(
     module_info: Dict[str, Any],
@@ -119,6 +81,8 @@ def _generate_single_module(
     user_profile: Dict[str, Any],
     learning_goal: str,
     chat_history: List[Dict[str, str]],
+    sse_callback=None,
+    resource_id: int = 0,
 ) -> Dict[str, Any]:
     """
     为单个模块生成内容（用于并行编排）
@@ -202,8 +166,18 @@ def _generate_single_module(
             history_lines.append(f"{role}: {content}")
         history_text = "\n".join(history_lines)
     
+    # 获取资源类型（如果指定了特定类型，强制使用）
+    resource_types = module_info.get("resources", [])
+    forced_type = resource_types[0].get("resource_type", "") if resource_types else ""
+
+    type_hint = ""
+    if forced_type:
+        type_hint = f"- 指定资源类型: {forced_type}（必须使用此类型作为 module_type）\n"
+        if forced_type == "mindmap":
+            type_hint += "- 重要: 必须输出 MindElixir nodeData JSON 格式，详见系统提示\n"
+
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT_PARALLEL},
+        {"role": "system", "content": CONTENT_ORCHESTRATOR_PARALLEL_PROMPT},
         {"role": "user", "content": f"""学习目标: {learning_goal}
 
 对话历史:
@@ -214,7 +188,7 @@ def _generate_single_module(
 - 描述: {module_desc}
 - 关键要点: {', '.join(key_points)}
 - 模块顺序: 第 {module_order} 个模块
-
+{type_hint}
 用户内容偏好: {pref_text}
 
 检索到的相关知识资料:
@@ -224,9 +198,13 @@ def _generate_single_module(
     ]
     
     try:
-        result = llm.chat_json(messages, max_tokens=16384)
+        def _on_chunk(chunk: str):
+            _emit_resource_stream(sse_callback, "resource_stream_text", resource_id, chunk)
+
+        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, max_tokens=16384, stream_field="content")
         result["module_order"] = module_order
         result["module_id"] = module_info.get("module_id", module_order)
+        result["_usage_records"] = llm.get_usage_records()
         return result
     except Exception as e:
         logger.error(f"  [模块{module_order}] 生成失败: {str(e)}")
@@ -316,12 +294,17 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             })
         
         # 并发重新生成未通过的模块
+        sse_cb = state.get("sse_callback")
+        placeholder_map = state.get("placeholder_resource_map", {})
+
         async def run_retry_orchestration():
             """并发重新生成未通过的模块"""
             loop = asyncio.get_event_loop()
-            
+
             tasks = []
             for module_id, module_info in target_modules_info:
+                placeholder = placeholder_map.get(module_id, {})
+                res_id = placeholder.get("id", 0)
                 task = loop.run_in_executor(
                     None,
                     _generate_single_module,
@@ -331,6 +314,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                     user_profile,
                     learning_goal,
                     chat_history,
+                    sse_cb,
+                    res_id,
                 )
                 tasks.append(task)
             
@@ -362,7 +347,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             
             # 按 module_order 排序
             final_modules.sort(key=lambda x: x.get("module_order", 0))
-            
+            _normalize_modules(final_modules)
+
             # 构造完整结果
             orchestrated_content = {
                 "title": task_breakdown.get("title", learning_goal),
@@ -385,6 +371,36 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                 logger.info(f"      模块{module_order} [{mtype}] {status}: {mtitle}")
             logger.info(f"{'='*60}")
             
+            _flush_module_usage(new_modules, state.get("user_id", 0),
+                                "content_orchestration", state.get("task_id"))
+
+            # 自主异常检测：重试模式下检查编排内容是否偏离
+            content_previews = []
+            for m in final_modules[:3]:
+                c = m.get("content", "")
+                if isinstance(c, str):
+                    content_previews.append(f"{m.get('title', '')}: {c[:120]}")
+            if content_previews:
+                from app.agents.anomaly_checker import check_content_alignment
+                is_aligned, anomaly_reason = check_content_alignment(
+                    learning_goal, "重试编排模块: " + "; ".join(content_previews)
+                )
+                if not is_aligned:
+                    logger.warning(f"  [内容编排智能体] 重试编排检测到内容偏离: {anomaly_reason}")
+                    return {
+                        "agent_anomaly": True,
+                        "anomaly_reason": anomaly_reason,
+                        "module_list": final_modules,
+                        "orchestrated_content": orchestrated_content,
+                        "current_step": f"内容编排智能体: 重试编排检测到内容偏离 - {anomaly_reason}",
+                        "stream_events": [{
+                            "event_type": "thinking",
+                            "agent": "content_orchestrator",
+                            "data": {"message": f"检测到编排内容与目标偏离: {anomaly_reason}"},
+                            "step_description": f"异常中断: {anomaly_reason}"
+                        }],
+                    }
+
             return {
                 "orchestrated_content": orchestrated_content,
                 "module_list": final_modules,
@@ -422,22 +438,43 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     # 并行模式：为每个模块并发生成内容
     if use_parallel and modules:
         logger.info(f"  [内容编排智能体] 使用并行模式，共 {len(modules)} 个模块")
-        
+        _emit(state, "progress", f"正在并行编排 {len(modules)} 个学习模块...")
+        sse_cb = state.get("sse_callback")
+        placeholder_map = state.get("placeholder_resource_map", {})
+
+        # 单模块自动确认场景：placeholder_resource_map 为空，通过回调动态创建
+        if not placeholder_map and modules:
+            create_placeholder_cb = state.get("create_placeholder_callback")
+            if create_placeholder_cb:
+                try:
+                    placeholder_map = create_placeholder_cb(modules)
+                except Exception as e:
+                    logger.warning(f"  [内容编排智能体] 创建占位资源失败: {e}")
+
+        # 通知前端创建侧栏占位条目
+        if placeholder_map:
+            _emit(state, "resource_stream_start", json.dumps(list(placeholder_map.values()), ensure_ascii=False))
+
         async def run_parallel_orchestration():
             """并发为每个模块生成内容"""
             loop = asyncio.get_event_loop()
-            
+
             tasks = []
             for i, module in enumerate(modules):
+                module_order = i + 1
+                placeholder = placeholder_map.get(module_order, {})
+                res_id = placeholder.get("id", 0)
                 task = loop.run_in_executor(
                     None,
                     _generate_single_module,
                     module,
-                    i + 1,
+                    module_order,
                     rag_chunks,
                     user_profile,
                     learning_goal,
                     chat_history,
+                    sse_cb,
+                    res_id,
                 )
                 tasks.append(task)
             
@@ -468,7 +505,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             
             # 按 module_order 排序
             modules_list.sort(key=lambda x: x.get("module_order", 0))
-            
+            _normalize_modules(modules_list)
+
             # 构造完整结果
             orchestrated_content = {
                 "title": task_breakdown.get("title", learning_goal),
@@ -478,6 +516,7 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                 "summary": f"已生成 {len(modules_list)} 个学习模块",
             }
             
+            _emit(state, "progress", f"并行编排完成，共生成 {len(modules_list)} 个学习模块")
             logger.info(f"  [内容编排智能体] 并行编排完成!")
             logger.info(f"    标题: {orchestrated_content.get('title', '未命名')}")
             logger.info(f"    模块数: {len(modules_list)}")
@@ -490,6 +529,36 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                 logger.info(f"      模块{i+1} [{mtype}] {status}: {mtitle} (概念: {', '.join(concepts[:3])})")
             logger.info(f"{'='*60}")
             
+            _flush_module_usage(modules_list, state.get("user_id", 0),
+                                "content_orchestration", state.get("task_id"))
+
+            # 自主异常检测：检查编排内容是否与学习目标偏离
+            content_previews = []
+            for m in modules_list[:3]:
+                c = m.get("content", "")
+                if isinstance(c, str):
+                    content_previews.append(f"{m.get('title', '')}: {c[:120]}")
+            if content_previews:
+                from app.agents.anomaly_checker import check_content_alignment
+                is_aligned, anomaly_reason = check_content_alignment(
+                    learning_goal, "编排模块: " + "; ".join(content_previews)
+                )
+                if not is_aligned:
+                    logger.warning(f"  [内容编排智能体] 检测到编排内容偏离: {anomaly_reason}")
+                    return {
+                        "agent_anomaly": True,
+                        "anomaly_reason": anomaly_reason,
+                        "module_list": modules_list,
+                        "orchestrated_content": orchestrated_content,
+                        "current_step": f"内容编排智能体: 检测到内容偏离 - {anomaly_reason}",
+                        "stream_events": [{
+                            "event_type": "thinking",
+                            "agent": "content_orchestrator",
+                            "data": {"message": f"检测到编排内容与目标偏离: {anomaly_reason}"},
+                            "step_description": f"异常中断: {anomaly_reason}"
+                        }],
+                    }
+
             return {
                 "orchestrated_content": orchestrated_content,
                 "module_list": modules_list,
@@ -511,10 +580,47 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     # 批量模式：一次性生成所有模块（原有逻辑）
     if not use_parallel or not modules:
         logger.info(f"  [内容编排智能体] 使用批量模式")
-        return _batch_orchestration(
+        _emit(state, "progress", "正在编排学习内容...")
+        batch_result = _batch_orchestration(
             rag_chunks, task_breakdown, user_message, learning_goal,
-            user_profile, generated_content, chat_history
+            user_profile, generated_content, chat_history,
+            sse_callback=state.get("sse_callback"),
         )
+        extra_records = batch_result.pop("_usage_records", None) or []
+        _flush_module_usage(batch_result.get("module_list", []),
+                            state.get("user_id", 0),
+                            "content_orchestration", state.get("task_id"),
+                            extra_records=extra_records)
+
+        # 自主异常检测：批量模式
+        batch_modules = batch_result.get("module_list", [])
+        content_previews = []
+        for m in batch_modules[:3]:
+            c = m.get("content", "")
+            if isinstance(c, str):
+                content_previews.append(f"{m.get('title', '')}: {c[:120]}")
+        if content_previews:
+            from app.agents.anomaly_checker import check_content_alignment
+            is_aligned, anomaly_reason = check_content_alignment(
+                learning_goal, "批量编排模块: " + "; ".join(content_previews)
+            )
+            if not is_aligned:
+                logger.warning(f"  [内容编排智能体] 批量编排检测到内容偏离: {anomaly_reason}")
+                return {
+                    "agent_anomaly": True,
+                    "anomaly_reason": anomaly_reason,
+                    "module_list": batch_modules,
+                    "orchestrated_content": batch_result.get("orchestrated_content"),
+                    "current_step": f"内容编排智能体: 批量编排检测到内容偏离 - {anomaly_reason}",
+                    "stream_events": [{
+                        "event_type": "thinking",
+                        "agent": "content_orchestrator",
+                        "data": {"message": f"检测到编排内容与目标偏离: {anomaly_reason}"},
+                        "step_description": f"异常中断: {anomaly_reason}"
+                    }],
+                }
+
+        return batch_result
 
 
 def _batch_orchestration(
@@ -525,16 +631,7 @@ def _batch_orchestration(
     user_profile: Dict[str, Any],
     generated_content: Dict[str, Any],
     chat_history: List[Dict[str, str]],
-) -> Dict[str, Any]:
-    """批量编排模式：一次性生成所有模块（原有逻辑）"""
-def _batch_orchestration(
-    rag_chunks: List[Dict[str, Any]],
-    task_breakdown: Dict[str, Any],
-    user_message: str,
-    learning_goal: str,
-    user_profile: Dict[str, Any],
-    generated_content: Dict[str, Any],
-    chat_history: List[Dict[str, str]],
+    sse_callback=None,
 ) -> Dict[str, Any]:
     """批量编排模式：一次性生成所有模块（原有逻辑）"""
     llm = get_content_orchestrator_llm()
@@ -568,10 +665,16 @@ def _batch_orchestration(
     modules_desc = ""
     if task_breakdown:
         modules = task_breakdown.get("modules", [])
-        modules_desc = "\n".join([
-            f"- 模块{m.get('module_id', i+1)}: {m.get('title', '')} - {m.get('description', '')}"
-            for i, m in enumerate(modules)
-        ])
+        desc_lines = []
+        for i, m in enumerate(modules):
+            line = f"- 模块{m.get('module_id', i+1)}: {m.get('title', '')} - {m.get('description', '')}"
+            resources = m.get("resources", [])
+            if resources:
+                types = [r.get("resource_type", "") for r in resources if r.get("resource_type")]
+                if types:
+                    line += f" [指定类型: {', '.join(types)}]"
+            desc_lines.append(line)
+        modules_desc = "\n".join(desc_lines)
 
     behavior = user_profile.get("learning_behavior", {})
     fs = behavior.get("felder_silverman", {})
@@ -590,7 +693,7 @@ def _batch_orchestration(
         history_text = "\n".join(history_lines)
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT_BATCH},
+        {"role": "system", "content": CONTENT_ORCHESTRATOR_BATCH_PROMPT},
         {"role": "user", "content": f"""学习目标: {learning_goal}
 
 对话历史（请结合上下文理解用户需求）:
@@ -612,6 +715,7 @@ def _batch_orchestration(
         logger.info(f"  [内容编排智能体] 正在调用 LLM 进行批量编排...")
         result = llm.chat_json(messages, max_tokens=16384)
         modules_list = result.get("modules", [])
+        _normalize_modules(modules_list)
 
         logger.info(f"  [内容编排智能体] 批量编排完成!")
         logger.info(f"    标题: {result.get('title', '未命名')}")
@@ -626,6 +730,7 @@ def _batch_orchestration(
         return {
             "orchestrated_content": result,
             "module_list": modules_list,
+            "_usage_records": llm.get_usage_records(),
             "current_step": f"内容编排智能体: 批量编排完成，共 {len(modules_list)} 个模块",
             "stream_events": [{
                 "event_type": "module",

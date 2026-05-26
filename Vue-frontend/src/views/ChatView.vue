@@ -5,6 +5,7 @@
       :sessions="store.sessions"
       :active-session-id="store.activeSessionId"
       :loading="store.sessionsLoading"
+      :streaming-session-ids="store.streamingSessionIds"
       @new-session="store.newSession()"
       @select="store.selectSession($event)"
       @delete="store.deleteSession($event)"
@@ -129,7 +130,10 @@
             </svg>
           </div>
           <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
-            <div v-if="store.streamBuffer" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(store.streamBuffer)"></div>
+            <div v-if="store.streamBuffer" class="text-navy-700 leading-relaxed markdown-body">
+              <div>{{ store.streamBuffer }}<span class="inline-block w-0.5 h-4 bg-navy-400 ml-0.5 animate-pulse align-text-bottom"></span></div>
+            </div>
+            <!-- 加载动画 -->
             <div v-else class="flex gap-1.5 py-1">
               <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0s"></span>
               <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.15s"></span>
@@ -169,7 +173,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted } from 'vue'
+import { ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { parseMarkdown } from '@/utils/markdown'
 import { useChatStore } from '@/stores/chat'
@@ -238,10 +242,26 @@ function submitModification() {
   store.confirmBreakdown(planId, text)
 }
 
-onMounted(() => {
-  store.loadSessions(planId)
-  if (!store.activeSessionId) {
-    store.newSession()
+onMounted(async () => {
+  await store.loadSessions(planId)
+
+  // 刷新后恢复：先检查后端是否仍在处理
+  let isRecovering = false
+  if (store.activeSessionId) {
+    isRecovering = await store.recoverStreaming(planId)
   }
+
+  // 如果后端没有在处理，正常加载消息
+  if (!isRecovering) {
+    if (!store.activeSessionId) {
+      store.newSession()
+    } else if (store.messages.length === 0) {
+      await store.selectSession(store.activeSessionId)
+    }
+  }
+})
+
+onUnmounted(() => {
+  store.stopRecovering()
 })
 </script>

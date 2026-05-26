@@ -8,51 +8,15 @@ from langgraph.graph import END
 from app.agents.schemas import (
     AgentState, NODE_CONTROLLER, NODE_TASK_DECOMPOSER, NODE_SIMPLE_ANSWER,
     NODE_RAG_RETRIEVER, NODE_QUIZ_GENERATOR, NODE_QUIZ_GRADER,
-    NODE_RESOURCE_GENERATOR, NODE_HUMAN_CONFIRM,
+    NODE_RESOURCE_GENERATOR, NODE_RESOURCE_TYPE_GENERATOR, NODE_HUMAN_CONFIRM,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
     INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP,
 )
 from app.agents.llm_factory import get_controller_llm
+from app.prompts import CONTROLLER_PROMPT
+from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("agents.controller")
-
-SYSTEM_PROMPT = """你是一个多智能体学习系统的主控调度器。你的职责是准确识别用户意图并决定下一步操作。
-
-## 可用意图类型
-1. **generate_resource** - 用户想了解、学习、掌握某个知识/概念/技术，需要生成结构化学习资料
-2. **simple_qa** - 闲聊、打招呼、日常对话、或答案极简短的事实性问答（不需学习资料）
-3. **generate_quiz** - 用户要求生成题目、练习题、测试题、模拟考试等
-4. **grade_quiz** - 用户提交了答案要求批改、评分、判断对错
-5. **follow_up** - 用户对之前的内容进行追问、补充说明、要求修改，或回复确认/否定
-6. **ambiguous** - 用户意图不明确，需要进一步询问
-
-## 判断规则 (核心)
-
-### generate_resource（生成学习资料）
-以下情况应归类为 generate_resource，因为用户需要的是结构化的学习内容而非简单的问答：
-- "学习XX"、"了解XX"、"XX是什么"、"XX的原理"、"XX的过程"
-- "我想知道XX"、"我想了解XX"、"XX相关知识点"
-- "XX怎么工作"、"XX的实现"、"XX的概念"
-- "帮我生成XX"、"给我讲讲XX"
-- 任何涉及知识/技术/学科领域的查询，即使语气上像提问
-
-### simple_qa（简答）
-以下情况才归类为 simple_qa，因为不需要生成学习资料：
-- 打招呼："你好"、"嗨"
-- 闲聊："今天心情好"、"谢谢"
-- 极简短的事实问答："1+1等于几"、"现在几点了"
-- 系统操作类："你能做什么"、"怎么用"
-- 注意：涉及知识学习的问题 NOT simple_qa
-
-### 其他意图
-- generate_quiz：用户说"出几道题"、"测试一下"、"给我出题"
-- grade_quiz：用户提交了答案要求批改
-- follow_up：在已有对话基础上补充说明、确认或否定
-- ambiguous：完全无法判断意图
-
-## 输出格式
-严格输出 JSON，不要输出其他内容：
-{"intent": "意图类型", "reasoning": "简要推理过程"}"""
 
 
 def controller_node(state: AgentState) -> Dict[str, Any]:
@@ -64,6 +28,27 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  [主控智能体] 开始处理 (迭代: {iteration})")
     logger.info(f"  用户输入: {user_message[:100]}")
     logger.info(f"{'='*60}")
+
+    # 智能体自主异常检测：任何智能体发现内容偏离，中断回到主控，主控转入追问模式
+    if state.get("agent_anomaly"):
+        anomaly_reason = state.get("anomaly_reason", "未知原因")
+        logger.warning(f"  [主控智能体] 智能体报告异常: {anomaly_reason}")
+        logger.warning(f"  [主控智能体] -> 转入简答追问模式，向用户澄清需求")
+        return {
+            "intent": INTENT_FOLLOW_UP,
+            "next_node": NODE_SIMPLE_ANSWER,
+            "agent_anomaly": False,  # 清除异常标记（避免路由死循环）
+            "anomaly_clarify": True,  # 简答智能体用此标记进入追问澄清模式
+            "anomaly_reason": anomaly_reason,
+            "current_step": f"主控智能体: 智能体报告处理异常，转入追问澄清模式",
+            "iteration_count": iteration + 1,
+            "stream_events": [{
+                "event_type": "thinking",
+                "agent": "controller",
+                "data": {"message": f"检测到处理异常: {anomaly_reason}，将向用户追问澄清需求"},
+                "step_description": f"异常中断: {anomaly_reason}"
+            }],
+        }
 
     # 检查是否有需要重试的模块（模块级别重试）
     retry_module_ids = state.get("retry_module_ids", [])
@@ -238,7 +223,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         }
 
     # 快速路径：如果前端已确认任务分解，直接进入 RAG 检索，无需 LLM 分类
-    # 但如果初始状态已指定 intent（如 generate_quiz），按指定意图路由
+    # 但如果初始状态已指定 intent（如 generate_quiz / generate_type_resource），按指定意图路由
     preset_intent = state.get("intent", "")
     if state.get("task_breakdown_confirmed") and state.get("task_breakdown"):
         if preset_intent == INTENT_GENERATE_QUIZ:
@@ -247,6 +232,14 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
                 "intent": INTENT_GENERATE_QUIZ,
                 "next_node": NODE_QUIZ_GENERATOR,
                 "current_step": "预设意图: 生成题目",
+                "iteration_count": iteration + 1,
+            }
+        if preset_intent == "generate_type_resource":
+            logger.info(f"  [主控智能体] 预设意图: generate_type_resource，路由 -> 类型资源生成智能体")
+            return {
+                "intent": "generate_type_resource",
+                "next_node": NODE_RESOURCE_TYPE_GENERATOR,
+                "current_step": "预设意图: 生成类型资源",
                 "iteration_count": iteration + 1,
             }
         logger.info(f"  [主控智能体] 任务分解已确认，快速路由 -> RAG 检索")
@@ -263,7 +256,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     history_text = ""
     chat_history = state.get("chat_history", [])
     if chat_history:
-        recent = chat_history[-10:]  # 最近10轮
+        recent = chat_history[-20:]  # 最近20轮
         for msg in recent:
             role = "用户" if msg["role"] == "user" else "助手"
             history_text += f"{role}: {msg['content']}\n"
@@ -286,17 +279,17 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"  [主控智能体] 系统状态: {context_info.strip()}")
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": CONTROLLER_PROMPT},
         {"role": "user", "content": f"对话历史:\n{history_text}\n{context_info}\n\n当前用户输入: {user_message}\n\n请识别意图并输出 JSON:"}
     ]
 
     try:
         logger.info(f"  [主控智能体] 正在流式调用 LLM 进行意图识别...")
-        
+
         intent = None
         reasoning = ""
         accumulated_text = ""
-        
+
         # 使用流式输出
         for chunk in llm.chat_stream(messages, temperature=0.2):
             accumulated_text += chunk
@@ -364,7 +357,15 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"  [主控智能体] 意图识别结果: {intent}")
         if reasoning:
             logger.info(f"  [主控智能体] 推理过程: {reasoning}")
-            
+
+        # 记录 token 消耗（流式可能提前终止，需补录估算值）
+        user_id = state.get("user_id", 0)
+        task_id = state.get("task_id")
+        if not llm.get_usage_records():
+            input_est = sum(llm._estimate_tokens(m.get("content", "")) for m in messages)
+            llm.add_usage(input_tokens=input_est, output_tokens=llm._estimate_tokens(accumulated_text))
+        record_from_mimo(llm, user_id, "intent_recognition", task_id)
+
     except Exception as e:
         intent = INTENT_AMBIGUOUS
         reasoning = f"意图解析异常: {str(e)}"
@@ -410,6 +411,10 @@ def _route_by_intent(intent: str, state: AgentState) -> str:
     elif intent == INTENT_GENERATE_QUIZ:
         logger.info(f"  [主控路由] 生成题目 -> 题目生成智能体")
         return NODE_QUIZ_GENERATOR
+
+    elif intent == "generate_type_resource":
+        logger.info(f"  [主控路由] 生成类型资源 -> 类型资源生成智能体")
+        return NODE_RESOURCE_TYPE_GENERATOR
 
     elif intent == INTENT_GRADE_QUIZ:
         logger.info(f"  [主控路由] 批改题目 -> 题目判定智能体")

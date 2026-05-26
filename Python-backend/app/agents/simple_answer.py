@@ -2,133 +2,18 @@
 简答智能体 - 简短回答用户问题，决定是否追问，维护对话上下文
 可主动询问学习满意度、学习要求、Felder-Silverman 模型相关问题
 """
+import json
 import logging
 import random
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState, NODE_CONTROLLER
 from app.agents.llm_factory import get_simple_answer_llm
+from app.prompts import SIMPLE_ANSWER_PROMPT
+from app.utils.token_recorder import record_from_mimo
 from app.utils.profile_utils import map_dimension_name
 
 logger = logging.getLogger("agents.simple_answer")
 
-SYSTEM_PROMPT = """你是一个友好的 AI 学习助手。你的职责是：
-1. 简短回答用户的知识性问题
-2. 当用户意图不明确时，进行追问以获取清晰的目标
-3. 维护自然流畅的对话
-4. **主动识别和捕捉用户的学习风格信息**
-
-## 规则
-- 回答简洁明了，避免冗长
-- 如果用户的问题很模糊，礼貌地追问具体需求
-- 严禁使用 emoji 表情符号
-- 保持专业但亲切的语气
-- 使用中文回复
-
-## 学习画像维度说明
-
-### Felder-Silverman 学习风格模型（4个维度）
-1. **sensing_intuitive** - 信息感知维度
-   - Sensing（感官型）：偏好具体事实、数据、实验、实例
-   - Intuitive（直觉型）：偏好抽象概念、理论、创新、可能性
-
-2. **visual_verbal** - 信息接收维度
-   - Visual（视觉型）：偏好图表、图示、流程图、视频
-   - Verbal（言语型）：偏好文字说明、口头讲解、书面材料
-
-3. **active_reflective** - 信息处理维度
-   - Active（活跃型）：偏好动手实践、小组讨论、边做边学
-   - Reflective（沉思型）：偏好独自思考、深度分析、先想后做
-
-4. **sequential_global** - 理解方式维度
-   - Sequential（序列型）：偏好线性学习、逐步深入、按部就班
-   - Global（全局型）：偏好整体把握、先见森林后见树木、跳跃式理解
-
-### 其他画像维度
-- **knowledge_base** - 知识基础：用户已掌握的相关知识
-- **quiz_preference** - 偏好题型：选择题、填空题、简答题等
-- **interaction_level** - 交互程度：喜欢频繁互动还是独立学习
-- **content_preference** - 内容偏好：视频、图文、代码示例等
-
-## 画像信息识别（核心能力）
-
-**你需要主动判断：**
-1. 对话历史中，你是否刚刚询问了用户关于学习风格的问题？
-2. 当前用户的回答是否是对你刚才问题的响应？
-3. 用户的回答揭示了哪个维度的学习风格？
-
-**判断标准：**
-- 如果你上一轮询问了学习偏好相关的问题（如"你更喜欢A还是B？"），而用户当前回答是简短的选择或描述（如"A"、"我喜欢B"、"都可以"），则很可能是对画像问题的回答
-- 即使用户没有直接回答你的问题，但在对话中透露了学习偏好信息，也应该捕捉
-- 根据用户回答的内容，判断属于哪个维度
-
-**重要：** 充分发挥你的理解能力，不要机械地匹配关键词。理解对话的上下文和用户的真实意图。
-
-## 输出要求
-严格输出 JSON：
-{
-  "action": "answer" 或 "clarify" 或 "ask_profile",
-  "response": "你的回复文本",
-  "should_update_profile": false,
-  "profile_dimension": null,
-  "profile_analysis": null
-}
-
-### 字段说明
-- **action**: 
-  - "answer" - 正常回答问题
-  - "clarify" - 需要追问澄清
-  - "ask_profile" - 主动询问学习风格
-  
-- **should_update_profile**: 
-  - true - 当前对话包含了可用于更新画像的信息
-  - false - 没有画像相关信息
-  
-- **profile_dimension**: 
-  - 当 should_update_profile=true 时必填
-  - 填写用户回答涉及的维度（可以是上述任一维度）
-  
-- **profile_analysis**: 
-  - 当 should_update_profile=true 时必填
-  - 简短说明你从用户回答中理解到的学习风格信息（1-2句话）
-  - 例如："用户表示更喜欢看图，倾向于视觉型学习"
-
-## 示例
-
-### 示例1：识别画像回答
-对话历史：
-助手: 当理解一个复杂概念时，一张好的示意图和一段详细的文字解释，哪个对你帮助更大？
-用户: 想看图！
-
-输出：
-{
-  "action": "answer",
-  "response": "好的，我了解了！我会为你提供更多图示化的内容来帮助理解。",
-  "should_update_profile": true,
-  "profile_dimension": "visual_verbal",
-  "profile_analysis": "用户明确表示更喜欢图示，属于视觉型学习者"
-}
-
-### 示例2：识别隐含的画像信息
-对话历史：
-用户: 我想学习红黑树，但是看文字描述总是看不懂，有没有动画演示？
-
-输出：
-{
-  "action": "answer",
-  "response": "当然！红黑树的动画演示能帮助你更直观地理解插入和旋转操作...",
-  "should_update_profile": true,
-  "profile_dimension": "visual_verbal",
-  "profile_analysis": "用户提到看文字描述困难，需要动画演示，明显偏好视觉型学习"
-}
-
-### 示例3：主动询问画像
-{
-  "action": "ask_profile",
-  "response": "为了更好地帮助你学习，我想了解一下：学完一个新知识点后，你更喜欢立刻动手实践尝试，还是先在脑海中反复思考消化？",
-  "should_update_profile": false,
-  "profile_dimension": null,
-  "profile_analysis": null
-}"""
 
 
 PROFILE_QUESTIONS = {
@@ -177,11 +62,19 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  [简答智能体] 开始处理")
     logger.info(f"  用户输入: {user_message[:100]}")
 
+    # 检查是否为异常追问模式：智能体发现内容偏离，需要向用户澄清
+    is_anomaly_clarify = state.get("anomaly_clarify", False)
+    anomaly_reason = state.get("anomaly_reason", "")
+
+    if is_anomaly_clarify and anomaly_reason:
+        logger.info(f"  [简答智能体] 异常追问模式: {anomaly_reason}")
+        return _generate_anomaly_clarification(state, anomaly_reason, chat_history, user_message)
+
     llm = get_simple_answer_llm()
 
     # 构建对话历史文本（包含更多轮次以便 LLM 理解上下文）
     history_text = ""
-    recent = chat_history[-10:]  # 增加到10轮，让 LLM 有更多上下文
+    recent = chat_history[-20:]  # 最近20轮
     for msg in recent:
         role = "用户" if msg["role"] == "user" else "助手"
         history_text += f"{role}: {msg['content']}\n"
@@ -189,14 +82,14 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
     # 判断是否应该主动询问画像（低频率触发）
     should_ask_profile = _should_ask_profile(chat_history, user_profile)
     profile_hint = ""
-    
+
     if should_ask_profile:
         dim, question = _pick_profile_question(user_profile)
         profile_hint = f"\n\n[系统建议] 可以考虑询问用户关于 {dim} 维度的学习风格，参考问题: {question}"
         logger.info(f"  [简答智能体] 建议询问画像: 维度={dim}")
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SIMPLE_ANSWER_PROMPT},
         {"role": "user", "content": f"""对话历史:
 {history_text}
 
@@ -207,8 +100,18 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
     ]
 
     try:
-        logger.info(f"  [简答智能体] 正在调用 LLM 生成回复...")
-        result = llm.chat_json(messages)
+        logger.info(f"  [简答智能体] 正在调用 LLM 生成回复（流式）...")
+        sse_cb = state.get("sse_callback")
+
+        def _on_chunk(chunk: str):
+            if sse_cb:
+                try:
+                    sse_cb(f'data: {json.dumps({"type": "stream_text", "content": chunk}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
+
+        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, stream_field="response")
+        record_from_mimo(llm, state.get("user_id", 0), "simple_qa", state.get("task_id"))
         response = result.get("response", "")
         action = result.get("action", "answer")
         should_update = result.get("should_update_profile", False)
@@ -276,6 +179,100 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
         }
 
 
+ANOMALY_CLARIFY_PROMPT = """你是一个友好的 AI 学习助手。系统在处理用户请求时发现了一些问题，需要你向用户追问澄清。
+
+## 背景
+上一轮智能体处理时，检测到以下问题：{anomaly_reason}
+
+用户的原始请求是：{user_message}
+
+## 你的任务
+1. 用友好、自然的语气告诉用户遇到了什么问题（用自己的话简要说明，不要照搬系统术语）
+2. 向用户追问，帮助澄清 TA 的真实需求
+3. 给出 1-2 个具体的澄清方向或建议
+
+## 规则
+- 语气友好自然，不要让用户觉得是"系统出错了"
+- 保持专业但亲切
+- 严禁使用 emoji
+- 使用中文回复
+- 回复控制在 3-5 句话
+
+严格输出 JSON：
+{{
+  "action": "clarify",
+  "response": "你的追问文本"
+}}"""
+
+
+def _generate_anomaly_clarification(
+    state: AgentState,
+    anomaly_reason: str,
+    chat_history: list,
+    user_message: str,
+) -> Dict[str, Any]:
+    """生成异常追问澄清的回复"""
+    llm = get_simple_answer_llm()
+
+    history_text = ""
+    recent = chat_history[-10:]
+    for msg in recent:
+        role = "用户" if msg["role"] == "user" else "助手"
+        history_text += f"{role}: {msg['content']}\n"
+
+    prompt = ANOMALY_CLARIFY_PROMPT.format(
+        anomaly_reason=anomaly_reason,
+        user_message=user_message,
+    )
+
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": f"对话历史:\n{history_text}\n\n请生成追问澄清的回复，输出 JSON:"},
+    ]
+
+    try:
+        result = llm.chat_json(messages, max_tokens=512)
+        from app.utils.token_recorder import record_from_mimo
+        record_from_mimo(llm, state.get("user_id", 0), "anomaly_clarify", state.get("task_id"))
+        response = result.get("response", f"抱歉，我在处理你的请求时遇到了一些困惑。能否请你再详细说明一下你的需求？")
+
+        logger.info(f"  [简答智能体] 异常追问: {response[:150]}")
+        logger.info(f"{'='*60}")
+
+        new_history = list(chat_history)
+        new_history.append({"role": "assistant", "content": response})
+
+        return {
+            "anomaly_clarify": False,  # 清除异常追问标记
+            "anomaly_reason": "",
+            "chat_history": new_history,
+            "current_step": "简答智能体: 异常追问澄清",
+            "stream_events": [{
+                "event_type": "content",
+                "agent": "simple_answer",
+                "data": {"text": response, "action": "clarify"},
+                "step_description": "异常追问澄清"
+            }],
+        }
+    except Exception as e:
+        logger.error(f"  [简答智能体] 异常追问生成失败: {str(e)}")
+        fallback = f"抱歉，我在处理你的请求时遇到了一些困惑：「{anomaly_reason}」。能否请你换一种方式描述你的需求？"
+        new_history = list(chat_history)
+        new_history.append({"role": "assistant", "content": fallback})
+        return {
+            "anomaly_clarify": False,
+            "anomaly_reason": "",
+            "chat_history": new_history,
+            "current_step": f"简答智能体: 异常追问降级 - {str(e)}",
+            "stream_events": [{
+                "event_type": "content",
+                "agent": "simple_answer",
+                "data": {"text": fallback, "action": "clarify"},
+                "step_description": "异常追问澄清（降级）"
+            }],
+        }
+
+
 def _should_ask_profile(chat_history: List[Dict[str, str]], profile: Dict[str, Any]) -> bool:
     """判断是否应该主动询问画像问题（低频率触发）"""
     user_turns = sum(1 for m in chat_history if m["role"] == "user")
@@ -283,7 +280,7 @@ def _should_ask_profile(chat_history: List[Dict[str, str]], profile: Dict[str, A
         return False
 
     # 检查最近是否询问过画像问题
-    recent = chat_history[-10:]
+    recent = chat_history[-20:]
     for msg in recent:
         content = msg.get("content", "").lower()
         if any(kw in content for kw in ["学习风格", "偏好", "喜欢", "习惯", "更倾向"]):

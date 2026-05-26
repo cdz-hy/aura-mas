@@ -22,11 +22,17 @@ public class QuizRecord {
 
     private Integer difficulty;
 
+    private String questionText;
+
     private String correctAnswer;
 
     private String userAnswer;
 
+    private Double score;
+
     private Integer isCorrect;
+
+    private String feedback;
 
     private LocalDateTime answerTime;
 

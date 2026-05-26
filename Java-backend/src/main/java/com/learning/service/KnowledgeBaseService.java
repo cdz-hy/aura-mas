@@ -51,6 +51,18 @@ public class KnowledgeBaseService {
     }
 
     @Transactional
+    public void updateStatus(Long id, Integer status, Integer chunkCount, String mineruTaskId, String collectionName) {
+        KnowledgeBase kb = knowledgeBaseMapper.selectById(id);
+        if (kb != null) {
+            if (status != null) kb.setParseStatus(status);
+            if (chunkCount != null) kb.setChunkCount(chunkCount);
+            if (mineruTaskId != null) kb.setMineruTaskId(mineruTaskId);
+            if (collectionName != null) kb.setCollectionName(collectionName);
+            knowledgeBaseMapper.updateById(kb);
+        }
+    }
+
+    @Transactional
     public void deleteById(Long id) {
         knowledgeBaseMapper.deleteById(id);
     }

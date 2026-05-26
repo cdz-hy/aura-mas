@@ -32,7 +32,7 @@ request.interceptors.response.use(
     if (error.response?.status === 401) {
       const authStore = useAuthStore()
       authStore.logout()
-      router.push('/login')
+      router.push({ path: '/login', query: { expired: '1' } })
     }
     return Promise.reject(error)
   }

@@ -43,11 +43,11 @@
         </div>
 
         <div v-else class="space-y-3">
-          <router-link
+          <div
             v-for="plan in plans"
             :key="plan.id"
-            :to="`/plan/${plan.id}`"
-            class="flex items-center gap-4 p-4 rounded-xl border border-navy-100/50 hover:border-navy-200 hover:shadow-paper transition-all group"
+            class="flex items-center gap-4 p-4 rounded-xl border border-navy-100/50 hover:border-navy-200 hover:shadow-paper transition-all group cursor-pointer"
+            @click="router.push(`/plan/${plan.id}`)"
           >
             <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-navy-100 to-navy-200 flex items-center justify-center flex-shrink-0">
               <svg class="w-5 h-5 text-navy-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -68,8 +68,17 @@
                 <div class="h-full bg-gradient-to-r from-navy-400 to-navy-600 rounded-full transition-all" :style="{ width: `${plan.progress}%` }"></div>
               </div>
               <span class="text-xs text-navy-400 w-10 text-right">{{ Math.round(plan.progress) }}%</span>
+              <button
+                class="p-1.5 rounded-lg text-navy-300 hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                @click.stop="removePlan(plan.id)"
+                title="删除计划"
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                </svg>
+              </button>
             </div>
-          </router-link>
+          </div>
         </div>
       </div>
 
@@ -104,18 +113,37 @@
         </div>
       </div>
     </div>
+
+    <ConfirmDialog
+      :visible="showDeleteConfirm"
+      title="删除学习计划"
+      :message="`确定要删除学习计划「${plans.find(p => p.id === deletingPlanId)?.title || ''}」吗？该计划下的所有对话、资源和测验记录将一并删除，此操作不可恢复。`"
+      confirm-text="确认删除"
+      cancel-text="取消"
+      type="danger"
+      @confirm="handleDeleteConfirm"
+      @cancel="handleDeleteCancel"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { getPlans } from '@/api/plan'
+import { getPlans, deletePlan } from '@/api/plan'
+import { getDashboardStats } from '@/api/stats'
+import type { DashboardStats } from '@/api/stats'
 import type { LearningPlan } from '@/types/plan'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import dayjs from 'dayjs'
 
+const router = useRouter()
 const authStore = useAuthStore()
 const plans = ref<LearningPlan[]>([])
+const statsData = ref<DashboardStats | null>(null)
+const showDeleteConfirm = ref(false)
+const deletingPlanId = ref<number | null>(null)
 
 const greeting = computed(() => {
   const h = new Date().getHours()
@@ -127,10 +155,10 @@ const greeting = computed(() => {
 })
 
 const stats = computed(() => [
-  { label: '学习计划', value: plans.value.length, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>', bgClass: 'bg-blue-50', iconClass: 'text-blue-500' },
-  { label: '已完成', value: plans.value.filter(p => p.status === 4).length, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', bgClass: 'bg-emerald-50', iconClass: 'text-emerald-500' },
-  { label: '学习资源', value: plans.value.length * 3, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', bgClass: 'bg-amber-50', iconClass: 'text-amber-500' },
-  { label: '学习时长', value: '12.5h', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', bgClass: 'bg-purple-50', iconClass: 'text-purple-500' },
+  { label: '学习计划', value: statsData.value?.totalPlans ?? plans.value.length, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>', bgClass: 'bg-blue-50', iconClass: 'text-blue-500' },
+  { label: '已完成', value: statsData.value?.completedPlans ?? plans.value.filter(p => p.status === 4).length, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', bgClass: 'bg-emerald-50', iconClass: 'text-emerald-500' },
+  { label: '学习资源', value: statsData.value?.totalResources ?? 0, icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', bgClass: 'bg-amber-50', iconClass: 'text-amber-500' },
+  { label: '学习时长', value: statsData.value?.totalStudyHours != null ? `${statsData.value.totalStudyHours}h` : '--', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', bgClass: 'bg-purple-50', iconClass: 'text-purple-500' },
 ])
 
 const weekDays = [
@@ -155,6 +183,29 @@ function formatDate(date: string) {
   return dayjs(date).format('MM月DD日')
 }
 
+function removePlan(id: number) {
+  deletingPlanId.value = id
+  showDeleteConfirm.value = true
+}
+
+async function handleDeleteConfirm() {
+  if (!deletingPlanId.value) return
+  try {
+    await deletePlan(deletingPlanId.value)
+    plans.value = plans.value.filter(p => p.id !== deletingPlanId.value)
+  } catch (e) {
+    console.error('Failed to delete plan:', e)
+  } finally {
+    showDeleteConfirm.value = false
+    deletingPlanId.value = null
+  }
+}
+
+function handleDeleteCancel() {
+  showDeleteConfirm.value = false
+  deletingPlanId.value = null
+}
+
 function statusText(status: number) {
   return ['待规划', '生成中', '确认中', '学习中', '已完成'][status] || '未知'
 }
@@ -165,8 +216,12 @@ function statusClass(status: number) {
 
 onMounted(async () => {
   try {
-    const res = await getPlans({ page: 1, size: 50 })
-    plans.value = res.data?.records || []
+    const [plansRes, statsRes] = await Promise.all([
+      getPlans({ page: 1, size: 50 }),
+      getDashboardStats().catch(() => null),
+    ])
+    plans.value = plansRes.data?.records || []
+    if (statsRes) statsData.value = statsRes.data
   } catch {
     // Use empty state
   }

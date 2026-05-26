@@ -56,6 +56,10 @@
             />
           </div>
 
+          <div v-if="expiredNotice" class="text-sm text-amber-600 bg-amber-50 px-4 py-2 rounded-lg">
+            {{ expiredNotice }}
+          </div>
+
           <div v-if="error" class="text-sm text-red-500 bg-red-50 px-4 py-2 rounded-lg">
             {{ error }}
           </div>
@@ -81,25 +85,36 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 const form = ref({ loginName: '', password: '' })
 const loading = ref(false)
 const error = ref('')
+const expiredNotice = ref('')
+
+onMounted(() => {
+  if (route.query.expired === '1') {
+    expiredNotice.value = '登录已过期，请重新登录'
+  } else if (route.query.deleted === '1') {
+    expiredNotice.value = '账号已成功注销'
+  }
+})
 
 async function handleLogin() {
   loading.value = true
   error.value = ''
+  expiredNotice.value = ''
   try {
     await authStore.login(form.value)
-    router.push('/dashboard')
+    router.push(authStore.homeRoute)
   } catch (e: any) {
-    error.value = e.message || '登录失败，请检查账号密码'
+    error.value = e.response?.data?.message || e.message || '登录失败，请检查账号密码'
   } finally {
     loading.value = false
   }

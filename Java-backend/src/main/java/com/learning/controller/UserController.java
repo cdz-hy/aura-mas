@@ -84,6 +84,14 @@ public class UserController {
         return Result.success(result);
     }
 
+    @Operation(summary = "注销账号")
+    @DeleteMapping("/account")
+    public Result<Void> deleteAccount(Authentication authentication) {
+        Long userId = (Long) authentication.getPrincipal();
+        userService.deleteAccount(userId);
+        return Result.success();
+    }
+
     @Operation(summary = "清空头像")
     @DeleteMapping("/avatar")
     public Result<Void> clearAvatar(Authentication authentication) {
