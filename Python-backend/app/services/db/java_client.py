@@ -6,6 +6,7 @@ import json
 import base64
 import logging
 import requests
+import httpx
 from typing import Optional, List, Dict, Any
 from app.core.config import settings
 
@@ -80,6 +81,28 @@ class JavaBackendClient:
         except requests.exceptions.ConnectionError:
             raise Exception(f"无法连接 Java 后端: {url}")
         except requests.exceptions.Timeout:
+            raise Exception(f"Java 后端请求超时: {url}")
+
+    async def _arequest(self, method: str, path: str, **kwargs) -> Any:
+        """异步版本 _request，使用 httpx.AsyncClient"""
+        url = f"{self.base_url}{path}"
+        headers = kwargs.pop("headers", {})
+        headers["X-Service-Secret"] = settings.JAVA_SERVICE_SECRET
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.request(method, url, headers=headers, **kwargs)
+            if resp.status_code == 200:
+                result = resp.json()
+                code = result.get("code", 200)
+                if code == 200 or code == 0:
+                    return result.get("data", result)
+                else:
+                    raise Exception(f"Java 后端返回错误: {result.get('msg', '未知错误')}")
+            else:
+                raise Exception(f"Java 后端请求失败 ({resp.status_code}): {resp.text}")
+        except httpx.ConnectError:
+            raise Exception(f"无法连接 Java 后端: {url}")
+        except httpx.TimeoutException:
             raise Exception(f"Java 后端请求超时: {url}")
 
     # ==================== 对话记录 ====================
@@ -360,6 +383,17 @@ class JavaBackendClient:
     def delete_kb_by_id(self, kb_id: int):
         """删除知识库记录"""
         return self._request("DELETE", f"/api/admin/kb/internal/{kb_id}")
+
+    async def update_kb_status_async(self, kb_id: int, status: int, chunk_count: int = None, mineru_task_id: str = None, collection_name: str = None):
+        """异步更新知识库记录状态"""
+        body = {"parseStatus": status}
+        if chunk_count is not None:
+            body["chunkCount"] = chunk_count
+        if mineru_task_id is not None:
+            body["mineruTaskId"] = mineru_task_id
+        if collection_name is not None:
+            body["collectionName"] = collection_name
+        return await self._arequest("PUT", f"/api/admin/kb/internal/{kb_id}/status", json=body)
 
     # ==================== Token 消耗 ====================
 

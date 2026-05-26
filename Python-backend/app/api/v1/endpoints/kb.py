@@ -1,5 +1,5 @@
 """
-知识库管理 API - 文档摄入、Qdrant 查询
+知识库管理 API - 文档摄入、Qdrant 查询（全异步）
 """
 import os
 import asyncio
@@ -32,25 +32,25 @@ class KBIngestRequest(BaseModel):
 
 
 async def _ingest_background(doc_id: int, doc_name: str, file_path: str):
-    """后台执行文档摄入流程"""
+    """后台执行文档摄入流程（全异步，不阻塞事件循环）"""
     try:
         # 1. 更新状态为处理中
-        java_client.update_kb_status(doc_id, 1)
+        await java_client.update_kb_status_async(doc_id, 1)
 
         # 2. 调用 MinerU 解析
         logger.info(f"  [KB摄入] 开始 MinerU 解析: doc_id={doc_id}")
-        task_id = mineru_client.create_task(file_path)
-        java_client.update_kb_status(doc_id, 1, mineru_task_id=task_id)
+        task_id = await mineru_client.create_task(file_path)
+        await java_client.update_kb_status_async(doc_id, 1, mineru_task_id=task_id)
 
-        # 3. 轮询等待完成
-        result = mineru_client.poll_task(task_id)
+        # 3. 轮询等待完成（异步 sleep，不阻塞事件循环）
+        result = await mineru_client.poll_task(task_id)
         zip_url = result.get("full_zip_url")
         if not zip_url:
             raise Exception("MinerU 未返回 zip 下载链接")
 
         # 4. 下载并解压
         extract_dir = f"data/mineru_output/{doc_id}"
-        md_path, images_dir = mineru_client.download_and_extract(zip_url, extract_dir)
+        md_path, images_dir = await mineru_client.download_and_extract(zip_url, extract_dir)
 
         # 5. 读取 MD 内容
         with open(md_path, "r", encoding="utf-8") as f:
@@ -58,18 +58,18 @@ async def _ingest_background(doc_id: int, doc_name: str, file_path: str):
 
         # 6. 调用现有处理器进行切片、向量化、入库
         logger.info(f"  [KB摄入] 开始切片入库: doc_id={doc_id}")
-        java_client.update_kb_status(doc_id, 4)
+        await java_client.update_kb_status_async(doc_id, 4)
         result = await processor.process_document(md_content, doc_id, doc_name, images_dir)
         chunk_count = result.get("chunks_processed", 0)
 
         # 7. 更新状态为完成
-        java_client.update_kb_status(doc_id, 2, chunk_count=chunk_count, collection_name=vector_db.collection_name)
+        await java_client.update_kb_status_async(doc_id, 2, chunk_count=chunk_count, collection_name=vector_db.collection_name)
         logger.info(f"  [KB摄入] 完成: doc_id={doc_id}, chunks={chunk_count}, collection={vector_db.collection_name}")
 
     except Exception as e:
         logger.error(f"  [KB摄入] 失败: doc_id={doc_id}, error={e}")
         try:
-            java_client.update_kb_status(doc_id, 3)
+            await java_client.update_kb_status_async(doc_id, 3)
         except Exception:
             pass
 
@@ -91,7 +91,7 @@ async def ingest_document(
 
     logger.info(f"  [KB摄入] 文件已保存: {file_path}")
 
-    # 启动后台任务
+    # 启动后台任务（不等待完成，立即返回）
     asyncio.create_task(_ingest_background(doc_id, doc_name, str(file_path)))
 
     return {"status": "accepted", "doc_id": doc_id, "message": "文档解析任务已提交"}
@@ -113,7 +113,7 @@ async def reprocess_document(doc_id: int, doc_name: str = Form(...)):
 
         async def _reprocess_from_local():
             try:
-                java_client.update_kb_status(doc_id, 1)
+                await java_client.update_kb_status_async(doc_id, 1)
 
                 # 先删除旧的 Qdrant 数据
                 vector_db.delete_document_chunks(doc_id)
@@ -127,16 +127,16 @@ async def reprocess_document(doc_id: int, doc_name: str = Form(...)):
                 with open(md_path, "r", encoding="utf-8") as f:
                     md_content = f.read()
 
-                java_client.update_kb_status(doc_id, 4)
+                await java_client.update_kb_status_async(doc_id, 4)
                 result = await processor.process_document(md_content, doc_id, doc_name, images_dir)
                 chunk_count = result.get("chunks_processed", 0)
 
-                java_client.update_kb_status(doc_id, 2, chunk_count=chunk_count, collection_name=vector_db.collection_name)
+                await java_client.update_kb_status_async(doc_id, 2, chunk_count=chunk_count, collection_name=vector_db.collection_name)
                 logger.info(f"  [KB重处理] 完成: doc_id={doc_id}, chunks={chunk_count}, collection={vector_db.collection_name}")
             except Exception as e:
                 logger.error(f"  [KB重处理] 失败: doc_id={doc_id}, error={e}")
                 try:
-                    java_client.update_kb_status(doc_id, 3)
+                    await java_client.update_kb_status_async(doc_id, 3)
                 except Exception:
                     pass
 

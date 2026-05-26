@@ -1,11 +1,11 @@
 """
-MinerU API 客户端 - 文档解析服务
+MinerU API 客户端 - 文档解析服务（全异步）
 """
 import os
-import time
 import zipfile
 import logging
 import httpx
+import asyncio
 from pathlib import Path
 from typing import Tuple
 from app.core.config import settings
@@ -15,7 +15,7 @@ logger = logging.getLogger("services.mineru")
 
 
 class MinerUClient:
-    """MinerU 文档解析 API 客户端"""
+    """MinerU 文档解析 API 客户端（异步）"""
 
     MAX_FILE_SIZE = 200 * 1024 * 1024  # 200MB
 
@@ -29,7 +29,7 @@ class MinerUClient:
             "Content-Type": "application/json",
         }
 
-    def create_task(self, file_path: str) -> str:
+    async def create_task(self, file_path: str) -> str:
         """
         创建解析任务：先上传文件到七牛云获取 URL，再提交给 MinerU
 
@@ -43,9 +43,10 @@ class MinerUClient:
         if file_size > self.MAX_FILE_SIZE:
             raise Exception(f"文件大小超过限制: {file_size / 1024 / 1024:.1f}MB，最大支持 200MB")
 
-        # 1. 上传文件到七牛云获取公开 URL
+        # 1. 上传文件到七牛云获取公开 URL（七牛客户端是同步的，放线程池）
         logger.info(f"  [MinerU] 上传文件到七牛云...")
-        file_url = qiniu_client.upload_file(file_path, directory="kb-uploads")
+        loop = asyncio.get_running_loop()
+        file_url = await loop.run_in_executor(None, qiniu_client.upload_file, file_path, "kb-uploads")
         logger.info(f"  [MinerU] 文件 URL: {file_url}")
 
         # 2. 提交解析任务给 MinerU
@@ -60,8 +61,8 @@ class MinerUClient:
             "language": "ch",
         }
 
-        with httpx.Client(timeout=60) as client:
-            resp = client.post(url, headers=self._get_headers(), json=payload)
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, headers=self._get_headers(), json=payload)
 
         if resp.status_code != 200:
             raise Exception(f"MinerU 创建任务失败: {resp.status_code} - {resp.text[:300]}")
@@ -77,9 +78,9 @@ class MinerUClient:
         logger.info(f"  [MinerU] 任务已创建: task_id={task_id}")
         return task_id
 
-    def poll_task(self, task_id: str, timeout: int = 600, interval: int = 5) -> dict:
+    async def poll_task(self, task_id: str, timeout: int = 600, interval: int = 5) -> dict:
         """
-        轮询任务状态直到完成
+        轮询任务状态直到完成（异步，不阻塞事件循环）
 
         Args:
             task_id: 任务ID
@@ -90,25 +91,25 @@ class MinerUClient:
             任务结果，包含 full_zip_url
         """
         url = f"{self.base_url}/extract/task/{task_id}"
-        start_time = time.time()
+        start_time = asyncio.get_event_loop().time()
 
-        with httpx.Client(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             while True:
-                elapsed = time.time() - start_time
+                elapsed = asyncio.get_event_loop().time() - start_time
                 if elapsed > timeout:
                     raise Exception(f"MinerU 任务超时 ({timeout}s): task_id={task_id}")
 
-                resp = client.get(url, headers=self._get_headers())
+                resp = await client.get(url, headers=self._get_headers())
 
                 if resp.status_code != 200:
                     logger.warning(f"  [MinerU] 轮询异常: {resp.status_code}")
-                    time.sleep(interval)
+                    await asyncio.sleep(interval)
                     continue
 
                 result = resp.json()
                 if result.get("code") != 0:
                     logger.warning(f"  [MinerU] 轮询返回错误: {result.get('msg')}")
-                    time.sleep(interval)
+                    await asyncio.sleep(interval)
                     continue
 
                 data = result.get("data", {})
@@ -121,11 +122,11 @@ class MinerUClient:
                     raise Exception(f"MinerU 任务失败: {data.get('err_msg', '未知错误')}")
                 else:
                     logger.info(f"  [MinerU] 任务进行中: state={state}, elapsed={elapsed:.0f}s")
-                    time.sleep(interval)
+                    await asyncio.sleep(interval)
 
-    def download_and_extract(self, zip_url: str, dest_dir: str) -> Tuple[str, str]:
+    async def download_and_extract(self, zip_url: str, dest_dir: str) -> Tuple[str, str]:
         """
-        下载并解压 MinerU 输出的 zip 文件
+        下载并解压 MinerU 输出的 zip 文件（异步）
 
         Args:
             zip_url: zip 文件下载链接
@@ -140,8 +141,8 @@ class MinerUClient:
         zip_path = dest_path / "output.zip"
         logger.info(f"  [MinerU] 下载结果: {zip_url[:80]}...")
 
-        with httpx.Client(timeout=120, follow_redirects=True) as client:
-            resp = client.get(zip_url)
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(zip_url)
             if resp.status_code != 200:
                 raise Exception(f"下载 MinerU 结果失败: {resp.status_code}")
 

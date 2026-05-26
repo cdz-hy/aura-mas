@@ -82,7 +82,8 @@
             <tr
               v-for="(doc, idx) in documents"
               :key="doc.id"
-              class="border-b border-navy-50 hover:bg-navy-50/30 transition-colors group animate-row"
+              class="border-b border-navy-50 hover:bg-navy-50/30 transition-colors group"
+              :class="!documentsLoaded && 'animate-row'"
               :style="{ animationDelay: `${idx * 40}ms` }"
             >
               <td class="px-5 py-4">
@@ -401,6 +402,7 @@ const selectedDoc = ref<KnowledgeBase | null>(null)
 const docDetail = ref<KBDetailStats | null>(null)
 
 let pollingTimer: number | null = null
+const documentsLoaded = ref(false)
 
 // Constants
 const MAX_FILE_SIZE = 200 * 1024 * 1024 // 200MB
@@ -420,18 +422,19 @@ const visiblePages = computed(() => {
 const hasProcessingDocs = computed(() => documents.value.some(d => d.parseStatus === 1 || d.parseStatus === 4))
 
 // Methods
-async function loadDocuments(page: number) {
-  loading.value = true
+async function loadDocuments(page: number, showLoading = true) {
+  if (showLoading) loading.value = true
   try {
     const res = await getKBList({ page, size: pageSize.value })
     const data = res.data ?? res
     documents.value = data.records || []
     total.value = data.total || 0
     currentPage.value = page
+    documentsLoaded.value = true
   } catch (e) {
     console.error('加载文档列表失败:', e)
   } finally {
-    loading.value = false
+    if (showLoading) loading.value = false
   }
 }
 
@@ -584,7 +587,7 @@ function startPolling() {
       stopPolling()
       return
     }
-    await loadDocuments(currentPage.value)
+    await loadDocuments(currentPage.value, false)
     await loadCollectionStats()
   }, 5000)
 }
