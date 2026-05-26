@@ -75,6 +75,17 @@
         </div>
       </div>
     </div>
+
+    <ConfirmDialog
+      :visible="showDeleteConfirm"
+      title="删除学习计划"
+      :message="`确定要删除学习计划「${plans.find(p => p.id === deletingPlanId)?.title || ''}」吗？该计划下的所有对话、资源和测验记录将一并删除，此操作不可恢复。`"
+      confirm-text="确认删除"
+      cancel-text="取消"
+      type="danger"
+      @confirm="handleDeleteConfirm"
+      @cancel="handleDeleteCancel"
+    />
   </div>
 </template>
 
@@ -83,11 +94,14 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getPlans, createPlan, deletePlan } from '@/api/plan'
 import type { LearningPlan } from '@/types/plan'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const router = useRouter()
 const plans = ref<LearningPlan[]>([])
 const loading = ref(true)
 const creating = ref(false)
+const showDeleteConfirm = ref(false)
+const deletingPlanId = ref<number | null>(null)
 
 async function loadPlans() {
   loading.value = true
@@ -119,14 +133,27 @@ async function createNewPlan() {
   }
 }
 
-async function removePlan(id: number) {
-  if (!confirm('确定删除该学习计划？')) return
+function removePlan(id: number) {
+  deletingPlanId.value = id
+  showDeleteConfirm.value = true
+}
+
+async function handleDeleteConfirm() {
+  if (!deletingPlanId.value) return
   try {
-    await deletePlan(id)
-    plans.value = plans.value.filter(p => p.id !== id)
+    await deletePlan(deletingPlanId.value)
+    plans.value = plans.value.filter(p => p.id !== deletingPlanId.value)
   } catch (e) {
     console.error('Failed to delete plan:', e)
+  } finally {
+    showDeleteConfirm.value = false
+    deletingPlanId.value = null
   }
+}
+
+function handleDeleteCancel() {
+  showDeleteConfirm.value = false
+  deletingPlanId.value = null
 }
 
 function statusClass(status: number) {

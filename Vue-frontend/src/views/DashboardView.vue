@@ -43,11 +43,11 @@
         </div>
 
         <div v-else class="space-y-3">
-          <router-link
+          <div
             v-for="plan in plans"
             :key="plan.id"
-            :to="`/plan/${plan.id}`"
-            class="flex items-center gap-4 p-4 rounded-xl border border-navy-100/50 hover:border-navy-200 hover:shadow-paper transition-all group"
+            class="flex items-center gap-4 p-4 rounded-xl border border-navy-100/50 hover:border-navy-200 hover:shadow-paper transition-all group cursor-pointer"
+            @click="router.push(`/plan/${plan.id}`)"
           >
             <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-navy-100 to-navy-200 flex items-center justify-center flex-shrink-0">
               <svg class="w-5 h-5 text-navy-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -68,8 +68,17 @@
                 <div class="h-full bg-gradient-to-r from-navy-400 to-navy-600 rounded-full transition-all" :style="{ width: `${plan.progress}%` }"></div>
               </div>
               <span class="text-xs text-navy-400 w-10 text-right">{{ Math.round(plan.progress) }}%</span>
+              <button
+                class="p-1.5 rounded-lg text-navy-300 hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                @click.stop="removePlan(plan.id)"
+                title="删除计划"
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                </svg>
+              </button>
             </div>
-          </router-link>
+          </div>
         </div>
       </div>
 
@@ -104,21 +113,37 @@
         </div>
       </div>
     </div>
+
+    <ConfirmDialog
+      :visible="showDeleteConfirm"
+      title="删除学习计划"
+      :message="`确定要删除学习计划「${plans.find(p => p.id === deletingPlanId)?.title || ''}」吗？该计划下的所有对话、资源和测验记录将一并删除，此操作不可恢复。`"
+      confirm-text="确认删除"
+      cancel-text="取消"
+      type="danger"
+      @confirm="handleDeleteConfirm"
+      @cancel="handleDeleteCancel"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { getPlans } from '@/api/plan'
+import { getPlans, deletePlan } from '@/api/plan'
 import { getDashboardStats } from '@/api/stats'
 import type { DashboardStats } from '@/api/stats'
 import type { LearningPlan } from '@/types/plan'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import dayjs from 'dayjs'
 
+const router = useRouter()
 const authStore = useAuthStore()
 const plans = ref<LearningPlan[]>([])
 const statsData = ref<DashboardStats | null>(null)
+const showDeleteConfirm = ref(false)
+const deletingPlanId = ref<number | null>(null)
 
 const greeting = computed(() => {
   const h = new Date().getHours()
@@ -156,6 +181,29 @@ const recentActivity = [
 
 function formatDate(date: string) {
   return dayjs(date).format('MM月DD日')
+}
+
+function removePlan(id: number) {
+  deletingPlanId.value = id
+  showDeleteConfirm.value = true
+}
+
+async function handleDeleteConfirm() {
+  if (!deletingPlanId.value) return
+  try {
+    await deletePlan(deletingPlanId.value)
+    plans.value = plans.value.filter(p => p.id !== deletingPlanId.value)
+  } catch (e) {
+    console.error('Failed to delete plan:', e)
+  } finally {
+    showDeleteConfirm.value = false
+    deletingPlanId.value = null
+  }
+}
+
+function handleDeleteCancel() {
+  showDeleteConfirm.value = false
+  deletingPlanId.value = null
 }
 
 function statusText(status: number) {
