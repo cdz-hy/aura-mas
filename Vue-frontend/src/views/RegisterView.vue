@@ -73,7 +73,7 @@ async function handleRegister() {
     await authStore.register(form.value)
     router.push(authStore.homeRoute)
   } catch (e: any) {
-    error.value = e.message || '注册失败'
+    error.value = e.response?.data?.message || e.message || '注册失败'
   } finally {
     loading.value = false
   }

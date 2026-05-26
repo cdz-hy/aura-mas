@@ -7,9 +7,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.learning.common.ErrorCode;
 import com.learning.common.PageResult;
 import com.learning.dto.PlanCreateRequest;
-import com.learning.entity.LearningPlan;
+import com.learning.entity.*;
 import com.learning.exception.BusinessException;
-import com.learning.mapper.LearningPlanMapper;
+import com.learning.mapper.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +22,12 @@ import java.util.List;
 public class LearningPlanService {
 
     private final LearningPlanMapper planMapper;
+    private final LearningResourceMapper resourceMapper;
+    private final AiDialogueMapper dialogueMapper;
+    private final QuizRecordMapper quizRecordMapper;
+    private final LearningDurationMapper durationMapper;
+    private final UserLearningProgressMapper progressMapper;
+    private final ResourceGenerationTaskMapper generationTaskMapper;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -97,6 +103,33 @@ public class LearningPlanService {
     @Transactional
     public void deletePlan(Long planId, Long userId) {
         LearningPlan plan = getPlanById(planId, userId);
+
+        // 级联删除子表关联数据
+        LambdaQueryWrapper<LearningResource> resourceWrapper = new LambdaQueryWrapper<>();
+        resourceWrapper.eq(LearningResource::getPlanId, planId);
+        resourceMapper.delete(resourceWrapper);
+
+        LambdaQueryWrapper<AiDialogue> dialogueWrapper = new LambdaQueryWrapper<>();
+        dialogueWrapper.eq(AiDialogue::getPlanId, planId);
+        dialogueMapper.delete(dialogueWrapper);
+
+        LambdaQueryWrapper<QuizRecord> quizWrapper = new LambdaQueryWrapper<>();
+        quizWrapper.eq(QuizRecord::getPlanId, planId);
+        quizRecordMapper.delete(quizWrapper);
+
+        LambdaQueryWrapper<LearningDuration> durationWrapper = new LambdaQueryWrapper<>();
+        durationWrapper.eq(LearningDuration::getPlanId, planId);
+        durationMapper.delete(durationWrapper);
+
+        LambdaQueryWrapper<UserLearningProgress> progressWrapper = new LambdaQueryWrapper<>();
+        progressWrapper.eq(UserLearningProgress::getPlanId, planId);
+        progressMapper.delete(progressWrapper);
+
+        LambdaQueryWrapper<ResourceGenerationTask> taskWrapper = new LambdaQueryWrapper<>();
+        taskWrapper.eq(ResourceGenerationTask::getPlanId, planId);
+        generationTaskMapper.delete(taskWrapper);
+
+        // 软删除计划本身
         planMapper.deleteById(planId);
     }
 

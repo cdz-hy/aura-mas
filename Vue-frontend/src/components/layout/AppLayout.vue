@@ -28,6 +28,7 @@
         <NoteSidebar />
       </div>
     </transition>
+
   </div>
 </template>
 

@@ -199,10 +199,10 @@ ANOMALY_CLARIFY_PROMPT = """你是一个友好的 AI 学习助手。系统在处
 - 回复控制在 3-5 句话
 
 严格输出 JSON：
-{
+{{
   "action": "clarify",
   "response": "你的追问文本"
-}"""
+}}"""
 
 
 def _generate_anomaly_clarification(

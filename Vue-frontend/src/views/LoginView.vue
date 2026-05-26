@@ -114,7 +114,7 @@ async function handleLogin() {
     await authStore.login(form.value)
     router.push(authStore.homeRoute)
   } catch (e: any) {
-    error.value = e.message || '登录失败，请检查账号密码'
+    error.value = e.response?.data?.message || e.message || '登录失败，请检查账号密码'
   } finally {
     loading.value = false
   }
