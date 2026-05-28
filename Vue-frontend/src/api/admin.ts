@@ -77,3 +77,68 @@ export function batchToggleStatus(ids: number[], status: number) {
 export function batchDeleteUsers(ids: number[]) {
   return request.delete('/admin/users/batch', { data: { ids } })
 }
+
+// ========== Token消耗分析 ==========
+
+export interface TokenAnalysisData {
+  summary: {
+    totalCalls: number
+    totalInputTokens: number
+    totalOutputTokens: number
+    totalTokens: number
+  }
+  dailyTrend: {
+    date: string
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+    callCount: number
+  }[]
+  byModel: {
+    modelName: string
+    callCount: number
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+  }[]
+  byScene: {
+    scene: string
+    callCount: number
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+  }[]
+  userRanking: {
+    userId: number
+    userName: string
+    callCount: number
+    totalTokens: number
+  }[]
+}
+
+export function getTokenAnalysis(start: string, end: string) {
+  return request.get<any, TokenAnalysisData>('/admin/token/analysis', { params: { start, end } })
+}
+
+export interface TokenRecord {
+  id: number
+  userId: number
+  userName: string
+  modelName: string
+  scene: string
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  createdAt: string
+}
+
+export interface TokenRecordsPage {
+  records: TokenRecord[]
+  total: number
+  page: number
+  size: number
+}
+
+export function getTokenRecords(start: string, end: string, page: number, size: number, model?: string, scene?: string) {
+  return request.get<any, TokenRecordsPage>('/admin/token/records', { params: { start, end, page, size, model, scene } })
+}

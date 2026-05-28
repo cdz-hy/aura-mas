@@ -188,7 +188,8 @@ CREATE TABLE IF NOT EXISTS `ai_token_usage` (
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     KEY `idx_user_id` (`user_id`),
-    KEY `idx_task_id` (`task_id`)
+    KEY `idx_task_id` (`task_id`),
+    KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI Token消耗表';
 
 CREATE TABLE IF NOT EXISTS `learning_duration` (

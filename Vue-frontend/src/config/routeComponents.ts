@@ -11,6 +11,7 @@ const componentMap: Record<string, () => Promise<Component>> = {
   'admin-dashboard':   () => import('@/views/admin/AdminDashboard.vue'),
   'kb-management':     () => import('@/views/admin/KBManagement.vue'),
   'user-management':   () => import('@/views/admin/UserManagement.vue'),
+  'token-analysis':    () => import('@/views/admin/TokenAnalysis.vue'),
 }
 
 function collectCodes(menus: MenuItem[]): Set<string> {

@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.learning.mapper.AiTokenUsageMapper">
+
+    <!-- 总览统计 -->
+    <select id="selectSummary" resultType="java.util.Map">
+        SELECT
+            COUNT(*) AS totalCalls,
+            COALESCE(SUM(input_tokens), 0) AS totalInputTokens,
+            COALESCE(SUM(output_tokens), 0) AS totalOutputTokens,
+            COALESCE(SUM(total_tokens), 0) AS totalTokens
+        FROM ai_token_usage
+        WHERE created_at BETWEEN #{start} AND #{end}
+    </select>
+
+    <!-- 每日趋势 -->
+    <select id="selectDailyTrend" resultType="java.util.Map">
+        SELECT
+            DATE(created_at) AS date,
+            COALESCE(SUM(input_tokens), 0) AS inputTokens,
+            COALESCE(SUM(output_tokens), 0) AS outputTokens,
+            COALESCE(SUM(total_tokens), 0) AS totalTokens,
+            COUNT(*) AS callCount
+        FROM ai_token_usage
+        WHERE created_at BETWEEN #{start} AND #{end}
+        GROUP BY DATE(created_at)
+        ORDER BY date
+    </select>
+
+    <!-- 按模型分组统计 -->
+    <select id="selectByModel" resultType="java.util.Map">
+        SELECT
+            model_name AS modelName,
+            COUNT(*) AS callCount,
+            COALESCE(SUM(input_tokens), 0) AS inputTokens,
+            COALESCE(SUM(output_tokens), 0) AS outputTokens,
+            COALESCE(SUM(total_tokens), 0) AS totalTokens
+        FROM ai_token_usage
+        WHERE created_at BETWEEN #{start} AND #{end}
+        GROUP BY model_name
+        ORDER BY totalTokens DESC
+    </select>
+
+    <!-- 按场景分组统计 -->
+    <select id="selectByScene" resultType="java.util.Map">
+        SELECT
+            scene,
+            COUNT(*) AS callCount,
+            COALESCE(SUM(input_tokens), 0) AS inputTokens,
+            COALESCE(SUM(output_tokens), 0) AS outputTokens,
+            COALESCE(SUM(total_tokens), 0) AS totalTokens
+        FROM ai_token_usage
+        WHERE created_at BETWEEN #{start} AND #{end}
+        GROUP BY scene
+        ORDER BY totalTokens DESC
+    </select>
+
+    <!-- 用户消耗排行 -->
+    <select id="selectUserRanking" resultType="java.util.Map">
+        SELECT
+            t.user_id AS userId,
+            COALESCE(u.nickname, u.login_name) AS userName,
+            COUNT(*) AS callCount,
+            COALESCE(SUM(t.total_tokens), 0) AS totalTokens
+        FROM ai_token_usage t
+        LEFT JOIN `user` u ON t.user_id = u.id
+        WHERE t.created_at BETWEEN #{start} AND #{end}
+        GROUP BY t.user_id, u.nickname, u.login_name
+        ORDER BY totalTokens DESC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 分页查询原始记录 -->
+    <select id="selectRecords" resultType="java.util.Map">
+        SELECT
+            t.id,
+            t.user_id AS userId,
+            COALESCE(u.nickname, u.login_name) AS userName,
+            t.model_name AS modelName,
+            t.scene,
+            t.input_tokens AS inputTokens,
+            t.output_tokens AS outputTokens,
+            t.total_tokens AS totalTokens,
+            t.created_at AS createdAt
+        FROM ai_token_usage t
+        LEFT JOIN `user` u ON t.user_id = u.id
+        <where>
+            t.created_at BETWEEN #{start} AND #{end}
+            <if test="model != null and model != ''">
+                AND t.model_name = #{model}
+            </if>
+            <if test="scene != null and scene != ''">
+                AND t.scene = #{scene}
+            </if>
+        </where>
+        ORDER BY t.id DESC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+
+    <select id="selectRecordsCount" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM ai_token_usage t
+        <where>
+            t.created_at BETWEEN #{start} AND #{end}
+            <if test="model != null and model != ''">
+                AND t.model_name = #{model}
+            </if>
+            <if test="scene != null and scene != ''">
+                AND t.scene = #{scene}
+            </if>
+        </where>
+    </select>
+
+</mapper>
