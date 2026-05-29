@@ -67,8 +67,9 @@ def route_after_animation_skill_generator(state: AgentState) -> str:
     anomaly = _route_if_anomaly(state)
     if anomaly:
         return anomaly
-    if state.get("error"):
-        return NODE_CONTROLLER
+    error = state.get("error")
+    if error:
+        logger.info(f"  [路由] 动画生成失败 -> END")
     return END
 
 
@@ -546,7 +547,7 @@ def build_learning_graph() -> StateGraph:
     graph.add_node(NODE_ANIMATION_SKILL_GENERATOR, animation_skill_generator_node)
     graph.add_node(NODE_PROFILE_MAINTAINER, profile_maintainer_node)
     graph.add_node(NODE_HUMAN_CONFIRM, _human_confirm_node)
-    logger.info("已注册 11 个节点")
+    logger.info("已注册 12 个节点")
 
     # 设置入口
     graph.set_entry_point(NODE_CONTROLLER)
