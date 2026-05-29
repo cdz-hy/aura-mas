@@ -12,6 +12,8 @@ desktop.ini
 
 # ==================== Claude ====================
 .claude/
+CLAUDE.md
+CONTEXT.md
 
 # ==================== Logs ====================
 *.log
