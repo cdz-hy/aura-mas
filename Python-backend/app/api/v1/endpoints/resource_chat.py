@@ -19,7 +19,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from app.services.db.java_client import java_client
 from app.graph.learning_graph import get_learning_graph
-from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR
+from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR, NODE_ANIMATION_SKILL_GENERATOR
 from app.prompts import QUIZ_GRADER_PROMPT
 from app.agents.profile_maintainer import profile_maintainer_node
 from app.agents.conversation_compressor import build_chat_history_with_context, async_compress_and_save
@@ -355,7 +355,7 @@ async def plan_chat(
 
             if chat_task_id:
                 try:
-                    java_client.update_generation_task(chat_task_id, 2)
+                    java_client.update_generation_task(chat_task_id, 2, update_resource_status=False)
                 except Exception:
                     pass
 
@@ -387,7 +387,7 @@ async def plan_chat(
             _bg_save_resources()
             if chat_task_id:
                 try:
-                    java_client.update_generation_task(chat_task_id, 3)
+                    java_client.update_generation_task(chat_task_id, 3, update_resource_status=False)
                 except Exception:
                     pass
             _save_plain_text_reply(bg_state["breakdown_confirmed"], bg_state["generated_resource_info"],
@@ -609,17 +609,11 @@ async def generate_single_resource(
     source_resource_content = ""
     try:
         current_resource = java_client.get_resource_by_id(module_id_int)
-        if isinstance(current_resource, dict):
-            current_module_order = current_resource.get("moduleOrder", 0)
-            # 提取资源内容全文（moduleData 可能是 JSON 字符串或 dict）
-            md = current_resource.get("moduleData")
-            if isinstance(md, str):
-                try:
-                    md = json.loads(md)
-                except Exception:
-                    md = {}
-            if isinstance(md, dict):
-                source_resource_content = md.get("content", "")
+        current_module_order, source_resource_content = _extract_source_resource_context(
+            current_resource,
+            fallback_title=title,
+            fallback_description=description,
+        )
         logger.info(f"[资源生成] 当前资源 moduleOrder={current_module_order}, 内容长度={len(source_resource_content)}")
     except Exception as e:
         logger.warning(f"[资源生成] 获取当前资源信息失败: {e}")
@@ -629,15 +623,19 @@ async def generate_single_resource(
     if description:
         resource_message += f"\n模块描述: {description}"
 
-    # quiz 和 video 走独立流程，mindmap/summary/code 走类型资源生成，其他走 RAG + 编排
+    # quiz 和 video 走独立流程，mindmap/summary/code 走类型资源生成，animation 走动画节点，其他走 RAG + 编排
     is_quiz = (type == "quiz")
     is_video = (type == "video")
+    is_animation = (type == "animation")
     is_type_resource = type in ("mindmap", "summary", "code")
 
     # 路由决策
     if is_quiz:
         intent = "generate_quiz"
         next_node = "quiz_generator"
+    elif is_animation:
+        intent = "generate_animation"
+        next_node = NODE_ANIMATION_SKILL_GENERATOR
     elif is_type_resource:
         intent = "generate_type_resource"
         next_node = NODE_RESOURCE_TYPE_GENERATOR
@@ -722,6 +720,8 @@ async def generate_single_resource(
         "quiz_questions": None,
         "quiz_config": None,
         "generated_content": None,
+        "generated_resource_info": [],
+        "saved_module_orders": set(),
     }
 
     # SSE 实时回调
@@ -755,7 +755,7 @@ async def generate_single_resource(
                 )
                 if generation_task_id:
                     try:
-                        java_client.update_generation_task(generation_task_id, 2)
+                        java_client.update_generation_task(generation_task_id, 2, update_resource_status=False)
                     except Exception:
                         pass
                 return
@@ -802,9 +802,11 @@ async def generate_single_resource(
                     "module_id": gc.get("module_id", 1),
                     "title": gc.get("title", ""),
                     "content": gc.get("content", ""),
-                    "module_type": _normalize_module_type(gc.get("content_type", "text")),
+                    "module_type": _normalize_module_type(gc.get("module_type") or gc.get("content_type", "text")),
                     "key_points": gc.get("key_points", []),
                     "images": gc.get("images", []),
+                    "animationSpec": gc.get("animationSpec"),
+                    "metadata": gc.get("metadata", {}),
                     "description": description,
                 }]
                 bg_state["orchestrated_content"] = {
@@ -831,7 +833,7 @@ async def generate_single_resource(
             # 更新生成任务状态为已完成
             if generation_task_id:
                 try:
-                    java_client.update_generation_task(generation_task_id, 2)
+                    java_client.update_generation_task(generation_task_id, 2, update_resource_status=False)
                 except Exception:
                     pass
 
@@ -852,7 +854,7 @@ async def generate_single_resource(
             # 更新生成任务状态为失败
             if generation_task_id:
                 try:
-                    java_client.update_generation_task(generation_task_id, 3)
+                    java_client.update_generation_task(generation_task_id, 3, update_resource_status=False)
                 except Exception:
                     pass
         finally:
@@ -1355,6 +1357,44 @@ async def _error_stream(message: str) -> AsyncGenerator[str, None]:
     yield f'data: {json.dumps({"type": "error", "content": message}, ensure_ascii=False)}\n\n'
 
 
+def _extract_source_resource_context(
+    resource: dict,
+    fallback_title: str = "",
+    fallback_description: str = "",
+) -> tuple[int, str]:
+    """提取补充资源生成所需的源资源内容，确保动画至少能用标题/描述生成。"""
+    current_module_order = 0
+    source_resource_content = ""
+
+    if isinstance(resource, dict):
+        current_module_order = resource.get("moduleOrder", 0) or 0
+        md = resource.get("moduleData")
+        if isinstance(md, str):
+            try:
+                md = json.loads(md)
+            except Exception:
+                md = {}
+        if isinstance(md, dict):
+            source_resource_content = (
+                md.get("content")
+                or md.get("html")
+                or "\n\n".join(
+                    part for part in [
+                        md.get("module_title") or md.get("title") or fallback_title,
+                        md.get("module_description") or md.get("description") or fallback_description,
+                    ]
+                    if part
+                )
+            )
+
+    if not source_resource_content:
+        source_resource_content = "\n\n".join(
+            part for part in [fallback_title, fallback_description] if part
+        )
+
+    return current_module_order, source_resource_content
+
+
 def _build_resource_summary(module_list: list, quiz_questions: list = None, orchestrated_content: dict = None) -> str:
     """构建生成资源的简要摘要"""
     parts = []
@@ -1388,15 +1428,20 @@ def _persist_generated_resources(
     """将生成的资源持久化到数据库（与 SSE 解耦，确保断开连接时也能保存）"""
     generated_resource_info = []
 
-    # 类型资源（mindmap/summary/code）：直接从 generated_content 保存
-    is_type_resource = resource_type in ("mindmap", "summary", "code")
-    if is_type_resource and generated_content and plan_id_int:
+    # 类型资源（mindmap/summary/code/animation）：直接从 generated_content 保存
+    is_direct_generated_resource = resource_type in ("mindmap", "summary", "code", "animation")
+    if is_direct_generated_resource and generated_content and plan_id_int:
         module_data = {
             "title": generated_content.get("title", title),
             "description": generated_content.get("description", description),
             "content": generated_content.get("content", ""),
             "module_title": generated_content.get("title", title),
         }
+        if resource_type == "animation":
+            module_data["html"] = generated_content.get("html", generated_content.get("content", ""))
+            module_data["animationSpec"] = generated_content.get("animationSpec", {})
+            module_data["duration"] = generated_content.get("duration")
+            module_data["metadata"] = generated_content.get("metadata", {})
         try:
             result = java_client.create_resource(
                 plan_id=plan_id_int,
@@ -1404,7 +1449,7 @@ def _persist_generated_resources(
                 module_data=json.dumps(module_data, ensure_ascii=False),
                 module_order=current_module_order,
                 status=2,
-                generated_by_agent="resource_type_generator",
+                generated_by_agent="animation_skill_generator" if resource_type == "animation" else "resource_type_generator",
             )
             new_resource_id = result.get("id") if isinstance(result, dict) else 0
             if new_resource_id:

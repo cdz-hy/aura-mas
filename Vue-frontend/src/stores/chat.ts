@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { createSSEConnection, cancelSSE } from '@/utils/sse'
+import type { GeneratedResourceRef } from '@/utils/sse'
 import { issueTicket } from '@/api/auth'
 import { getSessions, getSessionMessages, getDialogueHistoryByPlan, deleteSession as apiDeleteSession, getStreamState, requestStopGeneration } from '@/api/chat'
 import type { ChatSession, ChatMessage } from '@/types/chat'
@@ -43,7 +44,7 @@ export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([])
   const activeSessionId = ref(localStorage.getItem('chat_activeSessionId') || '')
   const sessionsLoading = ref(false)
-  const messages = ref<Array<{ role: string; content: string; type?: string; breakdown?: any; resources?: Array<{ id: number; type: string; title: string }> }>>([])
+  const messages = ref<Array<{ role: string; content: string; type?: string; breakdown?: any; resources?: GeneratedResourceRef[] }>>([])
 
   // ─── 多会话并发：按 sessionId 隔离流式状态 ───
   const sessionStreams = new Map<string, SessionStreamState>()
@@ -63,7 +64,7 @@ export const useChatStore = defineStore('chat', () => {
   // 题目资源事件（供 PlanDetailView 拦截并创建侧栏卡片）
   const lastQuizResource = ref<{ questions: any[] } | null>(null)
   const lastGradingResult = ref<Record<string, any> | null>(null)
-  const lastGeneratedResources = ref<Array<{ id: number; type: string; title: string }> | null>(null)
+  const lastGeneratedResources = ref<GeneratedResourceRef[] | null>(null)
   const streamingResources = ref<Array<{ resource: { id: number; type: string; title: string }; content: string }>>([])
   const resourceStreamBuffers = ref<Record<number, string>>({})
   const streamingPlaceholders = ref<Array<{ id: number; type: string; title: string }>>([])
@@ -485,6 +486,11 @@ export const useChatStore = defineStore('chat', () => {
               })
             }
           },
+          onResourceTypeGenerated(resource) {
+            if (capturedSessionId !== activeSessionId.value) return
+            if (!resource.generated_content && !resource.content && !resource.html && !resource.nodeData) return
+            lastGeneratedResources.value = [resource]
+          },
           onStreamingResource(resource, content) {
             if (capturedSessionId !== activeSessionId.value) return
             streamingResources.value.push({ resource, content })
@@ -650,7 +656,7 @@ export const useChatStore = defineStore('chat', () => {
     if (streaming.value) return
 
     const typeLabels: Record<string, string> = {
-      quiz: '测验', mindmap: '思维导图', code: '代码示例', summary: '总结',
+      quiz: '测验', mindmap: '思维导图', code: '代码示例', summary: '总结', video: '教学视频', animation: '动画',
     }
     const typeLabel = typeLabels[resourceType] || resourceType
     const capturedSessionId = activeSessionId.value
@@ -719,6 +725,11 @@ export const useChatStore = defineStore('chat', () => {
                 resources,
               })
             }
+          },
+          onResourceTypeGenerated(resource) {
+            if (capturedSessionId !== activeSessionId.value) return
+            if (!resource.generated_content && !resource.content && !resource.html && !resource.nodeData) return
+            lastGeneratedResources.value = [resource]
           },
           onStreamingResource(resource, content) {
             if (capturedSessionId !== activeSessionId.value) return

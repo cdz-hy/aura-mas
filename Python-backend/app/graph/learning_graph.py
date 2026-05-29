@@ -11,6 +11,7 @@ from app.agents.schemas import (
     NODE_CONTROLLER, NODE_TASK_DECOMPOSER, NODE_SIMPLE_ANSWER,
     NODE_RAG_RETRIEVER, NODE_RESOURCE_GENERATOR, NODE_QUIZ_GENERATOR,
     NODE_QUIZ_GRADER, NODE_RESOURCE_TYPE_GENERATOR,
+    NODE_ANIMATION_SKILL_GENERATOR,
     NODE_PROFILE_MAINTAINER, NODE_HUMAN_CONFIRM,
     NODE_REVIEW_ORCHESTRATE,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
@@ -26,6 +27,7 @@ from app.agents.resource_generator import resource_generator_node
 from app.agents.quiz_generator import quiz_generator_node
 from app.agents.quiz_grader import quiz_grader_node
 from app.agents.resource_type_generator import resource_type_generator_node
+from app.agents.animation_skill_generator import animation_skill_generator_node
 from app.agents.profile_maintainer import profile_maintainer_node
 from app.services.db.java_client import java_client
 
@@ -58,6 +60,17 @@ def route_after_controller(state: AgentState) -> str:
 
     logger.info(f"  [路由] 主控 -> {next_node}")
     return next_node
+
+
+def route_after_animation_skill_generator(state: AgentState) -> str:
+    """动画生成之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+    error = state.get("error")
+    if error:
+        logger.info(f"  [路由] 动画生成失败 -> END")
+    return END
 
 
 def route_after_rag(state: AgentState) -> str:
@@ -531,9 +544,10 @@ def build_learning_graph() -> StateGraph:
     graph.add_node(NODE_QUIZ_GENERATOR, quiz_generator_node)
     graph.add_node(NODE_QUIZ_GRADER, quiz_grader_node)
     graph.add_node(NODE_RESOURCE_TYPE_GENERATOR, resource_type_generator_node)
+    graph.add_node(NODE_ANIMATION_SKILL_GENERATOR, animation_skill_generator_node)
     graph.add_node(NODE_PROFILE_MAINTAINER, profile_maintainer_node)
     graph.add_node(NODE_HUMAN_CONFIRM, _human_confirm_node)
-    logger.info("已注册 10 个节点")
+    logger.info("已注册 12 个节点")
 
     # 设置入口
     graph.set_entry_point(NODE_CONTROLLER)
@@ -550,6 +564,7 @@ def build_learning_graph() -> StateGraph:
             NODE_QUIZ_GRADER: NODE_QUIZ_GRADER,
             NODE_RESOURCE_GENERATOR: NODE_RESOURCE_GENERATOR,
             NODE_RESOURCE_TYPE_GENERATOR: NODE_RESOURCE_TYPE_GENERATOR,
+            NODE_ANIMATION_SKILL_GENERATOR: NODE_ANIMATION_SKILL_GENERATOR,
             NODE_HUMAN_CONFIRM: NODE_HUMAN_CONFIRM,
             END: END,
         }
@@ -627,6 +642,16 @@ def build_learning_graph() -> StateGraph:
         route_after_resource_type_generator,
         {
             NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
+            END: END,
+        }
+    )
+
+    # 动画生成 -> 结束或回主控
+    graph.add_conditional_edges(
+        NODE_ANIMATION_SKILL_GENERATOR,
+        route_after_animation_skill_generator,
+        {
+            NODE_CONTROLLER: NODE_CONTROLLER,
             END: END,
         }
     )

@@ -30,12 +30,13 @@ class MIMOClient:
     SAFETY_MARGIN = 1024
 
     def __init__(self, model: str = MODEL_PRO, temperature: float = 0.7, max_tokens: int = 4096,
-                 thinking: Optional[Dict[str, str]] = None):
+                 thinking: Optional[Dict[str, str]] = None, request_timeout: int = 120):
         self.api_key = settings.MIMO_API_KEY
         self.base_url = settings.MIMO_BASE_URL
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.request_timeout = request_timeout
         # 思维链配置：None 表示使用模型默认值（mimo-v2.5-pro 默认 enabled）
         self.thinking = thinking
         # Token 消耗记录
@@ -138,9 +139,9 @@ class MIMOClient:
         url = f"{self.base_url.rstrip('/')}/chat/completions"
         
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=120)
+            resp = requests.post(url, headers=headers, json=payload, timeout=self.request_timeout)
         except requests.exceptions.Timeout:
-            raise Exception("MIMO API 请求超时（120秒），可能是网络问题或服务繁忙")
+            raise Exception(f"MIMO API 请求超时（{self.request_timeout}秒），可能是网络问题或服务繁忙")
         except requests.exceptions.RequestException as e:
             raise Exception(f"MIMO API 网络请求失败: {str(e)[:200]}")
 
@@ -224,7 +225,7 @@ class MIMOClient:
         }
 
         url = f"{self.base_url.rstrip('/')}/chat/completions"
-        resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=120)
+        resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=self.request_timeout)
 
         if resp.status_code != 200:
             raise Exception(f"MIMO API 流式调用失败 ({resp.status_code}): {resp.text}")

@@ -8,7 +8,8 @@ from langgraph.graph import END
 from app.agents.schemas import (
     AgentState, NODE_CONTROLLER, NODE_TASK_DECOMPOSER, NODE_SIMPLE_ANSWER,
     NODE_RAG_RETRIEVER, NODE_QUIZ_GENERATOR, NODE_QUIZ_GRADER,
-    NODE_RESOURCE_GENERATOR, NODE_RESOURCE_TYPE_GENERATOR, NODE_HUMAN_CONFIRM,
+    NODE_RESOURCE_GENERATOR, NODE_RESOURCE_TYPE_GENERATOR, NODE_ANIMATION_SKILL_GENERATOR,
+    NODE_HUMAN_CONFIRM,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
     INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP,
 )
@@ -223,7 +224,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         }
 
     # 快速路径：如果前端已确认任务分解，直接进入 RAG 检索，无需 LLM 分类
-    # 但如果初始状态已指定 intent（如 generate_quiz / generate_type_resource），按指定意图路由
+    # 但如果初始状态已指定 intent（如 generate_quiz / generate_type_resource / generate_animation），按指定意图路由
     preset_intent = state.get("intent", "")
     if state.get("task_breakdown_confirmed") and state.get("task_breakdown"):
         if preset_intent == INTENT_GENERATE_QUIZ:
@@ -240,6 +241,14 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
                 "intent": "generate_type_resource",
                 "next_node": NODE_RESOURCE_TYPE_GENERATOR,
                 "current_step": "预设意图: 生成类型资源",
+                "iteration_count": iteration + 1,
+            }
+        if preset_intent == "generate_animation":
+            logger.info(f"  [主控智能体] 预设意图: generate_animation，路由 -> 动画生成智能体")
+            return {
+                "intent": "generate_animation",
+                "next_node": NODE_ANIMATION_SKILL_GENERATOR,
+                "current_step": "预设意图: 生成动画",
                 "iteration_count": iteration + 1,
             }
         logger.info(f"  [主控智能体] 任务分解已确认，快速路由 -> RAG 检索")

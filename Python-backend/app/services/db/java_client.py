@@ -221,6 +221,10 @@ class JavaBackendClient:
         """获取计划的所有资源"""
         return self._request("GET", f"/api/resource/internal/plan/{plan_id}")
 
+    def get_resources_by_module(self, plan_id: int, module_order: int) -> List[Dict[str, Any]]:
+        """获取同一模块下的所有资源"""
+        return self._request("GET", f"/api/resource/internal/plan/{plan_id}/module/{module_order}")
+
     def update_resource_content(self, resource_id: int, module_data: str, status: Optional[int] = None):
         """更新资源内容"""
         body = {"moduleData": module_data}
@@ -327,14 +331,12 @@ class JavaBackendClient:
         learning_behavior: Dict[str, Any],
         update_reason: str,
     ):
-        """保存用户画像（自动判断创建或更新）"""
-        try:
-            self.update_user_profile(user_id, learning_behavior, update_reason)
-        except Exception:
-            try:
-                self.create_user_profile(user_id, learning_behavior, update_reason)
-            except Exception as e:
-                logger.warning(f"保存用户画像失败: {e}")
+        """保存用户画像。
+
+        Java 端 PUT /api/internal/profile 已经支持无当前画像时创建新版本。
+        这里必须让异常抛给调用方，否则调用方会在 Java 500 后误记录“画像保存成功”。
+        """
+        return self.update_user_profile(user_id, learning_behavior, update_reason)
 
     # ==================== 资源生成任务 ====================
 
@@ -357,11 +359,17 @@ class JavaBackendClient:
         self,
         task_id: int,
         task_status: int,
+        update_resource_status: bool = True,
     ) -> Dict[str, Any]:
         """更新资源生成任务状态"""
-        return self._request("PUT", f"/api/task/internal/{task_id}", json={
-            "taskStatus": task_status,
-        })
+        return self._request(
+            "PUT",
+            f"/api/task/internal/{task_id}",
+            json={
+                "taskStatus": task_status,
+                "updateResourceStatus": update_resource_status,
+            },
+        )
 
     # ==================== 知识库管理 ====================
 

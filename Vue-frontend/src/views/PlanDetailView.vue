@@ -164,7 +164,10 @@
         </div>
 
         <!-- 内容区 -->
-        <div class="flex-1 overflow-y-auto p-4">
+        <div
+          class="flex-1 overflow-y-auto"
+          :class="selectedResource.moduleType === 'animation' ? 'resource-content--animation' : 'p-4'"
+        >
           <!-- 题目类型 -->
           <template v-if="selectedResource.moduleType === 'quiz'">
             <QuizPlayer
@@ -254,6 +257,21 @@
             </div>
           </template>
 
+          <!-- 动画类型 -->
+          <template v-else-if="selectedResource.moduleType === 'animation'">
+            <div v-if="animationHtml" class="animation-stage">
+              <iframe
+                class="animation-frame"
+                :srcdoc="animationHtml"
+                sandbox="allow-scripts allow-same-origin"
+                title="教学动画"
+              ></iframe>
+            </div>
+            <div v-else class="text-center py-8 text-navy-300 text-sm">
+              <p>动画内容待生成</p>
+            </div>
+          </template>
+
           <!-- 其他类型（含图文） -->
           <template v-else>
             <div v-if="selectedResource.moduleData?.content" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderedResourceContent"></div>
@@ -326,6 +344,7 @@ import QuizPlayer from '@/components/resource/QuizPlayer.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
 import type { LearningPlan, LearningResource } from '@/types/plan'
+import type { GeneratedResourceRef } from '@/utils/sse'
 import type { QuizData, QuizQuestion } from '@/types/quiz'
 import type { MindElixirData } from 'mind-elixir'
 
@@ -351,6 +370,14 @@ const isDragging = ref(false)
 const panelStyle = computed(() => {
   if (!selectedResource.value && !showResourceStreamPreview.value) {
     return { width: '0px', minWidth: '0px', marginLeft: '0px', marginRight: '0px' }
+  }
+  if (selectedResource.value?.moduleType === 'animation') {
+    const preferredWidth = Math.max(panelWidth.value, 760)
+    return {
+      width: `min(${preferredWidth}px, calc(100vw - 620px))`,
+      minWidth: '360px',
+      flexShrink: '0',
+    }
   }
   return { width: panelWidth.value + 'px', minWidth: '280px' }
 })
@@ -547,6 +574,7 @@ function badgeClass(type: string) {
     video: 'bg-rose-100 text-rose-700',
     image: 'bg-pink-100 text-pink-700',
     diagram: 'bg-teal-100 text-teal-700',
+    animation: 'bg-orange-100 text-orange-700',
   }
   return map[type] || 'bg-navy-100 text-navy-700'
 }
@@ -560,11 +588,94 @@ function parseModuleData(resources: LearningResource[]) {
         r.moduleData = { content: r.moduleData }
       }
     }
+    r.moduleData = normalizeResourceModuleData(r.moduleType, r.moduleData || {})
   })
 }
 
+function normalizeResourceModuleData(moduleType: string, rawData: Record<string, any>): Record<string, any> {
+  const moduleData = { ...rawData }
+  const nested = moduleData.generated_content || moduleData.data || null
+  if (nested && typeof nested === 'object') {
+    Object.assign(moduleData, nested, moduleData)
+  }
+
+  if (moduleType === 'animation') {
+    const html = moduleData.html || moduleData.content || ''
+    moduleData.html = html
+    moduleData.content = moduleData.content || html
+  } else if (moduleType === 'mindmap') {
+    const nodeData = moduleData.nodeData || moduleData.node_data
+    if (!moduleData.content && nodeData) {
+      moduleData.content = typeof nodeData === 'string' ? nodeData : JSON.stringify(nodeData)
+    }
+  } else {
+    moduleData.content = moduleData.content || moduleData.html || ''
+  }
+
+  return moduleData
+}
+
+function moduleDataFromGeneratedResource(resource: GeneratedResourceRef): Record<string, any> {
+  const generated = resource.generated_content || resource.moduleData || resource.data || {}
+  const moduleType = resource.type || generated.module_type || generated.moduleType || 'document'
+  const baseData: Record<string, any> = {
+    ...generated,
+    title: generated.title || resource.title,
+    description: generated.description || '',
+    content: generated.content || resource.content || '',
+  }
+
+  if (moduleType === 'animation') {
+    const html = generated.html || resource.html || baseData.content || ''
+    baseData.html = html
+    baseData.content = baseData.content || html
+  }
+  if (moduleType === 'mindmap') {
+    const nodeData = generated.nodeData || resource.nodeData
+    if (nodeData && !baseData.content) {
+      baseData.content = typeof nodeData === 'string' ? nodeData : JSON.stringify(nodeData)
+    }
+    if (nodeData) baseData.nodeData = nodeData
+  }
+
+  return normalizeResourceModuleData(moduleType, baseData)
+}
+
+function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResource {
+  const existing = resource.id ? resources.value.find(r => r.id === resource.id) : null
+  const moduleType = resource.type || existing?.moduleType || resource.generated_content?.module_type || 'document'
+  const moduleData = moduleDataFromGeneratedResource({ ...resource, type: moduleType })
+
+  if (existing) {
+    existing.moduleType = moduleType
+    existing.moduleData = { ...existing.moduleData, ...moduleData }
+    existing.status = resource.status ?? 2
+    existing.updatedAt = new Date().toISOString()
+    return existing
+  }
+
+  const moduleOrder = resources.value.length > 0
+    ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1
+  const newResource: LearningResource = {
+    id: resource.id || Date.now(),
+    planId: planId.value,
+    parentId: null,
+    moduleOrder,
+    moduleType,
+    moduleData,
+    status: resource.status ?? 2,
+    storagePath: null,
+    generatedByAgent: moduleType === 'animation' ? 'animation_skill_generator' : 'resource_type_generator',
+    version: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }
+  resources.value.push(newResource)
+  return newResource
+}
+
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表',
+  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画',
 }
 
 // ==================== 计算属性 ====================
@@ -599,6 +710,215 @@ const renderedResourceContent = computed(() => {
   if (!content) return ''
   return renderMd(content)
 })
+
+const animationHtml = computed(() => {
+  const md = selectedResource.value?.moduleData
+  if (!md) return ''
+  return normalizeAnimationHtml(md.html || md.content || '')
+})
+
+function escapeJsonForHtml(value: string) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003C')
+    .replace(/>/g, '\\u003E')
+    .replace(/&/g, '\\u0026')
+}
+
+function normalizeAnimationHtml(raw: string) {
+  if (!raw) return ''
+  const html = String(raw)
+
+  const payload = escapeJsonForHtml(html)
+  const closeScript = '<' + '/script>'
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: #050505; }
+    .viewport { position: relative; width: 100vw; height: 100vh; display: grid; place-items: center; overflow: hidden; background: #050505; }
+    .stage { position: relative; width: min(100vw, calc(100vh * 16 / 9)); height: min(100vh, calc(100vw * 9 / 16)); aspect-ratio: 16 / 9; overflow: hidden; background: #050505; }
+    iframe { position: absolute; width: 1920px; height: 1080px; border: 0; transform-origin: top left; background: #050505; }
+    .legacy-control-bar { position: absolute; left: 50%; bottom: 10px; z-index: 20; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid rgba(255,255,255,.16); border-radius: 14px; background: rgba(0,0,0,.68); backdrop-filter: blur(16px); }
+    .legacy-control-bar button { width: 38px; height: 34px; border: 1px solid rgba(255,255,255,.16); border-radius: 10px; background: rgba(255,255,255,.08); color: #f5f5f7; cursor: pointer; font-size: 16px; }
+    .legacy-control-bar button:hover { background: rgba(255,255,255,.16); }
+    .legacy-progress { min-width: 46px; text-align: center; color: rgba(245,245,247,.68); font: 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <div class="viewport">
+    <div class="stage">
+      <iframe title="教学动画内容" allow="autoplay"></iframe>
+      <nav class="legacy-control-bar" aria-label="动画控制">
+        <button type="button" data-action="prev" aria-label="上一页">‹</button>
+        <button type="button" data-action="pause" aria-label="暂停">Ⅱ</button>
+        <button type="button" data-action="replay" aria-label="重播">↻</button>
+        <button type="button" data-action="next" aria-label="下一页">›</button>
+        <span class="legacy-progress" aria-live="polite"></span>
+      </nav>
+    </div>
+  </div>
+  <script type="application/json" id="animation-html">${payload}${closeScript}
+  <script>
+    (() => {
+      const stage = document.querySelector('.stage');
+      const frame = document.querySelector('iframe');
+      const pauseButton = document.querySelector('[data-action="pause"]');
+      const progress = document.querySelector('.legacy-progress');
+      let paused = false;
+      let autoplayTimer = null;
+      const raw = JSON.parse(document.getElementById('animation-html').textContent || '""');
+      const closeScriptTag = '<' + '/script>';
+      const intervalShim = '<script>(()=>{const nativeSetInterval=window.setInterval.bind(window);window.__AURA_LEGACY_PAUSED=false;window.setInterval=(fn,delay,...args)=>nativeSetInterval(()=>{if(!window.__AURA_LEGACY_PAUSED)fn(...args)},delay);window.__AURA_LEGACY_PAUSE=()=>{window.__AURA_LEGACY_PAUSED=true;document.getAnimations({subtree:true}).forEach(animation=>animation.pause())};window.__AURA_LEGACY_PLAY=()=>{window.__AURA_LEGACY_PAUSED=false;document.getAnimations({subtree:true}).forEach(animation=>animation.play())}})();' + closeScriptTag;
+      const controlHideStyle = '<style>.animation-control-bar,nav[aria-label="动画控制"]{display:none!important}</style>';
+      const instrumented = /<head[^>]*>/i.test(raw)
+        ? raw.replace(/<head[^>]*>/i, match => match + intervalShim + controlHideStyle)
+        : intervalShim + controlHideStyle + raw;
+      frame.srcdoc = instrumented;
+
+      function fit() {
+        const rect = stage.getBoundingClientRect();
+        const scale = Math.min(rect.width / 1920, rect.height / 1080);
+        frame.style.transform = 'scale(' + scale + ')';
+        frame.style.left = Math.max(0, (rect.width - 1920 * scale) / 2) + 'px';
+        frame.style.top = Math.max(0, (rect.height - 1080 * scale) / 2) + 'px';
+      }
+
+      function innerDocument() {
+        return frame.contentDocument;
+      }
+
+      function innerBeats() {
+        const doc = innerDocument();
+        return doc ? [...doc.querySelectorAll('.beat')] : [];
+      }
+
+      function innerActiveIndex() {
+        const beats = innerBeats();
+        const index = beats.findIndex(beat => beat.classList.contains('active'));
+        return { beats, index: Math.max(0, index) };
+      }
+
+      function syncProgress() {
+        const { beats, index } = innerActiveIndex();
+        progress.textContent = beats.length ? (index + 1) + ' / ' + beats.length : '';
+      }
+
+      function replayInnerAnimations() {
+        const doc = innerDocument();
+        const active = doc?.querySelector('.beat.active') || doc?.body;
+        active?.getAnimations({ subtree: true }).forEach(animation => {
+          animation.cancel();
+          animation.play();
+        });
+      }
+
+      function showInnerBeat(nextIndex) {
+        const { beats } = innerActiveIndex();
+        if (!beats.length) return false;
+        const normalized = ((nextIndex % beats.length) + beats.length) % beats.length;
+        beats.forEach((beat, index) => beat.classList.toggle('active', index === normalized));
+        syncProgress();
+        requestAnimationFrame(replayInnerAnimations);
+        return true;
+      }
+
+      function findInnerButton(action) {
+        const doc = innerDocument();
+        if (!doc) return null;
+        const matchers = {
+          prev: text => /上一|prev|‹|←/i.test(text),
+          next: text => /下一|next|›|→/i.test(text),
+          replay: text => /重播|replay|↻|restart/i.test(text),
+          pause: text => /暂停|播放|pause|play|Ⅱ|▶/i.test(text),
+        };
+        return [...doc.querySelectorAll('button')].find(button => {
+          const text = [
+            button.getAttribute('data-action'),
+            button.getAttribute('aria-label'),
+            button.textContent,
+          ].filter(Boolean).join(' ');
+          return text.includes(action) || matchers[action](text);
+        }) || null;
+      }
+
+      function runInnerAction(action, delta = 0) {
+        if (action === 'prev' || action === 'next') {
+          const { index } = innerActiveIndex();
+          if (showInnerBeat(index + delta)) return true;
+        }
+        if (action === 'replay') {
+          replayInnerAnimations();
+          return true;
+        }
+        const button = findInnerButton(action);
+        if (button) {
+          button.click();
+          setTimeout(syncProgress, 0);
+          return true;
+        }
+        return false;
+      }
+
+      function setPaused(nextPaused) {
+        paused = nextPaused;
+        pauseButton.textContent = paused ? '▶' : 'Ⅱ';
+        pauseButton.setAttribute('aria-label', paused ? '播放' : '暂停');
+        const inner = frame.contentWindow;
+        if (paused) {
+          const innerPause = findInnerButton('pause');
+          if (innerPause && /暂停|pause|Ⅱ/i.test((innerPause.getAttribute('aria-label') || '') + innerPause.textContent)) {
+            innerPause.click();
+          }
+          inner?.__AURA_LEGACY_PAUSE?.();
+        } else {
+          const innerPause = findInnerButton('pause');
+          if (innerPause && /播放|play|▶/i.test((innerPause.getAttribute('aria-label') || '') + innerPause.textContent)) {
+            innerPause.click();
+          }
+          inner?.__AURA_LEGACY_PLAY?.();
+        }
+      }
+
+      function startAutoplay() {
+        if (autoplayTimer) clearInterval(autoplayTimer);
+        autoplayTimer = setInterval(() => {
+          if (paused) return;
+          runInnerAction('next', 1);
+        }, 4200);
+      }
+
+      document.querySelector('.legacy-control-bar').addEventListener('click', event => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const action = button.getAttribute('data-action');
+        if (action === 'pause') {
+          setPaused(!paused);
+          return;
+        }
+        if (action === 'prev') runInnerAction('prev', -1);
+        else if (action === 'next') runInnerAction('next', 1);
+        else if (action === 'replay' && !runInnerAction('replay')) {
+          frame.srcdoc = instrumented;
+          requestAnimationFrame(fit);
+        }
+        startAutoplay();
+      });
+
+      window.addEventListener('resize', fit);
+      frame.addEventListener('load', () => {
+        fit();
+        syncProgress();
+        startAutoplay();
+      });
+      requestAnimationFrame(fit);
+    })();
+  ${closeScript}
+</body>
+</html>`
+}
 
 // ==================== 资源详情 ====================
 
@@ -653,7 +973,7 @@ function toggleResource(res: LearningResource) {
   showExplanations.value = false
 
   // Notify chat panel of resource type for follow-up template
-  planChatPanelRef.value?.updateResourceTitle(res.title)
+  planChatPanelRef.value?.updateResourceTitle(res.moduleData?.title || res.moduleData?.module_title || `模块 ${res.moduleOrder}`)
   planChatPanelRef.value?.updateResourceType(res.moduleType || '')
 
   // 展开侧栏中包含该资源的模块
@@ -776,11 +1096,12 @@ function parseQuizData(res: LearningResource): QuizData | null {
 
 function parseMindmapData(res: LearningResource): MindElixirData | null {
   const md = res.moduleData
-  if (!md?.content) return null
+  const rawNodeData = md?.nodeData || md?.node_data || md?.content
+  if (!rawNodeData) return null
 
   try {
-    // content 应该是 MindElixir nodeData 的 JSON 字符串
-    const parsed = typeof md.content === 'string' ? JSON.parse(md.content) : md.content
+    // content 应该是 MindElixir nodeData 的 JSON 字符串，也兼容 nodeData 对象
+    const parsed = typeof rawNodeData === 'string' ? JSON.parse(rawNodeData) : rawNodeData
 
     // 验证基本结构：必须有 id 和 topic
     if (!parsed || !parsed.topic) return null
@@ -791,7 +1112,7 @@ function parseMindmapData(res: LearningResource): MindElixirData | null {
     } as MindElixirData
   } catch {
     // JSON 解析失败，尝试将纯文本包装为简单的思维导图
-    const text = typeof md.content === 'string' ? md.content : ''
+    const text = typeof rawNodeData === 'string' ? rawNodeData : ''
     if (!text.trim()) return null
 
     // 按行拆分，每行作为一个子节点
@@ -901,32 +1222,34 @@ async function loadQuizRecords(resourceId: number) {
     latestBatch.forEach((record, i) => {
       // 选择题：将文本答案还原为索引
       const q = questions[i]
+      const recordExtra = record as typeof record & { score?: number; questionText?: string; feedback?: string }
+      const userAnswer = record.userAnswer || ''
       if (q && (q.type === 'single_choice' || q.type === 'multiple_choice') && q.options) {
         if (q.type === 'single_choice') {
-          const idx = q.options.indexOf(record.userAnswer)
-          answers[i] = idx >= 0 ? idx : record.userAnswer
+          const idx = q.options.indexOf(userAnswer)
+          answers[i] = idx >= 0 ? idx : userAnswer
         } else {
           // 多选：逗号分隔的文本 -> 索引数组
-          const texts = record.userAnswer.split(',').map((s: string) => s.trim())
+          const texts = userAnswer.split(',').map((s: string) => s.trim())
           answers[i] = texts.map((t: string) => q.options!.indexOf(t)).filter((idx: number) => idx >= 0)
         }
       } else {
-        answers[i] = record.userAnswer
+        answers[i] = userAnswer
       }
 
       const isCorrect = record.isCorrect === 1
       if (isCorrect) correctCount++
-      const score = record.score ?? (isCorrect ? 1 : 0)
+      const score = recordExtra.score ?? (isCorrect ? 1 : 0)
       scoreSum += score
       details.push({
         index: i,
         question_type: record.questionType,
-        question: record.questionText || q?.question || '',
-        user_answer: record.userAnswer,
+        question: recordExtra.questionText || q?.question || '',
+        user_answer: userAnswer,
         correct_answer: record.correctAnswer,
         is_correct: isCorrect,
         score,
-        feedback: record.feedback || (isCorrect ? '回答正确' : `回答错误，正确答案: ${record.correctAnswer}`),
+        feedback: recordExtra.feedback || (isCorrect ? '回答正确' : `回答错误，正确答案: ${record.correctAnswer}`),
         key_points_hit: [],
         key_points_missed: [],
         improvement_suggestions: isCorrect ? [] : [`正确答案: ${record.correctAnswer}`],
@@ -1029,29 +1352,60 @@ watch(() => chatStore.lastGradingResult, (data) => {
   chatStore.lastGradingResult = null
 })
 
-// 监听新生成的资源事件 — 从后端获取完整资源并添加到侧栏
+// 监听新生成的资源事件 — 从 SSE 内联内容或后端详情添加/更新到侧栏
 watch(() => chatStore.lastGeneratedResources, async (resList) => {
   if (!resList || !resList.length) return
-  let firstNewRes: LearningResource | null = null
+  let firstUpdatedRes: LearningResource | null = null
   for (const r of resList) {
-    // 跳过已存在的资源
-    if (resources.value.some(existing => existing.id === r.id)) continue
+    const hasInlineContent = !!(r.content || r.html || r.nodeData || r.moduleData || r.generated_content || r.data)
+    if (hasInlineContent) {
+      const localRes = upsertGeneratedResource(r)
+      if (!firstUpdatedRes) firstUpdatedRes = localRes
+      continue
+    }
+
+    const existing = resources.value.find(resource => resource.id === r.id)
     try {
       const res = await getResource(r.id)
       const fullRes = res.data
       if (fullRes) {
         // 解析 moduleData（API 返回 JSON 字符串，需转为对象）
         parseModuleData([fullRes])
-        resources.value.push(fullRes)
-        if (!firstNewRes) firstNewRes = fullRes
+        const existingIndex = resources.value.findIndex(resource => resource.id === fullRes.id)
+        if (existingIndex >= 0) {
+          // 生成前通常已经插入 status=1 的占位资源；生成完成后必须用完整资源覆盖，
+          // 否则详情面板会一直停留在“资源内容待生成”。
+          resources.value.splice(existingIndex, 1, fullRes)
+        } else {
+          resources.value.push(fullRes)
+        }
+        if (!firstUpdatedRes) firstUpdatedRes = fullRes
       }
     } catch (e) {
       console.error('Failed to fetch generated resource:', e)
+      if (existing) {
+        existing.status = 2
+        if (!firstUpdatedRes) firstUpdatedRes = existing
+      }
     }
   }
-  // 自动打开第一个新资源
-  if (firstNewRes) {
-    toggleResource(firstNewRes)
+  // 自动打开第一个生成完成的资源；如果它已经处于选中状态，则原地刷新派生数据，避免 toggle 反向关闭面板
+  if (firstUpdatedRes) {
+    if (selectedResourceId.value === firstUpdatedRes.id) {
+      selectedResource.value = firstUpdatedRes
+      if (firstUpdatedRes.moduleType === 'quiz') {
+        quizData.value = parseQuizData(firstUpdatedRes)
+        mindmapData.value = null
+      } else if (firstUpdatedRes.moduleType === 'mindmap') {
+        quizData.value = null
+        mindmapData.value = parseMindmapData(firstUpdatedRes)
+      } else {
+        quizData.value = null
+        mindmapData.value = null
+      }
+    } else {
+      toggleResource(firstUpdatedRes)
+    }
   }
   chatStore.lastGeneratedResources = null
 })
@@ -1131,3 +1485,30 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
   }
 }, { deep: true })
 </script>
+
+<style scoped>
+.resource-content--animation {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #050505;
+}
+
+.animation-stage {
+  width: min(100%, calc((100vh - 250px) * 16 / 9));
+  aspect-ratio: 16 / 9;
+  margin: 0 auto;
+  overflow: hidden;
+  background: #050505;
+}
+
+.animation-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #050505;
+  display: block;
+}
+</style>

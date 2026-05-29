@@ -9,10 +9,58 @@ from typing import Optional
 import aio_pika
 from app.core.config import settings
 from app.graph.learning_graph import get_learning_graph
-from app.agents.schemas import AgentState
+from app.agents.schemas import AgentState, NODE_ANIMATION_SKILL_GENERATOR
 from app.services.db.java_client import java_client
 
 logger = logging.getLogger("mq.consumer")
+
+
+def _parse_module_data(raw) -> dict:
+    """兼容 Java 返回的 moduleData 字符串/对象。"""
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {"content": raw}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _extract_resource_context(resource_info: dict) -> tuple[str, str, str, int]:
+    md = _parse_module_data(resource_info.get("moduleData") if isinstance(resource_info, dict) else None)
+    module_title = md.get("module_title") or md.get("title", "")
+    resource_desc = md.get("module_description") or md.get("description", "")
+    source_resource_content = md.get("content") or md.get("html") or ""
+    current_module_order = resource_info.get("moduleOrder", 0) if isinstance(resource_info, dict) else 0
+    return module_title, resource_desc, source_resource_content, current_module_order
+
+
+def _resolve_source_resource_content(plan_id: int, current_module_order: int, current_resource_id: int) -> str:
+    """动画占位资源内容为空时，回到同一模块找已生成正文资源作为动画源。"""
+    if not current_module_order:
+        return ""
+
+    try:
+        resources = java_client.get_resources_by_module(plan_id, current_module_order)
+    except Exception as e:
+        logger.warning("  [MQ 消费] 获取同模块资源失败: %s", e)
+        return ""
+
+    preferred_types = ("text", "document", "reading", "summary", "code")
+    for preferred in preferred_types:
+        for resource in resources or []:
+            if resource.get("id") == current_resource_id:
+                continue
+            if resource.get("status") != 2 or resource.get("moduleType") != preferred:
+                continue
+            md = _parse_module_data(resource.get("moduleData"))
+            content = md.get("content") or md.get("summary") or ""
+            if content:
+                logger.info("  [MQ 消费] 动画源内容来自同模块 %s 资源: id=%s, 长度=%d",
+                            preferred, resource.get("id"), len(content))
+                return content
+
+    return ""
 
 
 class MQConsumer:
@@ -64,9 +112,13 @@ class MQConsumer:
         """收到资源生成任务后的处理入口"""
         async with message.process():
             try:
-                body = json.loads(message.body)
-            except json.JSONDecodeError as e:
-                logger.error("MQ 消息解析失败: %s", e)
+                body = json.loads(message.body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                logger.error(
+                    "MQ 消息解析失败，已丢弃非 JSON 消息: %s, body_prefix=%s",
+                    e,
+                    message.body[:16].hex(),
+                )
                 return
 
             task_id = body.get("taskId")
@@ -110,20 +162,13 @@ class MQConsumer:
         plan_title = plan_info.get("title", "") if isinstance(plan_info, dict) else ""
 
         module_type = resource_info.get("moduleType", "document") if isinstance(resource_info, dict) else "document"
-        module_title = ""
-        resource_desc = ""
-        source_resource_content = ""
-        if isinstance(resource_info, dict) and resource_info.get("moduleData"):
-            try:
-                md = resource_info["moduleData"]
-                if isinstance(md, str):
-                    md = json.loads(md)
-                if isinstance(md, dict):
-                    module_title = md.get("module_title", "")
-                    resource_desc = md.get("module_description", "")
-                    source_resource_content = md.get("content", "")
-            except Exception:
-                pass
+        module_title, resource_desc, source_resource_content, current_module_order = _extract_resource_context(resource_info)
+
+        if module_type == "animation" and not source_resource_content:
+            source_resource_content = _resolve_source_resource_content(plan_id, current_module_order, resource_id)
+            if not source_resource_content and (module_title or resource_desc):
+                source_resource_content = f"{module_title}\n\n{resource_desc}".strip()
+                logger.info("  [MQ 消费] 动画源内容为空，使用模块标题/描述作为最小上下文")
 
         user_message = f"请为学习计划「{plan_title}」生成{module_type}类型的学习资源: {module_title}"
         if resource_desc:
@@ -133,11 +178,15 @@ class MQConsumer:
         logger.info("    计划: %s, 模块: %s, 类型: %s", plan_title, module_title, module_type)
 
         # 2. 运行 LangGraph 工作流（非流式，收集完整结果）
-        # 路由决策：quiz/类型资源/通用资源
+        # 路由决策：quiz/类型资源/动画/通用资源
         is_type_resource = module_type in ("mindmap", "summary", "code")
+        is_animation = module_type == "animation"
         if module_type == "quiz":
             intent = "generate_quiz"
             next_node = "quiz_generator"
+        elif is_animation:
+            intent = "generate_animation"
+            next_node = NODE_ANIMATION_SKILL_GENERATOR
         elif is_type_resource:
             intent = "generate_type_resource"
             next_node = "resource_type_generator"
@@ -191,6 +240,7 @@ class MQConsumer:
             "max_iterations": 10,
             "accumulated_context": "",
             "source_resource_content": source_resource_content,
+            "background_generation": True,
         }
 
         graph = get_learning_graph()
@@ -200,7 +250,7 @@ class MQConsumer:
         if error:
             raise Exception(f"工作流执行失败: {error}")
 
-        orchestrated = final_state.get("orchestrated_content", {})
+        orchestrated = final_state.get("orchestrated_content") or {}
         module_list = final_state.get("module_list", [])
         generated_content = final_state.get("generated_content")
         quiz_questions = final_state.get("quiz_questions")
@@ -217,22 +267,32 @@ class MQConsumer:
             }
             module_data_json = json.dumps(result_data, ensure_ascii=False)
             logger.info("  [MQ 消费] quiz 资源: %d 道题目", len(quiz_questions))
-        elif generated_content and is_type_resource:
-            # 类型资源（mindmap/summary/code）
+        elif generated_content and (is_type_resource or is_animation):
+            # 类型资源（mindmap/summary/code/animation）
             result_data = {
                 "title": generated_content.get("title", module_title),
                 "description": generated_content.get("description", resource_desc),
                 "content": generated_content.get("content", ""),
                 "module_title": generated_content.get("title", module_title),
             }
+            if is_animation:
+                result_data["html"] = generated_content.get("html", generated_content.get("content", ""))
+                result_data["animationSpec"] = generated_content.get("animationSpec", {})
+                result_data["duration"] = generated_content.get("duration")
+                result_data["metadata"] = generated_content.get("metadata", {})
             module_data_json = json.dumps(result_data, ensure_ascii=False)
         elif orchestrated or module_list:
+            first_module = module_list[0] if module_list else {}
             result_data = {
-                "title": orchestrated.get("title", module_title),
-                "description": orchestrated.get("description", resource_desc),
+                "title": orchestrated.get("title") or first_module.get("title") or module_title,
+                "description": orchestrated.get("description") or first_module.get("description") or resource_desc,
+                "content": first_module.get("content", ""),
                 "modules": module_list or orchestrated.get("modules", []),
                 "summary": orchestrated.get("summary", ""),
             }
+            images = first_module.get("images", [])
+            if images:
+                result_data["images"] = images
             module_data_json = json.dumps(result_data, ensure_ascii=False)
         else:
             raise Exception("工作流未生成有效内容")

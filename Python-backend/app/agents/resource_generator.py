@@ -390,22 +390,23 @@ def resource_generator_node(state: AgentState) -> Dict[str, Any]:
     if error_count == len(module_list) and len(module_list) > 0:
         anomaly_summary += " (警告: 所有模块生成均失败)"
 
-    from app.agents.anomaly_checker import check_content_alignment
-    is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary)
-    if not is_aligned:
-        logger.warning(f"  [资源生成智能体] 自主检测到内容偏离: {anomaly_reason}")
-        return {
-            "agent_anomaly": True,
-            "anomaly_reason": anomaly_reason,
-            "module_list": module_list,
-            "current_step": f"资源生成智能体: 检测到生成内容偏离 - {anomaly_reason}",
-            "stream_events": [{
-                "event_type": "thinking",
-                "agent": "resource_generator",
-                "data": {"message": f"检测到生成内容与目标偏离: {anomaly_reason}"},
-                "step_description": f"异常中断: {anomaly_reason}"
-            }],
-        }
+    if not state.get("background_generation"):
+        from app.agents.anomaly_checker import check_content_alignment
+        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary)
+        if not is_aligned:
+            logger.warning(f"  [资源生成智能体] 自主检测到内容偏离: {anomaly_reason}")
+            return {
+                "agent_anomaly": True,
+                "anomaly_reason": anomaly_reason,
+                "module_list": module_list,
+                "current_step": f"资源生成智能体: 检测到生成内容偏离 - {anomaly_reason}",
+                "stream_events": [{
+                    "event_type": "thinking",
+                    "agent": "resource_generator",
+                    "data": {"message": f"检测到生成内容与目标偏离: {anomaly_reason}"},
+                    "step_description": f"异常中断: {anomaly_reason}"
+                }],
+            }
 
     logger.info(f"{'='*60}")
 

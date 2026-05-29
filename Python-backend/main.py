@@ -1,6 +1,7 @@
 import logging
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -8,8 +9,11 @@ from app.api.v1.endpoints import upload, query, agent_chat
 from app.api.v1.endpoints import profile_builder, plan_generator, resource_chat
 from app.api.v1.endpoints import kb
 from app.core.config import settings
+from app.core.reload import get_reload_dirs
 from app.services.mq_consumer import mq_consumer
 import uvicorn
+
+BASE_DIR = Path(__file__).resolve().parent
 
 # ==================== 日志配置 ====================
 logging.basicConfig(
@@ -86,11 +90,17 @@ app.include_router(resource_chat.router, prefix="/api/ai", tags=["资源对话"]
 app.include_router(kb.router, prefix="/api/v1/kb", tags=["知识库管理"])
 
 # 挂载静态文件（用于测试 UI）
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 @app.get("/")
 async def root():
     return {"message": "AURA Python 后端服务已启动 (RAG + 多智能体)"}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=settings.PORT, reload=settings.DEBUG)
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=settings.PORT,
+        reload=settings.DEBUG,
+        reload_dirs=get_reload_dirs(BASE_DIR) if settings.DEBUG else None,
+    )

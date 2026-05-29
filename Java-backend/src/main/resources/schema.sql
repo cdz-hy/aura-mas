@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS `user_profile` (
     `update_reason` VARCHAR(255) DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_user_current` (`user_id`, `is_current`),
+    KEY `idx_user_current` (`user_id`, `is_current`),
     KEY `idx_user_version` (`user_id`, `version`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户画像表';
 
