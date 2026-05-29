@@ -19,6 +19,7 @@ NODE_RESOURCE_GENERATOR = "resource_generator"
 NODE_QUIZ_GENERATOR = "quiz_generator"
 NODE_QUIZ_GRADER = "quiz_grader"
 NODE_RESOURCE_TYPE_GENERATOR = "resource_type_generator"
+NODE_ANIMATION_SKILL_GENERATOR = "animation_skill_generator"
 NODE_PROFILE_MAINTAINER = "profile_maintainer"
 NODE_HUMAN_CONFIRM = "human_confirm"
 
