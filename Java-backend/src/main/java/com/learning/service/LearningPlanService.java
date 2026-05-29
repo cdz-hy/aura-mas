@@ -15,7 +15,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -60,7 +61,31 @@ public class LearningPlanService {
                 .orderByDesc(LearningPlan::getCreatedAt);
 
         Page<LearningPlan> result = planMapper.selectPage(pageParam, wrapper);
-        return PageResult.of(result.getTotal(), page, size, result.getRecords());
+        List<LearningPlan> plans = result.getRecords();
+
+        // 计算每个计划的展示状态（基于资源生成情况）
+        if (!plans.isEmpty()) {
+            List<Long> planIds = plans.stream().map(LearningPlan::getId).collect(Collectors.toList());
+            List<LearningResource> allResources = resourceMapper.selectList(
+                    new LambdaQueryWrapper<LearningResource>()
+                            .in(LearningResource::getPlanId, planIds));
+
+            Map<Long, List<LearningResource>> resourceMap = allResources.stream()
+                    .collect(Collectors.groupingBy(LearningResource::getPlanId));
+
+            for (LearningPlan plan : plans) {
+                List<LearningResource> resources = resourceMap.getOrDefault(plan.getId(), Collections.emptyList());
+                if (resources.isEmpty()) {
+                    plan.setDisplayStatus(0); // 待规划：没有资源
+                } else if (resources.stream().anyMatch(r -> r.getStatus() == null || r.getStatus() < 2)) {
+                    plan.setDisplayStatus(1); // 生成中：存在未完成的资源（status 0 或 1）
+                } else {
+                    plan.setDisplayStatus(4); // 已完成：所有资源 status >= 2
+                }
+            }
+        }
+
+        return PageResult.of(result.getTotal(), page, size, plans);
     }
 
     @Transactional

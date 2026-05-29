@@ -5,6 +5,7 @@ export interface LearningPlan {
   planConfig: Record<string, any> | null
   userId: number
   status: number // 0-pending, 1-generating, 2-confirming, 3-learning, 4-completed
+  displayStatus?: number // 0=待规划, 1=生成中, 4=已完成 (基于资源生成状态)
   progress: number
   createdAt: string
   updatedAt: string

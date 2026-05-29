@@ -45,8 +45,12 @@ public class LearningResourceService {
     public LearningResource createResource(LearningResource resource) {
         resource.setCreatedAt(LocalDateTime.now());
         resource.setUpdatedAt(LocalDateTime.now());
-        resource.setStatus(0);
-        resource.setVersion(1);
+        if (resource.getStatus() == null) {
+            resource.setStatus(0);
+        }
+        if (resource.getVersion() == null) {
+            resource.setVersion(1);
+        }
         resourceMapper.insert(resource);
         return resource;
     }

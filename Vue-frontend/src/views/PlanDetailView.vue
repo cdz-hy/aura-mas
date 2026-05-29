@@ -321,6 +321,7 @@ import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
 import { issueTicket } from '@/api/auth'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
+import { useHeartbeat } from '@/composables/useHeartbeat'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
@@ -338,6 +339,9 @@ const chatPanelMode = ref<'assistant' | 'tutor'>(
 )
 watch(chatPanelMode, (m) => localStorage.setItem('chatPanelMode', m))
 const planChatPanelRef = ref<InstanceType<typeof PlanChatPanel> | null>(null)
+
+// ==================== 学习时长心跳 ====================
+const heartbeat = useHeartbeat()
 
 // ==================== 面板拖拽调整 ====================
 const panelWidth = ref(400)
@@ -497,6 +501,7 @@ onMounted(() => {
 
 watch(planId, () => {
   if (planId.value) {
+    heartbeat.stop()
     loadPlan()
     loadResources()
     selectedModuleIndex.value = -1
@@ -621,6 +626,7 @@ function selectModule(index: number) {
 function toggleResource(res: LearningResource) {
   // 点击已选中的资源 → 取消选中
   if (selectedResourceId.value === res.id) {
+    heartbeat.stop()
     selectedResourceId.value = null
     selectedResource.value = null
     quizData.value = null
@@ -632,8 +638,16 @@ function toggleResource(res: LearningResource) {
     return
   }
 
+  // Stop previous heartbeat if switching resource
+  if (selectedResourceId.value !== null) {
+    heartbeat.stop()
+  }
+
   selectedResourceId.value = res.id
   selectedResource.value = res
+
+  // Start heartbeat for this resource
+  heartbeat.start(planId.value, res.id)
   gradingResult.value = null
   quizSubmittedAnswers.value = null
   showExplanations.value = false

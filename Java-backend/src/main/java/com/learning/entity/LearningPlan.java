@@ -34,4 +34,8 @@ public class LearningPlan {
     private Integer isDeleted;
 
     private LocalDateTime deletedAt;
+
+    /** 基于资源生成状态计算的展示状态：0=待规划, 1=生成中, 4=已完成 */
+    @TableField(exist = false)
+    private Integer displayStatus;
 }

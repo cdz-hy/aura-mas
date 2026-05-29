@@ -58,8 +58,8 @@
               <p class="font-medium text-navy-800 truncate group-hover:text-navy-600 transition-colors">{{ plan.title }}</p>
               <div class="flex items-center gap-3 mt-1">
                 <span class="text-xs text-navy-400">{{ formatDate(plan.createdAt) }}</span>
-                <span class="text-xs px-2 py-0.5 rounded-full" :class="statusClass(plan.status)">
-                  {{ statusText(plan.status) }}
+                <span class="text-xs px-2 py-0.5 rounded-full" :class="statusClass(plan.displayStatus ?? plan.status)">
+                  {{ statusText(plan.displayStatus ?? plan.status) }}
                 </span>
               </div>
             </div>
@@ -101,7 +101,7 @@
 
         <div class="mt-6 pt-5 border-t border-navy-100/50">
           <h3 class="text-sm font-medium text-navy-600 mb-3">最近活动</h3>
-          <div class="space-y-2.5">
+          <div v-if="recentActivity.length > 0" class="space-y-2.5">
             <div v-for="(act, i) in recentActivity" :key="i" class="flex items-start gap-3">
               <div class="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0" :class="act.color"></div>
               <div>
@@ -110,6 +110,7 @@
               </div>
             </div>
           </div>
+          <p v-else class="text-sm text-navy-300 text-center py-4">暂无最近活动</p>
         </div>
       </div>
     </div>
@@ -128,7 +129,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { getPlans, deletePlan } from '@/api/plan'
@@ -161,23 +162,19 @@ const stats = computed(() => [
   { label: '学习时长', value: statsData.value?.totalStudyHours != null ? `${statsData.value.totalStudyHours}h` : '--', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', bgClass: 'bg-purple-50', iconClass: 'text-purple-500' },
 ])
 
-const weekDays = [
-  { label: '一', minutes: 45 },
-  { label: '二', minutes: 90 },
-  { label: '三', minutes: 30 },
-  { label: '四', minutes: 120 },
-  { label: '五', minutes: 60 },
-  { label: '六', minutes: 0 },
-  { label: '日', minutes: 0 },
-]
+const weekDays = computed(() => statsData.value?.weeklyMinutes ?? [
+  { label: '周一', minutes: 0 },
+  { label: '周二', minutes: 0 },
+  { label: '周三', minutes: 0 },
+  { label: '周四', minutes: 0 },
+  { label: '周五', minutes: 0 },
+  { label: '周六', minutes: 0 },
+  { label: '周日', minutes: 0 },
+])
 
-const maxMinutes = computed(() => Math.max(...weekDays.map(d => d.minutes), 1))
+const maxMinutes = computed(() => Math.max(...weekDays.value.map(d => d.minutes), 1))
 
-const recentActivity = [
-  { text: '完成了「Python基础」模块测验', time: '2小时前', color: 'bg-emerald-400' },
-  { text: '生成了新学习计划', time: '昨天', color: 'bg-blue-400' },
-  { text: '更新了学习画像', time: '3天前', color: 'bg-amber-400' },
-]
+const recentActivity = computed(() => statsData.value?.recentActivity ?? [])
 
 function formatDate(date: string) {
   return dayjs(date).format('MM月DD日')
@@ -214,7 +211,7 @@ function statusClass(status: number) {
   return ['bg-gray-100 text-gray-600', 'bg-blue-100 text-blue-600', 'bg-amber-100 text-amber-600', 'bg-emerald-100 text-emerald-600', 'bg-sage-100 text-sage-700'][status] || 'bg-gray-100 text-gray-600'
 }
 
-onMounted(async () => {
+async function loadDashboard() {
   try {
     const [plansRes, statsRes] = await Promise.all([
       getPlans({ page: 1, size: 50 }),
@@ -225,5 +222,20 @@ onMounted(async () => {
   } catch {
     // Use empty state
   }
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    loadDashboard()
+  }
+}
+
+onMounted(() => {
+  loadDashboard()
+  document.addEventListener('visibilitychange', onVisibilityChange)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>

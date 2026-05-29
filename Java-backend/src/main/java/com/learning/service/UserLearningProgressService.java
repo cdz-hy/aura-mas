@@ -60,4 +60,35 @@ public class UserLearningProgressService {
             progressMapper.updateById(existing);
         }
     }
+
+    @Transactional
+    public void heartbeat(Long userId, Long planId, Long resourceId, int elapsedSeconds) {
+        if (elapsedSeconds <= 0) return;
+        UserLearningProgress existing = progressMapper.selectOne(
+                new LambdaQueryWrapper<UserLearningProgress>()
+                        .eq(UserLearningProgress::getUserId, userId)
+                        .eq(UserLearningProgress::getPlanId, planId)
+                        .eq(UserLearningProgress::getResourceId, resourceId));
+        if (existing != null) {
+            existing.setDurationSeconds((existing.getDurationSeconds() == null ? 0 : existing.getDurationSeconds()) + elapsedSeconds);
+            existing.setLastAccessTime(LocalDateTime.now());
+            if (existing.getStartTime() == null) {
+                existing.setStartTime(LocalDateTime.now());
+            }
+            existing.setUpdatedAt(LocalDateTime.now());
+            progressMapper.updateById(existing);
+        } else {
+            UserLearningProgress progress = new UserLearningProgress();
+            progress.setUserId(userId);
+            progress.setPlanId(planId);
+            progress.setResourceId(resourceId);
+            progress.setStatus(1);
+            progress.setStartTime(LocalDateTime.now());
+            progress.setLastAccessTime(LocalDateTime.now());
+            progress.setDurationSeconds(elapsedSeconds);
+            progress.setCreatedAt(LocalDateTime.now());
+            progress.setUpdatedAt(LocalDateTime.now());
+            progressMapper.insert(progress);
+        }
+    }
 }
