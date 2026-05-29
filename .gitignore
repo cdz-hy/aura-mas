@@ -21,3 +21,10 @@ logs/
 .env
 .env.local
 .env.*.local
+
+# ==================== WorkBuddy ====================
+.workbuddy/
+
+# ==================== Debug ====================
+.chrome-devtools-profile/
+nul

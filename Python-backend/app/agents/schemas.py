@@ -91,6 +91,7 @@ class AgentState(TypedDict, total=False):
     # ==================== 自主生成 ====================
     generated_content: Optional[Dict[str, Any]]  # 自主生成的内容
     source_resource_content: str  # 源资源全文（用于类型资源生成）
+    background_generation: bool  # 后台任务生成模式（无用户交互，不进入追问澄清）
 
     # ==================== 题目相关 ====================
     quiz_config: Optional[Dict[str, Any]]  # 题目生成配置

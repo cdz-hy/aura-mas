@@ -64,12 +64,12 @@ class TestLoadSkillWithTmpPath:
 
 
 class TestLoadRealSkill:
-    """加载真实 jacky-motion-main 的集成冒烟测试"""
+    """加载真实 motion skill 的集成冒烟测试"""
 
-    def test_load_jacky_motion_main(self):
-        bundle = load_skill("jacky-motion-main")
+    def test_load_motion(self):
+        bundle = load_skill("motion")
 
-        assert bundle.name == "jacky-motion-main"
+        assert bundle.name == "motion"
         assert len(bundle.skill_md) > 0
         assert "quality-check" in bundle.references
         assert len(bundle.templates) == 4

@@ -160,6 +160,7 @@ public class UserService {
                 .set(User::getDeletedAt, LocalDateTime.now()));
     }
 
+    @Transactional
     public void updateProfile(Long userId, UserProfile profile) {
         UserProfile existing = getCurrentProfile(userId);
         if (existing != null) {

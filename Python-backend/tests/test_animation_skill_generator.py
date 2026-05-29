@@ -5,6 +5,7 @@ from app.agents.animation_skill_generator import (
     animation_skill_generator_node,
     _assemble_system_prompt,
     _assemble_user_message,
+    _render_animation_html,
 )
 
 
@@ -72,11 +73,51 @@ class TestAnimationSkillGeneratorNode:
         base.update(overrides)
         return base
 
-    def test_empty_source_content_returns_error(self):
+    @patch("app.agents.animation_skill_generator.load_skill")
+    @patch("app.agents.animation_skill_generator.get_resource_type_generator_llm")
+    @patch("app.agents.animation_skill_generator.record_from_mimo")
+    def test_empty_source_content_still_generates_animation(self, mock_record, mock_llm_factory, mock_load):
+        mock_skill = MagicMock()
+        mock_skill.skill_md = "# 测试"
+        mock_skill.templates = {"apple-tech-gradient": ""}
+        mock_skill.references = {"quality-check": ""}
+        mock_load.return_value = mock_skill
+
+        mock_llm = MagicMock()
+        mock_llm.chat_json.return_value = {
+            "title": "测试模块 - 动画演示",
+            "animationSpec": {"beats": [{"screenText": "最小上下文", "coreIdea": "从标题生成动画"}]},
+        }
+        mock_llm_factory.return_value = mock_llm
+
         state = self._make_state(source_resource_content="")
         result = animation_skill_generator_node(state)
-        assert "error" in result
-        assert "源资源内容为空" in result["error"]
+
+        assert "error" not in result
+        assert result["generated_content"]["module_type"] == "animation"
+        assert "最小上下文" in result["generated_content"]["html"]
+
+    @patch("app.agents.animation_skill_generator.load_skill")
+    @patch("app.agents.animation_skill_generator.get_resource_type_generator_llm")
+    @patch("app.agents.animation_skill_generator.record_from_mimo")
+    def test_empty_source_content_uses_title_fallback(self, mock_record, mock_llm_factory, mock_load):
+        mock_skill = MagicMock()
+        mock_skill.skill_md = "# 测试"
+        mock_skill.templates = {"apple-tech-gradient": ""}
+        mock_skill.references = {"quality-check": ""}
+        mock_load.return_value = mock_skill
+
+        mock_llm = MagicMock()
+        mock_llm.chat_json.side_effect = Exception("MIMO API 请求超时（45秒）")
+        mock_llm_factory.return_value = mock_llm
+
+        state = self._make_state(source_resource_content="")
+        result = animation_skill_generator_node(state)
+
+        assert "error" not in result
+        assert result["generated_content"]["module_type"] == "animation"
+        assert "测试模块" in result["generated_content"]["html"]
+        assert result["generated_content"]["metadata"]["fallback"] is True
 
     @patch("app.agents.animation_skill_generator.load_skill")
     def test_skill_load_failure_returns_error(self, mock_load):
@@ -113,13 +154,20 @@ class TestAnimationSkillGeneratorNode:
 
         assert "error" not in result
         assert result["generated_content"]["module_type"] == "animation"
-        assert result["generated_content"]["html"] == "<!doctype html><html><body>test</body></html>"
+        assert result["generated_content"]["html"] != "<!doctype html><html><body>test</body></html>"
+        assert "animation-control-bar" in result["generated_content"]["html"]
+        assert "data-action=\"pause\"" in result["generated_content"]["html"]
+        assert "startAutoplay" in result["generated_content"]["html"]
+        assert "aspect-ratio:16/9" in result["generated_content"]["html"]
+        assert "width:min(100vw,calc(100vh * 16 / 9))" in result["generated_content"]["html"]
         assert result["generated_content"]["content"] == result["generated_content"]["html"]
+        mock_load.assert_called_once_with("motion")
+        assert mock_llm.request_timeout == 45
 
     @patch("app.agents.animation_skill_generator.load_skill")
     @patch("app.agents.animation_skill_generator.get_resource_type_generator_llm")
     @patch("app.agents.animation_skill_generator.record_from_mimo")
-    def test_empty_html_returns_error(self, mock_record, mock_llm_factory, mock_load):
+    def test_spec_only_result_renders_html_locally(self, mock_record, mock_llm_factory, mock_load):
         mock_skill = MagicMock()
         mock_skill.skill_md = "# 测试"
         mock_skill.templates = {"apple-tech-gradient": ""}
@@ -127,10 +175,95 @@ class TestAnimationSkillGeneratorNode:
         mock_load.return_value = mock_skill
 
         mock_llm = MagicMock()
-        mock_llm.chat_json.return_value = {"html": "", "animationSpec": {}}
+        mock_llm.chat_json.return_value = {
+            "title": "测试 - 动画演示",
+            "description": "本地渲染 HTML",
+            "animationSpec": {
+                "beats": [{
+                    "id": "b1",
+                    "coreIdea": "用动画展示核心概念。",
+                    "screenText": "核心概念",
+                    "steps": ["输入", "处理", "输出"],
+                }],
+            },
+        }
         mock_llm_factory.return_value = mock_llm
 
         state = self._make_state()
         result = animation_skill_generator_node(state)
-        assert "error" in result
-        assert "html" in result["error"]
+        assert "error" not in result
+        html = result["generated_content"]["html"]
+        assert html.startswith("<!doctype html>")
+        assert "核心概念" in html
+        assert "AURA_ANIMATION_READY" in html
+        assert "animation-control-bar" in html
+        assert "data-action=\"pause\"" in html
+        mock_llm.chat_json.assert_called_once()
+        assert mock_llm.chat_json.call_args.kwargs["max_tokens"] <= 4096
+
+    @patch("app.agents.animation_skill_generator.load_skill")
+    @patch("app.agents.animation_skill_generator.get_resource_type_generator_llm")
+    @patch("app.agents.animation_skill_generator.record_from_mimo")
+    def test_llm_timeout_uses_local_fallback_animation(self, mock_record, mock_llm_factory, mock_load):
+        mock_skill = MagicMock()
+        mock_skill.skill_md = "# 测试"
+        mock_skill.templates = {"apple-tech-gradient": ""}
+        mock_skill.references = {"quality-check": ""}
+        mock_load.return_value = mock_skill
+
+        mock_llm = MagicMock()
+        mock_llm.chat_json.side_effect = Exception("MIMO API 请求超时（120秒）")
+        mock_llm_factory.return_value = mock_llm
+
+        state = self._make_state(source_resource_content="第一段说明。\n\n第二段说明。\n\n第三段说明。")
+        result = animation_skill_generator_node(state)
+
+        assert "error" not in result
+        assert result["generated_content"]["metadata"]["fallback"] is True
+        assert result["generated_content"]["html"].startswith("<!doctype html>")
+        mock_record.assert_not_called()
+
+
+def test_render_animation_html_escapes_untrusted_text():
+    html = _render_animation_html(
+        title="<script>alert(1)</script>",
+        description="desc",
+        animation_spec={
+            "beats": [{
+                "screenText": "<img src=x onerror=alert(1)>",
+                "coreIdea": "核心 <b>文本</b>",
+                "steps": ["步骤 <script>bad()</script>"],
+            }],
+        },
+    )
+
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "步骤 &lt;script&gt;bad()&lt;/script&gt;" in html
+
+
+def test_render_animation_html_is_responsive_and_has_playback_controls():
+    html = _render_animation_html(
+        title="响应式动画",
+        description="desc",
+        animation_spec={
+            "beats": [{
+                "screenText": "第一屏",
+                "coreIdea": "测试完整显示",
+                "steps": ["步骤一"],
+            }, {
+                "screenText": "第二屏",
+                "coreIdea": "测试前进后退",
+                "steps": ["步骤二"],
+            }],
+        },
+    )
+
+    assert "width:100vw" in html
+    assert "height:100vh" in html
+    assert "animation-control-bar" in html
+    assert "data-action=\"prev\"" in html
+    assert "data-action=\"pause\"" in html
+    assert "data-action=\"replay\"" in html
+    assert "data-action=\"next\"" in html
+    assert "startAutoplay" in html

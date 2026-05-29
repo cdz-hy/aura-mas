@@ -9,6 +9,7 @@
     └── assets/templates/     # 可选, *.html
 """
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,7 +17,6 @@ logger = logging.getLogger("skills.loader")
 
 # skills 目录位于 Python-backend/skills/
 SKILLS_ROOT = Path(__file__).resolve().parent.parent.parent / "skills"
-
 
 @dataclass
 class SkillBundle:
@@ -26,6 +26,11 @@ class SkillBundle:
     references: dict[str, str] = field(default_factory=dict)  # {stem: content}
     styles: dict[str, str] = field(default_factory=dict)      # {stem: content}
     templates: dict[str, str] = field(default_factory=dict)   # {stem: content}
+
+
+# ── Skill 缓存 ──
+# key: skill_name, value: (mtime_of_SKILL_MD, SkillBundle)
+_skill_cache: dict[str, tuple[float, SkillBundle]] = {}
 
 
 def _read_files_in_dir(dir_path: Path, suffix: str) -> dict[str, str]:
@@ -42,9 +47,24 @@ def _read_files_in_dir(dir_path: Path, suffix: str) -> dict[str, str]:
     return result
 
 
+def _get_skill_mtime(skill_dir: Path) -> float:
+    """获取 skill 目录下所有文件的最大 mtime，确保任意文件变化都能刷新缓存"""
+    max_mtime = 0.0
+    for f in skill_dir.rglob("*"):
+        if f.is_file():
+            try:
+                mtime = f.stat().st_mtime
+                if mtime > max_mtime:
+                    max_mtime = mtime
+            except OSError:
+                pass
+    return max_mtime
+
+
 def load_skill(skill_name: str) -> SkillBundle:
     """
     从 skills/<skill_name>/ 加载所有文件。
+    支持 mtime 缓存：如果 skill 目录下任意文件的 mtime 未变则返回缓存。
 
     Args:
         skill_name: skill 目录名，例如 "jacky-motion-main"
@@ -64,6 +84,15 @@ def load_skill(skill_name: str) -> SkillBundle:
     if not skill_md_path.is_file():
         raise FileNotFoundError(f"SKILL.md 不存在: {skill_md_path}")
 
+    # 检查缓存：如果 skill 目录下所有文件的 mtime 未变，返回缓存
+    current_mtime = _get_skill_mtime(skill_dir)
+    cached = _skill_cache.get(skill_name)
+    if cached is not None:
+        cached_mtime, cached_bundle = cached
+        if cached_mtime == current_mtime:
+            logger.debug(f"命中缓存: skill '{skill_name}' (mtime={current_mtime})")
+            return cached_bundle
+
     skill_md = skill_md_path.read_text(encoding="utf-8")
 
     references = _read_files_in_dir(skill_dir / "references", ".md")
@@ -77,6 +106,9 @@ def load_skill(skill_name: str) -> SkillBundle:
         styles=styles,
         templates=templates,
     )
+
+    # 更新缓存
+    _skill_cache[skill_name] = (current_mtime, bundle)
 
     logger.info(
         f"已加载 skill '{skill_name}': "

@@ -6,6 +6,7 @@ import com.learning.entity.ResourceGenerationTask;
 import com.learning.service.LearningResourceService;
 import com.learning.service.TaskDispatchService;
 import com.learning.service.TaskSseService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -23,6 +24,7 @@ public class TaskController {
     private final TaskDispatchService taskDispatchService;
     private final LearningResourceService resourceService;
     private final TaskSseService taskSseService;
+    private final ObjectMapper objectMapper;
 
     @Operation(summary = "分派生成任务")
     @PostMapping("/dispatch")
@@ -55,8 +57,8 @@ public class TaskController {
     public Result<ResourceGenerationTask> createTaskInternal(@RequestBody java.util.Map<String, Object> body) {
         Long planId = Long.valueOf(body.get("planId").toString());
         Long resourceId = Long.valueOf(body.get("resourceId").toString());
-        String agentChain = body.get("agentChain") != null ? body.get("agentChain").toString() : null;
-        return Result.success(taskDispatchService.dispatchTask(planId, resourceId, agentChain));
+        String agentChain = parseAgentChain(body.get("agentChain"));
+        return Result.success(taskDispatchService.createInternalTask(planId, resourceId, agentChain));
     }
 
     @Operation(summary = "内部接口：更新任务状态")
@@ -64,9 +66,25 @@ public class TaskController {
     public Result<Void> updateTaskInternal(@PathVariable Long taskId,
                                             @RequestBody java.util.Map<String, Object> body) {
         Integer status = body.get("taskStatus") != null ? Integer.valueOf(body.get("taskStatus").toString()) : null;
+        boolean updateResourceStatus = body.get("updateResourceStatus") == null
+                || Boolean.parseBoolean(body.get("updateResourceStatus").toString());
         if (status != null) {
-            taskDispatchService.updateTaskStatus(taskId, status);
+            taskDispatchService.updateTaskStatus(taskId, status, updateResourceStatus);
         }
         return Result.success();
+    }
+
+    private String parseAgentChain(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String text) {
+            return text;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            return value.toString();
+        }
     }
 }

@@ -403,10 +403,11 @@ const resourceOptions = [
   { type: 'code', label: '生成代码示例' },
   { type: 'summary', label: '生成总结' },
   { type: 'video', label: '生成教学视频' },
+  { type: 'animation', label: '生成动画' },
 ]
 
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表',
+  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画',
 }
 
 const moduleContextMessage = computed(() => chatStore.selectedModuleContext ? { title: chatStore.selectedModuleContext.title } : null)
@@ -528,7 +529,7 @@ function formatTime(time?: string) {
 }
 
 function badgeClass(type: string) {
-  return { text: 'bg-blue-50 text-blue-500', document: 'bg-blue-50 text-blue-500', mindmap: 'bg-purple-50 text-purple-500', quiz: 'bg-amber-50 text-amber-500', code: 'bg-emerald-50 text-emerald-500', reading: 'bg-rose-50 text-rose-500', video: 'bg-red-50 text-red-500', summary: 'bg-sky-50 text-sky-500', image: 'bg-pink-50 text-pink-500', diagram: 'bg-indigo-50 text-indigo-500' }[type] || 'bg-navy-50 text-navy-500'
+  return { text: 'bg-blue-50 text-blue-500', document: 'bg-blue-50 text-blue-500', mindmap: 'bg-purple-50 text-purple-500', quiz: 'bg-amber-50 text-amber-500', code: 'bg-emerald-50 text-emerald-500', reading: 'bg-rose-50 text-rose-500', video: 'bg-red-50 text-red-500', summary: 'bg-sky-50 text-sky-500', image: 'bg-pink-50 text-pink-500', diagram: 'bg-indigo-50 text-indigo-500', animation: 'bg-orange-50 text-orange-500' }[type] || 'bg-navy-50 text-navy-500'
 }
 
 function detectResourceType(msg: string): string | null {
@@ -538,6 +539,7 @@ function detectResourceType(msg: string): string | null {
   if (/代码|code|示例代码|编程/.test(lower)) return 'code'
   if (/总结|摘要|summary|复习|要点/.test(lower)) return 'summary'
   if (/视频|video|教程|教学视频/.test(lower)) return 'video'
+  if (/动画|animation|动效/.test(lower)) return 'animation'
   return null
 }
 

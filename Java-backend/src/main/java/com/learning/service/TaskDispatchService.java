@@ -25,6 +25,10 @@ public class TaskDispatchService {
         return learningResourceService.dispatchGeneration(planId, resourceId, agentChain);
     }
 
+    public ResourceGenerationTask createInternalTask(Long planId, Long resourceId, String agentChain) {
+        return learningResourceService.createGenerationTask(planId, resourceId, agentChain);
+    }
+
     public void retryTask(Long taskId) {
         ResourceGenerationTask task = learningResourceService.getTaskById(taskId);
         task.setRetryCount(task.getRetryCount() + 1);
@@ -36,6 +40,10 @@ public class TaskDispatchService {
     }
 
     public void updateTaskStatus(Long taskId, Integer status) {
+        updateTaskStatus(taskId, status, true);
+    }
+
+    public void updateTaskStatus(Long taskId, Integer status, boolean updateResourceStatus) {
         ResourceGenerationTask task = learningResourceService.getTaskById(taskId);
         task.setTaskStatus(status);
         if (status == 2 || status == 3) {
@@ -44,13 +52,17 @@ public class TaskDispatchService {
         learningResourceService.updateTask(task);
 
         // 同步更新资源状态
-        learningResourceService.updateResourceStatus(task.getResourceId(), status);
+        if (updateResourceStatus) {
+            learningResourceService.updateResourceStatus(task.getResourceId(), status);
+        }
 
         // SSE 推送任务完成通知到前端（替代原来的 MQ 结果队列）
         if (status == 2 || status == 3) {
             LearningPlan plan = planMapper.selectById(task.getPlanId());
             if (plan != null) {
-                LearningResource resource = learningResourceService.getResourceById(task.getResourceId());
+                LearningResource resource = updateResourceStatus
+                        ? learningResourceService.findResourceById(task.getResourceId())
+                        : null;
                 String moduleData = resource != null ? resource.getModuleData() : null;
                 taskSseService.sendTaskUpdate(plan.getUserId(), taskId, status, moduleData);
             }

@@ -82,8 +82,16 @@ def graph_event_to_sse(evt: Dict[str, Any]) -> str:
         return _sse({"type": "progress", "content": f"内容审查: {status} (评分: {score})"})
 
     elif event_type == "resource_type_generated":
-        # 类型资源生成完成（mindmap/summary/code 等）
-        return ""  # 资源持久化由 _persist_generated_resources 处理，这里不发 SSE
+        # 类型资源生成完成（mindmap/summary/code/animation 等）。
+        # 立即把 generated_content 透传给前端，避免资源详情面板只拿到标题/状态而没有内容。
+        payload = data if isinstance(data, dict) else {}
+        module_type = payload.get("module_type") or payload.get("moduleType") or payload.get("content_type") or "document"
+        return _sse({
+            "type": "resource_type_generated",
+            "resource_type": module_type,
+            "title": payload.get("title", "学习资源"),
+            "generated_content": payload,
+        })
 
     elif event_type == "quiz":
         return _sse({"type": "resource", "data": {"type": "quiz", "questions": data.get("questions", data)}})

@@ -63,7 +63,14 @@ async def _retrieve_for_module(query: str, retrieval_config: Dict[str, Any]) -> 
     return result
 
 
-def _optimize_search_queries(modules: List[Dict[str, Any]], user_message: str, llm, chat_history: list = None) -> List[str]:
+def _optimize_search_queries(
+    modules: List[Dict[str, Any]],
+    user_message: str,
+    llm,
+    chat_history: list = None,
+    user_id: int = 0,
+    task_id: int = None,
+) -> List[str]:
     """使用 LLM 为每个模块生成优化的检索词"""
     if not modules:
         logger.info(f"  [RAG检索] 无模块，使用用户消息作为查询")
@@ -104,7 +111,7 @@ def _optimize_search_queries(modules: List[Dict[str, Any]], user_message: str, l
 
     try:
         result = llm.chat_json(messages)
-        record_from_mimo(llm, state.get("user_id", 0), "rag_query_optimization", state.get("task_id"))
+        record_from_mimo(llm, user_id, "rag_query_optimization", task_id)
         if isinstance(result, dict) and "queries" in result:
             queries = result["queries"]
         elif isinstance(result, list):
@@ -158,7 +165,14 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
 
     llm = get_rag_retriever_llm()
     retrieval_config = _compute_retrieval_config(user_profile)
-    search_queries = _optimize_search_queries(modules_to_retrieve, user_message, llm, chat_history)
+    search_queries = _optimize_search_queries(
+        modules_to_retrieve,
+        user_message,
+        llm,
+        chat_history,
+        user_id=state.get("user_id", 0),
+        task_id=state.get("task_id"),
+    )
 
     all_results = []
     all_context_chunks = []
@@ -227,7 +241,10 @@ def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
             logger.info(f"    需自主生成的模块: {poor_module_ids}")
 
         # 自主异常检测：当所有模块检索结果都不足时，检查是否与目标根本偏离
-        if not rag_sufficient and len(poor_module_ids) == len(modules_to_retrieve) and len(modules_to_retrieve) > 0:
+        if (not state.get("background_generation")
+                and not rag_sufficient
+                and len(poor_module_ids) == len(modules_to_retrieve)
+                and len(modules_to_retrieve) > 0):
             chunk_headings = []
             for c in deduped_chunks[:5]:
                 h = " > ".join(c.get("heading", []))
