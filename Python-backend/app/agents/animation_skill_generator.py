@@ -83,13 +83,11 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
     user_profile = state.get("user_profile", {})
     task_breakdown = state.get("task_breakdown", {})
 
-    # 从 task_breakdown 提取标题和描述
+    # 从 task_breakdown 提取标题
     modules = task_breakdown.get("modules", [])
     module_title = ""
-    module_desc = ""
     if modules:
         module_title = modules[0].get("title", "")
-        module_desc = modules[0].get("description", "")
 
     source_title = module_title or "未知资源"
 
@@ -151,6 +149,7 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
     try:
         llm = get_resource_type_generator_llm()
         logger.info(f"  [动画生成] 正在调用 LLM...")
+        # 动画 HTML 比纯文本长很多，需要覆盖默认的 8192 token 限制
         result = llm.chat_json(messages, max_tokens=16384)
         record_from_mimo(llm, state.get("user_id", 0), "animation_generation", state.get("task_id"))
     except Exception as e:
