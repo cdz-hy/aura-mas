@@ -28,3 +28,6 @@ logs/
 # ==================== Debug ====================
 .chrome-devtools-profile/
 nul
+
+# ==================== Docs ====================
+docs/superpowers/
