@@ -19,7 +19,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from app.services.db.java_client import java_client
 from app.graph.learning_graph import get_learning_graph
-from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR
+from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR, NODE_ANIMATION_SKILL_GENERATOR
 from app.prompts import QUIZ_GRADER_PROMPT
 from app.agents.profile_maintainer import profile_maintainer_node
 from app.agents.conversation_compressor import build_chat_history_with_context, async_compress_and_save
@@ -629,15 +629,19 @@ async def generate_single_resource(
     if description:
         resource_message += f"\n模块描述: {description}"
 
-    # quiz 和 video 走独立流程，mindmap/summary/code 走类型资源生成，其他走 RAG + 编排
+    # quiz 和 video 走独立流程，mindmap/summary/code 走类型资源生成，animation 走动画节点，其他走 RAG + 编排
     is_quiz = (type == "quiz")
     is_video = (type == "video")
+    is_animation = (type == "animation")
     is_type_resource = type in ("mindmap", "summary", "code")
 
     # 路由决策
     if is_quiz:
         intent = "generate_quiz"
         next_node = "quiz_generator"
+    elif is_animation:
+        intent = "generate_animation"
+        next_node = NODE_ANIMATION_SKILL_GENERATOR
     elif is_type_resource:
         intent = "generate_type_resource"
         next_node = NODE_RESOURCE_TYPE_GENERATOR
