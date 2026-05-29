@@ -8,7 +8,6 @@
     ├── styles/               # 可选, *.md
     └── assets/templates/     # 可选, *.html
 """
-import os
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
