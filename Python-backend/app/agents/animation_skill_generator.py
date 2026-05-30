@@ -6,8 +6,11 @@
 """
 import logging
 import html
+import os
 import re
-from typing import Dict, Any
+import subprocess
+import tempfile
+from typing import Dict, Any, Tuple
 
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_resource_type_generator_llm
@@ -23,6 +26,11 @@ ANIMATION_HTML_MAX_TOKENS = 32768
 FALLBACK_DURATION = 45
 ANIMATION_REQUEST_TIMEOUT = 300
 MAX_SOURCE_CONTENT_LENGTH = 6000
+ANIMATION_JS_RETRY_MAX = 1  # JS 语法错误时最多重试次数
+NODE_BIN = os.environ.get(
+    "NODE_BIN",
+    r"C:\Users\LIN\.workbuddy\binaries\node\versions\22.22.2\node.exe",
+)
 
 
 def _select_style_by_profile(user_profile: dict, override_style: str | None = None) -> str:
@@ -160,6 +168,80 @@ def _extract_html_from_response(response: str) -> str:
         return text
 
     return ""
+
+
+def _validate_js_syntax(html_content: str) -> Tuple[bool, str]:
+    """使用 Node.js --check 验证 HTML 中 <script> 标签的 JS 语法
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not html_content:
+        return True, ""
+
+    # 提取所有 <script> 标签中的 JS 代码
+    script_blocks = re.findall(
+        r"<script[^>]*>(.*?)</script>", html_content, re.DOTALL | re.IGNORECASE
+    )
+
+    if not script_blocks:
+        return True, ""
+
+    # 合并所有 script 块进行检查（排除带 src= 的外部脚本标签）
+    js_code_parts = []
+    for block in script_blocks:
+        stripped = block.strip()
+        if not stripped:
+            continue
+        js_code_parts.append(stripped)
+
+    if not js_code_parts:
+        return True, ""
+
+    combined_js = "\n;\n".join(js_code_parts)
+
+    # 写入临时文件用 Node.js --check 检查
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".js", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(combined_js)
+            temp_path = f.name
+
+        try:
+            result = subprocess.run(
+                [NODE_BIN, "--check", temp_path],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return True, ""
+            else:
+                error_msg = result.stderr.strip()
+                # 提取关键错误信息（去掉文件路径，只保留错误描述）
+                # Node.js 输出格式: "file.js:line:col\n\nSyntaxError: ..."
+                syntax_error_match = re.search(
+                    r"SyntaxError:.*", error_msg, re.DOTALL
+                )
+                if syntax_error_match:
+                    return False, syntax_error_match.group(0).strip()
+                return False, error_msg[:300]
+        finally:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+    except FileNotFoundError:
+        logger.warning("  [JS验证] Node.js 未找到，跳过 JS 语法验证")
+        return True, ""
+    except subprocess.TimeoutExpired:
+        logger.warning("  [JS验证] Node.js --check 超时，跳过验证")
+        return True, ""
+    except Exception as e:
+        logger.warning(f"  [JS验证] 验证过程异常，跳过: {e}")
+        return True, ""
 
 
 def _build_fallback_html(title: str, description: str, source_content: str) -> str:
@@ -382,7 +464,15 @@ def _assemble_system_prompt(
     parts.append("2. 不要用 Markdown 代码块包裹，不要加 ```html 标记\n")
     parts.append("3. 不要输出任何解释文字，只输出 HTML\n")
     parts.append("4. GSAP 3 via CDN: https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js\n")
-    parts.append("5. 字体: Google Fonts Inter + Noto Sans SC\n")
+    parts.append("5. 字体: Google Fonts Inter + Noto Sans SC\n\n")
+
+    # JS 语法正确性要求
+    parts.append("## JavaScript 语法硬性要求（不通过 = 动画黑屏）\n\n")
+    parts.append("1. 所有 <script> 中的 JS 代码必须语法正确，括号、花括号、方括号必须配对\n")
+    parts.append("2. 每个 GSAP gsap.to()/gsap.from()/gsap.timeline() 调用的参数列表必须完整闭合\n")
+    parts.append("3. 不要使用模板字面量中的未转义反引号，避免和 HTML 外层冲突\n")
+    parts.append("4. 确保 gsap.to() 的 target 选择器在 HTML 中有对应元素——不要凭空引用不存在的 class\n")
+    parts.append("5. 生成后自行在心里检查一遍：每个 ( 都有配对的 )，每个 { 都有配对的 }\n")
 
     return "".join(parts)
 
@@ -532,8 +622,9 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
     llm_failed = False
     llm_error = ""
     html_output = ""
+    js_retry_count = 0
 
-    # ── 阶段 3：LLM 直出完整 HTML ──
+    # ── 阶段 3：LLM 直出完整 HTML（支持 JS 语法验证 + 重试） ──
     stream_events.append({
         "event_type": "thinking",
         "agent": "animation_skill_generator",
@@ -541,49 +632,91 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
         "step_description": "生成动画 HTML",
     })
 
-    try:
-        llm = get_resource_type_generator_llm()
-        llm.request_timeout = ANIMATION_REQUEST_TIMEOUT
-        logger.info("  [动画生成] 正在调用 LLM 流式生成完整 HTML...")
+    while True:
+        try:
+            llm = get_resource_type_generator_llm()
+            llm.request_timeout = ANIMATION_REQUEST_TIMEOUT
+            logger.info("  [动画生成] 正在调用 LLM 流式生成完整 HTML...")
 
-        # 使用流式生成避免长输出超时
-        response_chunks = []
-        chunk_count = 0
-        for chunk in llm.chat_stream(messages, max_tokens=ANIMATION_HTML_MAX_TOKENS):
-            response_chunks.append(chunk)
-            chunk_count += 1
-            if chunk_count % 100 == 0:
-                logger.debug(f"  [动画生成] 已接收 {chunk_count} 个 chunk，累积 {sum(len(c) for c in response_chunks)} 字符")
+            # 使用流式生成避免长输出超时
+            response_chunks = []
+            chunk_count = 0
+            for chunk in llm.chat_stream(messages, max_tokens=ANIMATION_HTML_MAX_TOKENS):
+                response_chunks.append(chunk)
+                chunk_count += 1
+                if chunk_count % 100 == 0:
+                    logger.debug(f"  [动画生成] 已接收 {chunk_count} 个 chunk，累积 {sum(len(c) for c in response_chunks)} 字符")
 
-        response = "".join(response_chunks)
-        record_from_mimo(llm, state.get("user_id", 0), "animation_generation", state.get("task_id"))
+            response = "".join(response_chunks)
+            record_from_mimo(llm, state.get("user_id", 0), "animation_generation", state.get("task_id"))
 
-        logger.info(f"  [动画生成] LLM 流式生成完成，共 {chunk_count} 个 chunk，总长 {len(response)} 字符")
+            logger.info(f"  [动画生成] LLM 流式生成完成，共 {chunk_count} 个 chunk，总长 {len(response)} 字符")
 
-        # 从响应中提取 HTML
-        html_output = _extract_html_from_response(response)
+            # 从响应中提取 HTML
+            html_output = _extract_html_from_response(response)
 
-        if not html_output:
-            logger.warning("  [动画生成] LLM 响应中未提取到有效 HTML，使用降级 HTML")
+            if not html_output:
+                logger.warning("  [动画生成] LLM 响应中未提取到有效 HTML，使用降级 HTML")
+                llm_failed = True
+                llm_error = "LLM 响应中未包含有效 HTML"
+                html_output = _build_fallback_html(
+                    title=source_title,
+                    description="",
+                    source_content=source_resource_content,
+                )
+                break
+
+            logger.info(f"  [动画生成] 成功提取 HTML，长度: {len(html_output)} 字符")
+
+            # ── JS 语法验证 ──
+            is_valid, js_error = _validate_js_syntax(html_output)
+            if is_valid:
+                logger.info("  [动画生成] JS 语法验证通过 ✓")
+                break
+
+            # JS 语法错误 → 判断是否可重试
+            logger.warning(f"  [动画生成] JS 语法验证失败: {js_error[:200]}")
+
+            if js_retry_count < ANIMATION_JS_RETRY_MAX:
+                js_retry_count += 1
+                logger.info(f"  [动画生成] 尝试第 {js_retry_count} 次 JS 修复重试...")
+
+                # 把错误信息反馈给 LLM，让它修复
+                messages.append({"role": "assistant", "content": response})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"你刚才生成的 HTML 有 JavaScript 语法错误，导致动画无法播放（黑屏）。\n\n"
+                        f"**错误信息**: {js_error}\n\n"
+                        f"请修复这个语法错误，重新输出完整 HTML。"
+                        f"特别注意：\n"
+                        f"1. 检查所有括号、花括号、方括号是否配对\n"
+                        f"2. 确保 gsap.to() / gsap.from() 的参数列表完整闭合\n"
+                        f"3. 确保 GSAP 动画的 target 选择器在 HTML 中有对应元素\n"
+                    ),
+                })
+                continue
+            else:
+                logger.warning(f"  [动画生成] JS 修复重试已达上限({ANIMATION_JS_RETRY_MAX})，使用降级 HTML")
+                llm_failed = True
+                llm_error = f"JS 语法错误，重试 {js_retry_count} 次仍未修复: {js_error[:120]}"
+                html_output = _build_fallback_html(
+                    title=source_title,
+                    description="",
+                    source_content=source_resource_content,
+                )
+                break
+
+        except Exception as e:
             llm_failed = True
-            llm_error = "LLM 响应中未包含有效 HTML"
+            llm_error = str(e)
+            logger.warning("  [动画生成] LLM 调用失败，使用降级 HTML: %s", llm_error)
             html_output = _build_fallback_html(
                 title=source_title,
                 description="",
                 source_content=source_resource_content,
             )
-        else:
-            logger.info(f"  [动画生成] 成功提取 HTML，长度: {len(html_output)} 字符")
-
-    except Exception as e:
-        llm_failed = True
-        llm_error = str(e)
-        logger.warning("  [动画生成] LLM 调用失败，使用降级 HTML: %s", llm_error)
-        html_output = _build_fallback_html(
-            title=source_title,
-            description="",
-            source_content=source_resource_content,
-        )
+            break
 
     # 构造输出（向后兼容结构）
     title = f"{source_title} - 动画演示"
@@ -612,6 +745,7 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"    风格: {selected_style}")
     logger.info(f"    HTML 长度: {len(html_output)} 字符")
     logger.info(f"    降级: {llm_failed}")
+    logger.info(f"    JS 修复重试: {js_retry_count} 次")
     if llm_failed:
         logger.info(f"    降级原因: {llm_error[:120]}")
     logger.info(f"{'='*60}")
