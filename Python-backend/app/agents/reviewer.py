@@ -89,7 +89,7 @@ def _review_single_module(
         }
 
 
-def reviewer_node(state: AgentState) -> Dict[str, Any]:
+async def reviewer_node(state: AgentState) -> Dict[str, Any]:
     """
     审查智能体节点
     
@@ -106,6 +106,7 @@ def reviewer_node(state: AgentState) -> Dict[str, Any]:
     # 判断使用哪种模式
     use_module_review = len(module_list) > 0
     
+    # 审查模式下的 Token 消费统一在结束时落盘
     logger.info(f"{'='*60}")
     logger.info(f"  [审查智能体] 开始处理")
     logger.info(f"  审查模式: {'模块级别' if use_module_review else '批量RAG'}")
@@ -113,7 +114,7 @@ def reviewer_node(state: AgentState) -> Dict[str, Any]:
     
     # 模块级别审查
     if use_module_review:
-        result = _review_modules(module_list, task_breakdown, learning_goal)
+        result = await _review_modules(module_list, task_breakdown, learning_goal)
         extra_records = result.pop("_usage_records", None) or []
         _flush_review_usage(
             result.get("module_review_results", []),
@@ -131,7 +132,7 @@ def reviewer_node(state: AgentState) -> Dict[str, Any]:
     return result
 
 
-def _review_modules(
+async def _review_modules(
     module_list: List[Dict[str, Any]],
     task_breakdown: Dict[str, Any],
     learning_goal: str,
@@ -141,17 +142,12 @@ def _review_modules(
     
     task_modules = task_breakdown.get("modules", [])
     
-    # 并发审查所有模块
-    async def run_parallel_review():
-        loop = asyncio.get_event_loop()
-        
+    try:
+        # 并发审查所有模块 (使用 async-native to_thread 线程池，不阻塞 I/O 事件循环)
         tasks = []
         for i, module in enumerate(module_list):
-            # 找到对应的任务分解模块
             task_module = task_modules[i] if i < len(task_modules) else {}
-            
-            task = loop.run_in_executor(
-                None,
+            task = asyncio.to_thread(
                 _review_single_module,
                 module,
                 i + 1,
@@ -159,14 +155,7 @@ def _review_modules(
             )
             tasks.append(task)
         
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        return results
-    
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        review_results = loop.run_until_complete(run_parallel_review())
-        loop.close()
+        review_results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # 处理审查结果
         failed_modules = []

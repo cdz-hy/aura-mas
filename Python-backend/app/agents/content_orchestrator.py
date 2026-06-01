@@ -219,7 +219,7 @@ def _generate_single_module(
         }
 
 
-def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
+async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     """
     内容编排智能体节点
     
@@ -297,16 +297,12 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
         sse_cb = state.get("sse_callback")
         placeholder_map = state.get("placeholder_resource_map", {})
 
-        async def run_retry_orchestration():
-            """并发重新生成未通过的模块"""
-            loop = asyncio.get_event_loop()
-
+        try:
             tasks = []
             for module_id, module_info in target_modules_info:
                 placeholder = placeholder_map.get(module_id, {})
                 res_id = placeholder.get("id", 0)
-                task = loop.run_in_executor(
-                    None,
+                task = asyncio.to_thread(
                     _generate_single_module,
                     module_info,
                     module_id,
@@ -319,15 +315,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                 )
                 tasks.append(task)
             
-            # 并发执行所有任务
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            return results
-        
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            new_module_results = loop.run_until_complete(run_retry_orchestration())
-            loop.close()
+            # 并发执行所有任务 (直接 await)
+            new_module_results = await asyncio.gather(*tasks, return_exceptions=True)
             
             # 处理异常结果
             new_modules = []
@@ -455,17 +444,13 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
         if placeholder_map:
             _emit(state, "resource_stream_start", json.dumps(list(placeholder_map.values()), ensure_ascii=False))
 
-        async def run_parallel_orchestration():
-            """并发为每个模块生成内容"""
-            loop = asyncio.get_event_loop()
-
+        try:
             tasks = []
             for i, module in enumerate(modules):
                 module_order = i + 1
                 placeholder = placeholder_map.get(module_order, {})
                 res_id = placeholder.get("id", 0)
-                task = loop.run_in_executor(
-                    None,
+                task = asyncio.to_thread(
                     _generate_single_module,
                     module,
                     module_order,
@@ -478,15 +463,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                 )
                 tasks.append(task)
             
-            # 并发执行所有任务
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            return results
-        
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            module_results = loop.run_until_complete(run_parallel_orchestration())
-            loop.close()
+            # 并发执行所有任务 (直接 await)
+            module_results = await asyncio.gather(*tasks, return_exceptions=True)
             
             # 处理异常结果
             modules_list = []

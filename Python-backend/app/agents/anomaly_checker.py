@@ -21,6 +21,13 @@ def check_content_alignment(original_goal: str, content_summary: str) -> Tuple[b
     if not original_goal or not content_summary:
         return True, ""
 
+    # 防御性规避：如果原始目标是系统级指令/短反馈控制词，自动跳过对齐校验，避免误判
+    control_verbs = ["确认", "生成", "开始", "好的", "ok", "没问题", "继续", "同意", "行", "嗯", "yes", "no"]
+    goal_clean = original_goal.strip().lower()
+    if len(goal_clean) < 6 or any(v in goal_clean for v in control_verbs):
+        logger.info(f"  [异常检测] 原始目标 '{original_goal}' 识别为通用控制指令/简短反馈，自动放行对齐校验")
+        return True, ""
+
     from app.agents.llm_factory import MIMOClient, THINKING_DISABLED
     from app.prompts.anomaly_checker import ANOMALY_CHECK_PROMPT
 

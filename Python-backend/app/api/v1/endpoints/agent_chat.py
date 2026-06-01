@@ -8,7 +8,7 @@ import asyncio
 from typing import AsyncGenerator
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from app.agents.schemas import ChatRequest, AgentState
+from app.agents.schemas import ChatRequest, AgentState, NODE_HUMAN_CONFIRM
 from app.agents.conversation_compressor import build_chat_history_with_context, async_compress_and_save
 from app.graph.learning_graph import get_learning_graph
 from app.services.db.java_client import java_client
@@ -130,13 +130,14 @@ async def agent_chat(request: ChatRequest):
             # 注入 sse_callback，使智能体的流式 JSON 输出能实时推送
             initial_state["sse_callback"] = lambda data: raw_sse_queue.append(data)
 
-            async for event in graph.astream(initial_state, stream_mode="updates"):
+            config = {"configurable": {"thread_id": request.session_id}}
+            async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
                 # 先推送 sse_callback 收集的实时事件（如 raw_chunk）
                 while raw_sse_queue:
                     yield raw_sse_queue.pop(0)
 
                 for node_name, node_output in event.items():
-                    if node_output is None:
+                    if node_output is None or not isinstance(node_output, dict):
                         continue
 
                     node_count += 1
@@ -285,46 +286,8 @@ async def confirm_task(request: ChatRequest):
             except Exception:
                 pass
 
-            initial_state: AgentState = {
-                "user_id": request.user_id,
-                "plan_id": request.plan_id,
-                "session_id": request.session_id,
-                "user_message": request.message,
-                "human_feedback": request.message,
-                "chat_history": chat_history,
-                "user_profile": user_profile,
-                "intent": "follow_up",
-                "next_node": "controller",
-                "needs_human_confirm": True,
-                "profile_update_needed": False,
-                "learning_goal": request.message,
-                "task_breakdown": None,
-                "task_breakdown_confirmed": False,
-                "search_queries": [],
-                "rag_results": [],
-                "rag_context_chunks": [],
-                "rag_sufficient": False,
-                "rag_poor_module_ids": [],
-                "retrieval_config": {},
-                "review_passed": True,
-                "review_feedback": "",
-                "review_suggestions": [],
-                "orchestrated_content": None,
-                "module_list": [],
-                "generated_content": None,
-                "quiz_config": None,
-                "quiz_questions": None,
-                "quiz_answer": None,
-                "quiz_result": None,
-                "stream_events": [],
-                "current_step": "",
-                "error": None,
-                "iteration_count": 0,
-                "max_iterations": 15,
-                "accumulated_context": "",
-            }
-
             graph = get_learning_graph()
+            config = {"configurable": {"thread_id": request.session_id}}
 
             yield _sse_event({
                 "event_type": "thinking",
@@ -335,10 +298,24 @@ async def confirm_task(request: ChatRequest):
 
             all_events = []
             ai_response_parts = []
+            raw_sse_queue = []
 
-            async for event in graph.astream(initial_state, stream_mode="updates"):
+            # 原生 Checkpointer：更新运行状态（注入新连接的 sse_callback 并写入用户反馈）
+            new_callback = lambda data: raw_sse_queue.append(data)
+            await graph.aupdate_state(config, {
+                "human_feedback": request.message,
+                "sse_callback": new_callback
+            }, as_node=NODE_HUMAN_CONFIRM)
+
+            logger.info(f"  [API] 从 Checkpointer 恢复工作流运行 (Session: {request.session_id})")
+
+            async for event in graph.astream(None, config=config, stream_mode="updates"):
+                # 先推送 sse_callback 收集的实时事件（如 raw_chunk）
+                while raw_sse_queue:
+                    yield raw_sse_queue.pop(0)
+
                 for node_name, node_output in event.items():
-                    if node_output is None:
+                    if node_output is None or not isinstance(node_output, dict):
                         continue
                     stream_events = node_output.get("stream_events", [])
                     for evt in stream_events:
@@ -351,6 +328,10 @@ async def confirm_task(request: ChatRequest):
                         # 持久化画像更新
                         if evt.get("event_type") == "profile_update":
                             _persist_profile_update_raw(evt, request.user_id)
+
+                    # 节点完成后也推送可能残留的 sse_callback 事件
+                    while raw_sse_queue:
+                        yield raw_sse_queue.pop(0)
 
                     step = node_output.get("current_step", "")
                     if step:

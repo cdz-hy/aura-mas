@@ -2,7 +2,8 @@
 LangGraph 多智能体系统 - 全局状态定义
 所有智能体共享此状态结构，通过 LangGraph 的 StateGraph 传递
 """
-from typing import TypedDict, List, Optional, Dict, Any, Literal
+from typing import TypedDict, List, Optional, Dict, Any, Literal, Annotated
+import operator
 from pydantic import BaseModel, Field
 
 
@@ -30,6 +31,28 @@ INTENT_GENERATE_QUIZ = "generate_quiz"
 INTENT_GRADE_QUIZ = "grade_quiz"
 INTENT_AMBIGUOUS = "ambiguous"
 INTENT_FOLLOW_UP = "follow_up"
+def reduce_current_step(left: str, right: str) -> str:
+    """合并并行节点的状态步骤描述，避免并发冲突"""
+    if not left:
+        return right or ""
+    if not right:
+        return left or ""
+    # 按 | 分割去重合并
+    left_parts = [p.strip() for p in left.split(" | ") if p.strip()]
+    right_parts = [p.strip() for p in right.split(" | ") if p.strip()]
+    merged = left_parts + [r for r in right_parts if r not in left_parts]
+    return " | ".join(merged)
+
+def reduce_error(left: Optional[str], right: Optional[str]) -> Optional[str]:
+    """合并并行节点的错误信息，避免并发冲突"""
+    if not left:
+        return right
+    if not right:
+        return left
+    left_parts = [p.strip() for p in left.split(" ; ") if p.strip()]
+    right_parts = [p.strip() for p in right.split(" ; ") if p.strip()]
+    merged = left_parts + [r for r in right_parts if r not in left_parts]
+    return " ; ".join(merged)
 
 
 class AgentState(TypedDict, total=False):
@@ -100,9 +123,9 @@ class AgentState(TypedDict, total=False):
     quiz_result: Optional[Dict[str, Any]]  # 题目判定结果
 
     # ==================== 流式输出控制 ====================
-    stream_events: List[Dict[str, Any]]  # 流式事件队列
-    current_step: str  # 当前处理步骤描述
-    error: Optional[str]  # 错误信息
+    stream_events: Annotated[List[Dict[str, Any]], operator.add]  # 流式事件队列
+    current_step: Annotated[str, reduce_current_step]  # 当前处理步骤描述（带并发合并Redurcer）
+    error: Annotated[Optional[str], reduce_error]  # 错误信息（带并发合并Reducer）
     sse_callback: Any  # Callable[[str], None] - 实时推送 SSE 事件的回调函数
     create_placeholder_callback: Any  # Callable[[list], dict] - 创建占位资源记录的回调函数
 

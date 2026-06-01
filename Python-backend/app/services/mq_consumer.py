@@ -244,7 +244,8 @@ class MQConsumer:
         }
 
         graph = get_learning_graph()
-        final_state = await graph.ainvoke(initial_state)
+        config = {"configurable": {"thread_id": f"mq-task-{task_id}"}}
+        final_state = await graph.ainvoke(initial_state, config=config)
 
         error = final_state.get("error")
         if error:

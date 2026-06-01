@@ -246,7 +246,7 @@ def _generate_single_module(
 
 # ==================== 节点函数 ====================
 
-def resource_generator_node(state: AgentState) -> Dict[str, Any]:
+async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
     """多模态资源自主生成智能体节点 - 并行生成所有模块"""
     user_message = state.get("user_message", "")
     learning_goal = state.get("learning_goal", user_message)
@@ -304,11 +304,12 @@ def resource_generator_node(state: AgentState) -> Dict[str, Any]:
 
     # ==================== 并行生成所有模块 ====================
     if len(target_modules) == 1:
-        # 单模块：直接生成（不启动线程池）
+        # 单模块：直接异步线程生成
         module = target_modules[0]
         placeholder = placeholder_map.get(1, {})
         res_id = placeholder.get("id", 0)
-        result = _generate_single_module(
+        result = await asyncio.to_thread(
+            _generate_single_module,
             module, 1, learning_goal, user_profile,
             sse_callback, res_id,
         )
@@ -317,32 +318,24 @@ def resource_generator_node(state: AgentState) -> Dict[str, Any]:
         # 多模块：并行生成
         logger.info(f"  [资源生成智能体] 使用并行模式，共 {len(target_modules)} 个模块")
 
-        async def run_parallel():
-            loop = asyncio.get_event_loop()
-            tasks = []
-            for i, module in enumerate(target_modules):
-                module_order = i + 1
-                placeholder = placeholder_map.get(module_order, {})
-                res_id = placeholder.get("id", 0)
-                task = loop.run_in_executor(
-                    None,
-                    _generate_single_module,
-                    module,
-                    module_order,
-                    learning_goal,
-                    user_profile,
-                    sse_callback,
-                    res_id,
-                )
-                tasks.append(task)
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            return results
+        tasks = []
+        for i, module in enumerate(target_modules):
+            module_order = i + 1
+            placeholder = placeholder_map.get(module_order, {})
+            res_id = placeholder.get("id", 0)
+            task = asyncio.to_thread(
+                _generate_single_module,
+                module,
+                module_order,
+                learning_goal,
+                user_profile,
+                sse_callback,
+                res_id,
+            )
+            tasks.append(task)
 
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            raw_results = loop.run_until_complete(run_parallel())
-            loop.close()
+            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
 
             module_list = []
             for i, res in enumerate(raw_results):

@@ -155,7 +155,8 @@ async def profile_chat(
             async def _run():
                 graph = get_learning_graph()
                 logger.info(f"[画像构建] 图执行开始 (线程: {threading.current_thread().name})")
-                async for event in graph.astream(initial_state, stream_mode="updates"):
+                config = {"configurable": {"thread_id": session_id}}
+                async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
                     for node_name, node_output in event.items():
                         if node_output is None:
                             continue

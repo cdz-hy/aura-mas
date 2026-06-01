@@ -136,6 +136,24 @@ async def plan_chat(
             placeholder_map = _create_placeholder_resources(plan_id_int, modules)
             logger.info(f"[占位资源] 已创建 {len(placeholder_map)} 个占位记录")
 
+    # 尝试从 checkpointer 获取历史 state 以防止核心学习目标 (learning_goal) 被 "生成资源" 等通用控制指令覆盖
+    effective_learning_goal = message
+    try:
+        graph = get_learning_graph()
+        config = {"configurable": {"thread_id": session_id}}
+        existing_state = graph.get_state(config)
+        if existing_state and existing_state.values:
+            old_goal = existing_state.values.get("learning_goal")
+            if old_goal and len(old_goal) > 2:
+                # 检查当前 message 是否为通用指令/控制词
+                control_keywords = ["确认", "可以", "生成", "好的", "ok", "同意", "行", "嗯", "没问题", "yes", "no"]
+                is_control = any(k in message.strip().lower() for k in control_keywords) or len(message.strip()) < 5
+                if is_control:
+                    effective_learning_goal = old_goal
+                    logger.info(f"[计划对话] 检测到通用控制消息，保留历史真实学习目标: {effective_learning_goal}")
+    except Exception as e:
+        logger.warning(f"[计划对话] 读取历史状态失败: {e}")
+
     # 构造现有 graph 的初始状态
     initial_state: AgentState = {
         "user_id": user_id,
@@ -150,7 +168,7 @@ async def plan_chat(
         "next_node": "",
         "needs_human_confirm": False,
         "profile_update_needed": False,
-        "learning_goal": message,
+        "learning_goal": effective_learning_goal,
         "task_breakdown": parsed_breakdown,
         "task_breakdown_confirmed": breakdown_confirmed,
         "search_queries": [],
@@ -224,7 +242,8 @@ async def plan_chat(
             async def _run():
                 graph = get_learning_graph()
                 logger.info(f"[对话流] 图执行开始 (线程: {threading.current_thread().name})")
-                async for event in graph.astream(initial_state, stream_mode="updates"):
+                config = {"configurable": {"thread_id": session_id}}
+                async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
                     # 检查停止信号
                     if check_stop(session_id):
                         logger.info(f"[对话流] 会话 {session_id} 收到停止信号，终止执行")
@@ -763,7 +782,8 @@ async def generate_single_resource(
             # quiz 和其他类型走 LangGraph
             async def _run():
                 graph = get_learning_graph()
-                async for event in graph.astream(initial_state, stream_mode="updates"):
+                config = {"configurable": {"thread_id": session_id}}
+                async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
                     for node_name, node_output in event.items():
                         if node_output is None:
                             continue

@@ -38,28 +38,26 @@ def get_default_learning_behavior() -> Dict[str, Any]:
 
 def ensure_learning_behavior_fields(learning_behavior: Dict[str, Any]) -> Dict[str, Any]:
     """
-    确保 learning_behavior 包含所有必需字段
-    
-    如果缺少字段，自动补充默认值
+    确保 learning_behavior 包含所有必需字段，并自动同步扁平格式与嵌套格式的两套字段标准
     保持现有字段的值不变
     
     Args:
         learning_behavior: 原始的 learning_behavior 字典
         
     Returns:
-        补充完整后的 learning_behavior 字典
+        补充完整且完美同步后的 learning_behavior 字典
     """
     if not learning_behavior:
         return get_default_learning_behavior()
     
     default = get_default_learning_behavior()
     
-    # 补充缺失的字段
+    # 补充扁平格式缺失的字段
     for key, default_value in default.items():
         if key not in learning_behavior:
             learning_behavior[key] = default_value
     
-    # 确保学习风格维度在有效范围内
+    # 确保扁平学习风格维度在有效范围内
     for dimension in ["visual_vs_verbal", "active_vs_reflective", "sensing_vs_intuitive", "sequential_vs_global"]:
         if dimension in learning_behavior:
             value = learning_behavior[dimension]
@@ -73,6 +71,58 @@ def ensure_learning_behavior_fields(learning_behavior: Dict[str, Any]) -> Dict[s
         if list_field in learning_behavior:
             if not isinstance(learning_behavior[list_field], list):
                 learning_behavior[list_field] = []
+
+    # === 同步字段命名两套标准 (解决画像同步漂移 Bug) ===
+    # 确保 felder_silverman 子字典存在并保持字典类型
+    fs = learning_behavior.setdefault("felder_silverman", {})
+    if not isinstance(fs, dict):
+        fs = {}
+        learning_behavior["felder_silverman"] = fs
+
+    # 1. 同步扁平与嵌套的学习风格维度 (双向映射)
+    for flat_dim, nested_dim in [
+        ("visual_vs_verbal", "visual_verbal"),
+        ("active_vs_reflective", "active_reflective"),
+        ("sensing_vs_intuitive", "sensing_intuitive"),
+        ("sequential_vs_global", "sequential_global"),
+    ]:
+        # 优先读取非零的新值，进行双向同步
+        flat_val = learning_behavior.get(flat_dim, 0.0)
+        nested_val = fs.get(nested_dim, 0.0)
+        
+        # 如果两边值不一致，优先采用扁平字段的值（因为 profile_maintainer 直接修改扁平字段）
+        if flat_val != nested_val:
+            fs[nested_dim] = flat_val
+        else:
+            fs[nested_dim] = nested_val
+            learning_behavior[flat_dim] = nested_val
+
+    # 2. 同步薄弱点：weak_points <-> weak_areas
+    # 优先采用有值的那个，如果两边都有值且不一致，以 weak_areas 为主
+    areas = learning_behavior.get("weak_areas", [])
+    points = learning_behavior.get("weak_points", [])
+    if areas:
+        learning_behavior["weak_points"] = list(areas)
+    elif points:
+        learning_behavior["weak_areas"] = list(points)
+    else:
+        learning_behavior["weak_areas"] = []
+        learning_behavior["weak_points"] = []
+
+    # 3. 同步偏好：content_preferences <-> preferred_resource_types
+    # 优先采用有值的那个，如果两边都有值且不一致，以 preferred_resource_types 为主
+    res_types = learning_behavior.get("preferred_resource_types", [])
+    prefs = learning_behavior.get("content_preferences", [])
+    if res_types:
+        learning_behavior["content_preferences"] = list(res_types)
+    elif prefs:
+        learning_behavior["preferred_resource_types"] = list(prefs)
+    else:
+        learning_behavior["preferred_resource_types"] = []
+        learning_behavior["content_preferences"] = []
+
+    # 4. 补充其它可能需要的兼容性字段默认值
+    learning_behavior.setdefault("preferred_quiz_types", [])
     
     return learning_behavior
 
@@ -106,6 +156,7 @@ def update_learning_behavior(
 ) -> Dict[str, Any]:
     """
     更新用户画像的 learning_behavior
+    自动同步更新到扁平和嵌套两个体系中
 
     Args:
         current: 当前的 learning_behavior
@@ -115,9 +166,9 @@ def update_learning_behavior(
         confidence: 更新的置信度 (0-1)，用于调整学习风格维度的变化幅度
 
     Returns:
-        更新后的 learning_behavior
+        更新且完美同步后的 learning_behavior
     """
-    # 确保当前画像字段完整
+    # 确保当前画像字段完整 (会触发首次同步)
     current = ensure_learning_behavior_fields(current)
     
     for key, value in updates.items():
@@ -147,6 +198,9 @@ def update_learning_behavior(
         # 其他字段：直接更新
         else:
             current[key] = value
+            
+    # 重新进行强同步，确保新修改的内容双向对齐
+    current = ensure_learning_behavior_fields(current)
     
     return current
 

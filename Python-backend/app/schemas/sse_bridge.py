@@ -122,7 +122,7 @@ def graph_step_to_sse(node_name: str, node_output: Dict[str, Any]) -> Generator[
     将 graph 单个节点的完整输出翻译为多条 SSE 事件
     这是主要的翻译入口，替代 agent_chat.py 中的原始输出逻辑
     """
-    if node_output is None:
+    if node_output is None or not isinstance(node_output, dict):
         return
 
     # 1. 处理 stream_events 列表
