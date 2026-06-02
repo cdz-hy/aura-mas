@@ -98,8 +98,12 @@ function stripIncompleteLatex(md: string): string {
 export function parseMarkdown(md: string): string {
   if (!md) return ''
 
+  // 兜底：将字面 \n（反斜杠+n，非实际换行）转为实际换行
+  // 处理数据库中因双重序列化导致的转义字符
+  let fixed = md.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+
   // 剥离流式输出中的不完整内容
-  let cleaned = stripIncompleteLatex(md)
+  let cleaned = stripIncompleteLatex(fixed)
   // Strip incomplete image markdown during streaming to prevent layout jumps
   cleaned = cleaned.replace(/!\[[^\]]*\]\([^)]*$/, '')
 

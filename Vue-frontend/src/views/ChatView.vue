@@ -222,6 +222,11 @@ function sendMessage() {
   if (!text) return
   inputText.value = ''
   showModifyInput.value = false
+  // 确认状态下，底部输入也走 confirmBreakdown 以携带 task_breakdown 上下文
+  if (store.awaitingConfirmation && store.pendingTaskBreakdown) {
+    store.confirmBreakdown(planId, text)
+    return
+  }
   store.sendMessage(text, planId)
 }
 

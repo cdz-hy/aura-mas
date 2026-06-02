@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.api.v1.endpoints import upload, query, agent_chat
+from app.api.v1.endpoints import upload, query
 from app.api.v1.endpoints import profile_builder, plan_generator, resource_chat
 from app.api.v1.endpoints import kb
 from app.core.config import settings
@@ -77,9 +77,6 @@ app.add_middleware(
 # 路由注册 - 原有 RAG 接口
 app.include_router(upload.router, prefix="/api/v1/upload", tags=["上传处理"])
 app.include_router(query.router, prefix="/api/v1/query", tags=["检索对话"])
-
-# 路由注册 - 多智能体系统接口
-app.include_router(agent_chat.router, prefix="/api/v1/agent", tags=["多智能体对话"])
 
 # 路由注册 - 前端 SSE 接口（与 Vue 前端对齐的 /api/ai/* 路径）
 app.include_router(profile_builder.router, prefix="/api/ai/profile", tags=["画像构建"])
