@@ -17,12 +17,15 @@ export interface TutorSession {
   lastMessageAt: string
 }
 
+const TUTOR_SESSION_KEY = 'tutor_activeSessionId'
+const TUTOR_PLAN_KEY = 'tutor_currentPlanId'
+
 export const useTutorStore = defineStore('tutor', () => {
   // ─── State ───
-  const contextPlanId = ref(0)
+  const contextPlanId = ref(Number(localStorage.getItem(TUTOR_PLAN_KEY)) || 0)
   const contextResourceId = ref(0)
 
-  const activeSessionId = ref('')
+  const activeSessionId = ref(localStorage.getItem(TUTOR_SESSION_KEY) || '')
   const messages = ref<TutorMessage[]>([])
   const loading = ref(false)
   const progress = ref('')
@@ -41,8 +44,9 @@ export const useTutorStore = defineStore('tutor', () => {
     const changed = contextPlanId.value !== planId
     contextPlanId.value = planId
     contextResourceId.value = resourceId
+    localStorage.setItem(TUTOR_PLAN_KEY, String(planId))
     if (changed) {
-      activeSessionId.value = ''
+      _setActiveSession('')
       messages.value = []
     }
   }
@@ -71,6 +75,15 @@ export const useTutorStore = defineStore('tutor', () => {
     }
   }
 
+  function _setActiveSession(sessionId: string) {
+    activeSessionId.value = sessionId
+    if (sessionId) {
+      localStorage.setItem(TUTOR_SESSION_KEY, sessionId)
+    } else {
+      localStorage.removeItem(TUTOR_SESSION_KEY)
+    }
+  }
+
   // ─── Sessions ───
   async function loadSessions() {
     sessionsLoading.value = true
@@ -83,20 +96,20 @@ export const useTutorStore = defineStore('tutor', () => {
       // Don't reload messages while SSE is streaming — it would overwrite in-flight content
       if (loading.value) return
 
-      // Auto-select latest session and load its messages
-      if (sessions.value.length > 0) {
-        const latest = sessions.value[0]
-        if (activeSessionId.value !== latest.sessionId) {
-          activeSessionId.value = latest.sessionId
-        }
-        await loadSessionMessages(latest.sessionId)
+      // Prefer restoring the persisted session if it still exists
+      if (activeSessionId.value && sessions.value.some(s => s.sessionId === activeSessionId.value)) {
+        await loadSessionMessages(activeSessionId.value)
+      } else if (sessions.value.length > 0) {
+        // Fall back to latest session
+        _setActiveSession(sessions.value[0].sessionId)
+        await loadSessionMessages(sessions.value[0].sessionId)
       } else if (!activeSessionId.value) {
-        activeSessionId.value = _buildSessionId()
+        _setActiveSession(_buildSessionId())
       }
     } catch (e) {
       console.error('[TutorStore] 加载会话列表失败:', e)
       if (!activeSessionId.value) {
-        activeSessionId.value = _buildSessionId()
+        _setActiveSession(_buildSessionId())
       }
     } finally {
       sessionsLoading.value = false
@@ -120,7 +133,7 @@ export const useTutorStore = defineStore('tutor', () => {
   async function selectSession(sessionId: string) {
     if (sessionId === activeSessionId.value) return
     closeConnection()
-    activeSessionId.value = sessionId
+    _setActiveSession(sessionId)
     await loadSessionMessages(sessionId)
   }
 
@@ -128,7 +141,7 @@ export const useTutorStore = defineStore('tutor', () => {
     closeConnection()
     messages.value = []
     sessionCounter++
-    activeSessionId.value = _buildSessionId()
+    _setActiveSession(_buildSessionId())
     // Refresh session list in background
     loadSessions()
   }

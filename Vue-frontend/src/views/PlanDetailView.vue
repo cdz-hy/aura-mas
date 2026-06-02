@@ -112,9 +112,11 @@
                 :class="selectedResourceId === res.id ? 'bg-navy-100' : 'hover:bg-white'"
                 @click.stop="toggleResource(res)"
               >
-                <span class="w-2 h-2 rounded-full flex-shrink-0" :class="res.status === 2 ? 'bg-emerald-400' : 'bg-navy-200'"></span>
+                <span class="w-2 h-2 rounded-full flex-shrink-0" :class="res.status === 2 ? 'bg-emerald-400' : res.status === 1 ? 'bg-blue-400' : res.status === 3 ? 'bg-red-400' : 'bg-navy-200'"></span>
                 <span class="text-navy-600 truncate flex-1">{{ res.moduleData?.title || typeLabels[res.moduleType] || res.moduleType }}</span>
                 <span v-if="res.status === 2" class="text-emerald-500 text-[10px]">已生成</span>
+                <span v-else-if="res.status === 1 && !stuckResources.has(res.id)" class="text-blue-500 text-[10px]">生成中</span>
+                <span v-else-if="res.status === 1 || res.status === 3" class="text-red-500 text-[10px] cursor-pointer hover:underline" @click.stop="handleRetry(res)">重试</span>
                 <span v-else class="text-navy-300 text-[10px]">待生成</span>
               </div>
             </div>
@@ -333,7 +335,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { getPlan, updatePlan } from '@/api/plan'
-import { getPlanResources, getResource } from '@/api/resource'
+import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi } from '@/api/resource'
 import { parseMarkdown } from '@/utils/markdown'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
 import { issueTicket } from '@/api/auth'
@@ -476,6 +478,7 @@ onUnmounted(() => {
 // ==================== 状态 ====================
 const plan = ref<LearningPlan | null>(null)
 const resources = ref<LearningResource[]>([])
+const stuckResources = ref(new Set<number>())
 const selectedModuleIndex = ref(-1)
 const selectedResourceId = ref<number | null>(null)
 const selectedResource = ref<LearningResource | null>(null)
@@ -516,6 +519,19 @@ async function loadResources() {
     const list = res.data || []
     parseModuleData(list)
     resources.value = list
+
+    // 检测卡住的资源：status=1 但 task 也是 status=1（没有在真正执行）
+    const stuck = new Set<number>()
+    const generating = list.filter((r: LearningResource) => r.status === 1)
+    await Promise.all(generating.map(async (r: LearningResource) => {
+      try {
+        const { data: task } = await getLatestTask(r.id)
+        if (!task || task.taskStatus === 1) {
+          stuck.add(r.id)
+        }
+      } catch {}
+    }))
+    stuckResources.value = stuck
   } catch (e) {
     console.error('[PlanDetail] 加载资源失败:', e)
   }
@@ -940,6 +956,30 @@ function selectModule(index: number) {
   const mod = modules.value[index]
   if (mod?.resources.length > 0) {
     toggleResource(mod.resources[0])
+  }
+}
+
+async function handleRetry(res: LearningResource) {
+  try {
+    const { data: task } = await getLatestTask(res.id)
+    if (!task) return
+    await retryTaskApi(task.id)
+    res.status = 1
+    // 轮询等待生成结果
+    const poll = setInterval(async () => {
+      try {
+        const { data: updated } = await getLatestTask(res.id)
+        if (updated && (updated.taskStatus === 2 || updated.taskStatus === 3)) {
+          clearInterval(poll)
+          res.status = updated.taskStatus === 2 ? 2 : 3
+          loadResources()
+        }
+      } catch {
+        clearInterval(poll)
+      }
+    }, 3000)
+  } catch (e) {
+    console.error('重试失败:', e)
   }
 }
 
