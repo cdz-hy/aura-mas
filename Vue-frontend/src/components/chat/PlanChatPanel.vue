@@ -442,6 +442,11 @@ function handleSendAssistant(text?: string) {
       return
     }
   }
+  // 确认状态下，底部输入也走 confirmBreakdown 以携带 task_breakdown 上下文
+  if (chatStore.awaitingConfirmation && chatStore.pendingTaskBreakdown) {
+    chatStore.confirmBreakdown(props.planId, msg)
+    return
+  }
   chatStore.sendMessage(msg, props.planId)
 }
 

@@ -181,6 +181,99 @@ public class LearningPlanService {
         return plan;
     }
 
+    /**
+     * 会话级 learning_goal 增量更新（保留演进历史）
+     * 数据结构：
+     * {
+     *   "sessions": {
+     *     "<sessionId>": {
+     *       "current": "...",
+     *       "history": [{goal, action, reasoning, timestamp}, ...],
+     *       "updated_at": "..."
+     *     }
+     *   },
+     *   "initial": "..."  // 向后兼容：原始计划创建时的字符串目标
+     * }
+     */
+    @Transactional
+    public synchronized void upsertSessionLearningGoal(Long planId, String sessionId, String goal,
+                                                       String action, String reasoning) {
+        LearningPlan plan = planMapper.selectById(planId);
+        if (plan == null) {
+            throw new BusinessException(ErrorCode.PLAN_NOT_FOUND);
+        }
+        Map<String, Object> goalMap = parseGoalJson(plan.getLearningGoal());
+
+        Map<String, Object> sessions = (Map<String, Object>) goalMap.get("sessions");
+        if (sessions == null) {
+            sessions = new LinkedHashMap<>();
+            goalMap.put("sessions", sessions);
+        }
+
+        Map<String, Object> sessionEntry = (Map<String, Object>) sessions.get(sessionId);
+        if (sessionEntry == null) {
+            sessionEntry = new LinkedHashMap<>();
+            sessionEntry.put("current", "");
+            sessionEntry.put("history", new ArrayList<>());
+            sessions.put(sessionId, sessionEntry);
+        }
+
+        String prevGoal = (String) sessionEntry.getOrDefault("current", "");
+        if (goal.equals(prevGoal)) {
+            return; // 无变化，跳过写入
+        }
+
+        String now = LocalDateTime.now().toString();
+        sessionEntry.put("current", goal);
+        sessionEntry.put("updated_at", now);
+
+        List<Map<String, Object>> history = (List<Map<String, Object>>) sessionEntry.get("history");
+        if (history == null) {
+            history = new ArrayList<>();
+            sessionEntry.put("history", history);
+        }
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("goal", goal);
+        entry.put("action", action);
+        entry.put("reasoning", reasoning);
+        entry.put("timestamp", now);
+        history.add(entry);
+
+        plan.setLearningGoal(toJson(goalMap));
+        plan.setUpdatedAt(LocalDateTime.now());
+        planMapper.updateById(plan);
+    }
+
+    /**
+     * 解析 learning_goal JSON 字段。
+     * 兼容三种历史格式：
+     * 1. null/空 → 返回空 Map
+     * 2. 普通字符串（旧格式，计划创建时存的简单字符串）→ 包装为 {"initial": "<string>"}
+     * 3. JSON 对象（新格式）→ 直接返回
+     */
+    private Map<String, Object> parseGoalJson(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+        try {
+            Object parsed = objectMapper.readValue(raw, Object.class);
+            if (parsed instanceof Map) {
+                return (Map<String, Object>) parsed;
+            }
+            if (parsed instanceof String) {
+                Map<String, Object> wrapped = new LinkedHashMap<>();
+                wrapped.put("initial", parsed);
+                return wrapped;
+            }
+        } catch (Exception e) {
+            // 解析失败时把原始字符串当作 initial 兜底
+            Map<String, Object> wrapped = new LinkedHashMap<>();
+            wrapped.put("initial", raw);
+            return wrapped;
+        }
+        return new LinkedHashMap<>();
+    }
+
     private String toJson(Object obj) {
         if (obj == null) return null;
         if (obj instanceof String) return (String) obj;

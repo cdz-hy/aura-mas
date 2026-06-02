@@ -3,6 +3,7 @@
 在不同情况下调度不同智能体，控制整个进度和流程
 """
 import logging
+import threading
 from typing import Dict, Any
 from langgraph.graph import END
 from app.agents.schemas import (
@@ -16,8 +17,36 @@ from app.agents.schemas import (
 from app.agents.llm_factory import get_controller_llm
 from app.prompts import CONTROLLER_PROMPT
 from app.utils.token_recorder import record_from_mimo
+from app.services.db.java_client import java_client
 
 logger = logging.getLogger("agents.controller")
+
+
+def _classify_goal_action(prev_goal: str, new_goal: str) -> str:
+    """根据前后目标推断动作类型，作为 history 元数据"""
+    if not prev_goal:
+        return "extract"
+    if new_goal in prev_goal or prev_goal in new_goal:
+        return "refine"
+    return "switch"
+
+
+def _persist_goal_async(plan_id: int, session_id: str, goal: str, action: str, reasoning: str):
+    """后台线程异步持久化 learning_goal，不阻塞图执行"""
+    def _do_persist():
+        try:
+            java_client.upsert_session_learning_goal(
+                plan_id=plan_id,
+                session_id=session_id,
+                goal=goal,
+                action=action,
+                reasoning=reasoning,
+            )
+            logger.info(f"  [主控智能体] learning_goal 已持久化到 plan={plan_id} session={session_id}")
+        except Exception as e:
+            logger.warning(f"  [主控智能体] learning_goal 持久化失败 (非致命): {e}")
+
+    threading.Thread(target=_do_persist, daemon=True).start()
 
 
 def controller_node(state: AgentState) -> Dict[str, Any]:
@@ -227,6 +256,10 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     # 但如果初始状态已指定 intent（如 generate_quiz / generate_type_resource / generate_animation），按指定意图路由
     preset_intent = state.get("intent", "")
     if state.get("task_breakdown_confirmed") and state.get("task_breakdown"):
+        # 快速路径跳过 LLM，需从 checkpoint 恢复 learning_goal
+        checkpoint_goal = state.get("_checkpoint_learning_goal", "")
+        goal_patch = {"learning_goal": checkpoint_goal} if checkpoint_goal else {}
+
         if preset_intent == INTENT_GENERATE_QUIZ:
             logger.info(f"  [主控智能体] 预设意图: generate_quiz，路由 -> 题目生成智能体")
             return {
@@ -234,6 +267,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
                 "next_node": NODE_QUIZ_GENERATOR,
                 "current_step": "预设意图: 生成题目",
                 "iteration_count": iteration + 1,
+                **goal_patch,
             }
         if preset_intent == "generate_type_resource":
             logger.info(f"  [主控智能体] 预设意图: generate_type_resource，路由 -> 类型资源生成智能体")
@@ -242,6 +276,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
                 "next_node": NODE_RESOURCE_TYPE_GENERATOR,
                 "current_step": "预设意图: 生成类型资源",
                 "iteration_count": iteration + 1,
+                **goal_patch,
             }
         if preset_intent == "generate_animation":
             logger.info(f"  [主控智能体] 预设意图: generate_animation，路由 -> 动画生成智能体")
@@ -250,6 +285,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
                 "next_node": NODE_ANIMATION_SKILL_GENERATOR,
                 "current_step": "预设意图: 生成动画",
                 "iteration_count": iteration + 1,
+                **goal_patch,
             }
         logger.info(f"  [主控智能体] 任务分解已确认，快速路由 -> RAG 检索")
         return {
@@ -257,6 +293,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
             "next_node": NODE_RAG_RETRIEVER,
             "current_step": "任务分解已确认，开始检索学习资源",
             "iteration_count": iteration + 1,
+            **goal_patch,
         }
 
     llm = get_controller_llm()
@@ -274,9 +311,12 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     has_task_breakdown = state.get("task_breakdown") is not None
     has_rag_results = bool(state.get("rag_results"))
     needs_confirm = state.get("needs_human_confirm", False)
+    checkpoint_goal = state.get("_checkpoint_learning_goal", "")
 
     # 上下文增强：告知主控当前状态
     context_info = ""
+    if checkpoint_goal:
+        context_info += f"\n[上一轮 learning_goal] {checkpoint_goal}"
     if has_task_breakdown:
         context_info += "\n[系统状态] 当前已有任务分解结果，等待用户确认或补充。"
     if has_rag_results:
@@ -289,81 +329,61 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
 
     messages = [
         {"role": "system", "content": CONTROLLER_PROMPT},
-        {"role": "user", "content": f"对话历史:\n{history_text}\n{context_info}\n\n当前用户输入: {user_message}\n\n请识别意图并输出 JSON:"}
+        {"role": "user", "content": f"对话历史:\n{history_text}\n{context_info}\n\n当前用户输入: {user_message}\n\n请综合判断意图与 learning_goal，输出 JSON:"}
     ]
 
     try:
-        logger.info(f"  [主控智能体] 正在流式调用 LLM 进行意图识别...")
+        logger.info(f"  [主控智能体] 正在流式调用 LLM 进行意图识别与目标管理...")
 
         intent = None
         reasoning = ""
+        managed_learning_goal = None  # LLM 智能管理后的 learning_goal
         accumulated_text = ""
 
-        # 使用流式输出
+        # 流式收集完整 JSON（不再早退，因为 learning_goal 在 intent 之后输出）
+        # 早退判定改为：检测到 JSON 结束符 } 即可
         for chunk in llm.chat_stream(messages, temperature=0.2):
             accumulated_text += chunk
-            
-            # 提前判断：检测关键词快速路由
-            # 注意：只用 JSON key 匹配，不用中文短语，避免 LLM 推理文本中的否定句式误匹配
-            # 例如 "这不是简单问答" 不应匹配 simple_qa
-            if intent is None:
-                acc = accumulated_text.lower()
+            # 检测 JSON 完整结束（含 intent + learning_goal + reasoning）
+            if accumulated_text.count("{") > 0 and accumulated_text.count("}") >= accumulated_text.count("{"):
+                # 试探性解析，成功即可早退
+                try:
+                    import json
+                    start = accumulated_text.find('{')
+                    end = accumulated_text.rfind('}') + 1
+                    candidate = accumulated_text[start:end]
+                    parsed = json.loads(candidate)
+                    if "intent" in parsed and "learning_goal" in parsed:
+                        intent = parsed.get("intent", INTENT_AMBIGUOUS)
+                        managed_learning_goal = parsed.get("learning_goal", "").strip()
+                        reasoning = parsed.get("reasoning", "")
+                        logger.info(f"  [主控智能体] 流式判断: 完整 JSON 已收齐，提前退出!")
+                        break
+                except Exception:
+                    pass  # JSON 还未完整，继续累积
 
-                # generate_resource: JSON 中的 intent 字段值
-                if ('"intent":"generate_resource"' in acc
-                        or '"intent": "generate_resource"' in acc):
-                    intent = INTENT_GENERATE_RESOURCE
-                    logger.info(f"  [主控智能体] 流式判断: 检测到资源生成意图，提前路由!")
-                    break
-
-                # simple_qa: 只匹配 JSON key，避免 "不是简单问答" 误匹配
-                if ('"intent":"simple_qa"' in acc
-                        or '"intent": "simple_qa"' in acc):
-                    intent = INTENT_SIMPLE_QA
-                    logger.info(f"  [主控智能体] 流式判断: 检测到简单问答意图，提前路由!")
-                    break
-
-                # generate_quiz
-                if ('"intent":"generate_quiz"' in acc
-                        or '"intent": "generate_quiz"' in acc):
-                    intent = INTENT_GENERATE_QUIZ
-                    logger.info(f"  [主控智能体] 流式判断: 检测到题目生成意图，提前路由!")
-                    break
-
-                # grade_quiz
-                if ('"intent":"grade_quiz"' in acc
-                        or '"intent": "grade_quiz"' in acc):
-                    intent = INTENT_GRADE_QUIZ
-                    logger.info(f"  [主控智能体] 流式判断: 检测到题目判定意图，提前路由!")
-                    break
-
-                # follow_up
-                if ('"intent":"follow_up"' in acc
-                        or '"intent": "follow_up"' in acc):
-                    intent = INTENT_FOLLOW_UP
-                    logger.info(f"  [主控智能体] 流式判断: 检测到跟随意图，提前路由!")
-                    break
-        
-        # 如果流式判断没有识别出意图，尝试解析完整 JSON
+        # 如果流式过程没有解析成功，尝试最后再解析一次
         if intent is None:
             try:
                 import json
-                # 尝试提取 JSON
                 if '{' in accumulated_text and '}' in accumulated_text:
                     start = accumulated_text.find('{')
                     end = accumulated_text.rfind('}') + 1
                     json_str = accumulated_text[start:end]
                     result = json.loads(json_str)
                     intent = result.get("intent", INTENT_AMBIGUOUS)
+                    managed_learning_goal = result.get("learning_goal", "").strip()
                     reasoning = result.get("reasoning", "")
                 else:
                     intent = INTENT_AMBIGUOUS
-                    reasoning = "无法解析意图"
-            except:
+                    reasoning = "无法解析 JSON 输出"
+            except Exception as parse_err:
                 intent = INTENT_AMBIGUOUS
-                reasoning = "JSON 解析失败"
-        
+                reasoning = f"JSON 解析失败: {str(parse_err)}"
+
         logger.info(f"  [主控智能体] 意图识别结果: {intent}")
+        if managed_learning_goal:
+            logger.info(f"  [主控智能体] 智能管理的 learning_goal: {managed_learning_goal}")
         if reasoning:
             logger.info(f"  [主控智能体] 推理过程: {reasoning}")
 
@@ -378,19 +398,53 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     except Exception as e:
         intent = INTENT_AMBIGUOUS
         reasoning = f"意图解析异常: {str(e)}"
+        managed_learning_goal = None
         logger.error(f"  [主控智能体] 意图识别失败: {str(e)}")
 
     # 确定下一个节点
     next_node = _route_by_intent(intent, state)
     logger.info(f"  [主控智能体] 路由决策: {intent} -> {next_node}")
+
+    # learning_goal 智能管理：优先采用 LLM 的判定，降级回退到 checkpoint goal
+    resolved_learning_goal = None
+    current_goal = state.get("learning_goal", "")
+    checkpoint_goal = state.get("_checkpoint_learning_goal", "")
+
+    if managed_learning_goal and len(managed_learning_goal) >= 2:
+        # LLM 成功输出了管理后的目标
+        if managed_learning_goal != current_goal:
+            resolved_learning_goal = managed_learning_goal
+            logger.info(f"  [主控智能体] LLM 智能管理目标: '{current_goal[:40]}' → '{managed_learning_goal[:80]}'")
+    elif intent != INTENT_GENERATE_RESOURCE and checkpoint_goal:
+        # 降级方案：LLM 未输出有效目标，但意图非 generate_resource，恢复历史目标
+        resolved_learning_goal = checkpoint_goal
+        logger.info(f"  [主控智能体] 降级恢复历史目标: {checkpoint_goal[:80]}")
+
+    # 持久化到数据库（按 session_id 区分，保留演进历史）
+    final_goal = resolved_learning_goal or current_goal
+    plan_id = state.get("plan_id")
+    session_id = state.get("session_id")
+    if final_goal and plan_id and session_id and final_goal != checkpoint_goal:
+        action = _classify_goal_action(checkpoint_goal, final_goal)
+        _persist_goal_async(
+            plan_id=plan_id,
+            session_id=session_id,
+            goal=final_goal,
+            action=action,
+            reasoning=reasoning[:300] if reasoning else "",
+        )
+
     logger.info(f"  [主控智能体] 处理完成")
 
-    return {
+    result = {
         "intent": intent,
         "next_node": next_node,
-        "current_step": f"主控智能体: 意图识别为 [{intent}], {reasoning}",
+        "current_step": f"主控智能体: 意图=[{intent}], 目标=[{(resolved_learning_goal or current_goal)[:40]}], {reasoning[:80]}",
         "iteration_count": iteration + 1,
     }
+    if resolved_learning_goal:
+        result["learning_goal"] = resolved_learning_goal
+    return result
 
 
 def _route_by_intent(intent: str, state: AgentState) -> str:

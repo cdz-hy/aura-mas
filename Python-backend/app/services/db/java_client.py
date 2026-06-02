@@ -184,6 +184,27 @@ class JavaBackendClient:
         """更新计划状态"""
         self._request("PUT", f"/api/plan/{plan_id}/status", params={"status": status})
 
+    def upsert_session_learning_goal(
+        self,
+        plan_id: int,
+        session_id: str,
+        goal: str,
+        action: str = "update",
+        reasoning: str = "",
+    ) -> None:
+        """
+        会话级 learning_goal 增量更新（保留演进历史）。
+        服务端会按 session_id 区分存储，并把每次变化追加到该会话的 history 中。
+        无变化时静默跳过。
+        """
+        body = {
+            "sessionId": session_id,
+            "goal": goal,
+            "action": action,
+            "reasoning": reasoning,
+        }
+        self._request("PATCH", f"/api/plan/internal/{plan_id}/learning-goal", json=body)
+
     # ==================== 学习资源 ====================
 
     def create_resource(

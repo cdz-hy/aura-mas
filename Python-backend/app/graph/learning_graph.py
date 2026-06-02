@@ -197,21 +197,26 @@ def route_after_task_decomposer(state: AgentState) -> str:
 
 
 def route_after_human_confirm(state: AgentState) -> str:
-    """用户确认之后的路由"""
+    """用户确认之后的路由
+
+    优先级：确认 > 反馈 > 等待
+    确认时 human_feedback 可能残留（_human_confirm_node 不清除），需先检查 confirmed
+    """
     anomaly = _route_if_anomaly(state)
     if anomaly:
         return anomaly
 
-    human_feedback = state.get("human_feedback")
     task_breakdown = state.get("task_breakdown")
+    human_feedback = state.get("human_feedback")
+
+    # 优先：用户已确认任务分解 → 直接进入 RAG 检索（跳过 Controller）
+    if task_breakdown and state.get("task_breakdown_confirmed"):
+        logger.info(f"  [路由] 用户已确认 -> RAG 检索智能体")
+        return NODE_RAG_RETRIEVER
 
     if human_feedback:
         logger.info(f"  [路由] 用户有反馈 -> 主控智能体 (重新判断)")
         return NODE_CONTROLLER
-
-    if task_breakdown and state.get("task_breakdown_confirmed"):
-        logger.info(f"  [路由] 用户已确认 -> RAG 检索智能体")
-        return NODE_RAG_RETRIEVER
 
     # 没有反馈且未确认 -> 结束流程，等待用户通过 /confirm 接口重新进入
     logger.info(f"  [路由] 等待用户确认 -> END (等待用户通过 /confirm 接口输入)")
@@ -566,6 +571,7 @@ def _human_confirm_node(state: AgentState) -> Dict[str, Any]:
             return {
                 "task_breakdown_confirmed": True,
                 "needs_human_confirm": False,
+                "human_feedback": None,  # 清除反馈，防止残留影响路由
                 "current_step": "用户已确认学习路径",
             }
         else:

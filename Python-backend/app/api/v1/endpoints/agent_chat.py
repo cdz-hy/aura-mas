@@ -115,6 +115,22 @@ async def agent_chat(request: ChatRequest):
             logger.info(f"  [API] 正在执行工作流图...")
             graph = get_learning_graph()
 
+            # 从持久化层（DB）+ checkpointer 读取上一轮的真实学习目标，供 controller 意图驱动判定
+            config = {"configurable": {"thread_id": request.session_id}}
+            try:
+                from app.utils.goal_utils import resolve_session_learning_goal
+                db_goal = resolve_session_learning_goal(request.plan_id, request.session_id)
+                if db_goal:
+                    initial_state["_checkpoint_learning_goal"] = db_goal
+                else:
+                    existing_state = graph.get_state(config)
+                    if existing_state and existing_state.values:
+                        old_goal = existing_state.values.get("learning_goal", "")
+                        if old_goal and len(old_goal) > 2 and old_goal != request.message:
+                            initial_state["_checkpoint_learning_goal"] = old_goal
+            except Exception:
+                pass
+
             yield _sse_event({
                 "event_type": "thinking",
                 "agent": "system",
@@ -130,7 +146,6 @@ async def agent_chat(request: ChatRequest):
             # 注入 sse_callback，使智能体的流式 JSON 输出能实时推送
             initial_state["sse_callback"] = lambda data: raw_sse_queue.append(data)
 
-            config = {"configurable": {"thread_id": request.session_id}}
             async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
                 # 先推送 sse_callback 收集的实时事件（如 raw_chunk）
                 while raw_sse_queue:

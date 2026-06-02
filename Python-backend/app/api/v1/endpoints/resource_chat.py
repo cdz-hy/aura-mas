@@ -136,21 +136,22 @@ async def plan_chat(
             placeholder_map = _create_placeholder_resources(plan_id_int, modules)
             logger.info(f"[占位资源] 已创建 {len(placeholder_map)} 个占位记录")
 
-    # 尝试从 checkpointer 获取历史 state 以防止核心学习目标 (learning_goal) 被 "生成资源" 等通用控制指令覆盖
-    effective_learning_goal = message
+    # 从持久化层（DB）+ checkpointer 读取上一轮的真实学习目标，传递给 controller 做意图驱动判定
+    # 优先级：DB plan.learning_goal[session_id].current > checkpointer state > 空
+    from app.utils.goal_utils import resolve_session_learning_goal
+    _checkpoint_learning_goal = resolve_session_learning_goal(plan_id_int, session_id)
     try:
         graph = get_learning_graph()
         config = {"configurable": {"thread_id": session_id}}
         existing_state = graph.get_state(config)
         if existing_state and existing_state.values:
-            old_goal = existing_state.values.get("learning_goal")
-            if old_goal and len(old_goal) > 2:
-                # 检查当前 message 是否为通用指令/控制词
-                control_keywords = ["确认", "可以", "生成", "好的", "ok", "同意", "行", "嗯", "没问题", "yes", "no"]
-                is_control = any(k in message.strip().lower() for k in control_keywords) or len(message.strip()) < 5
-                if is_control:
-                    effective_learning_goal = old_goal
-                    logger.info(f"[计划对话] 检测到通用控制消息，保留历史真实学习目标: {effective_learning_goal}")
+            mem_goal = existing_state.values.get("learning_goal", "")
+            # checkpointer 中的值更"新"（同进程内最新一次更新），但 DB 是跨进程持久化
+            # 如果 DB 没值，用 checkpointer 兜底
+            if not _checkpoint_learning_goal and mem_goal and len(mem_goal) > 2 and mem_goal != message:
+                _checkpoint_learning_goal = mem_goal
+        if _checkpoint_learning_goal:
+            logger.info(f"[计划对话] 历史学习目标: {_checkpoint_learning_goal[:80]}")
     except Exception as e:
         logger.warning(f"[计划对话] 读取历史状态失败: {e}")
 
@@ -168,7 +169,8 @@ async def plan_chat(
         "next_node": "",
         "needs_human_confirm": False,
         "profile_update_needed": False,
-        "learning_goal": effective_learning_goal,
+        "learning_goal": message,
+        "_checkpoint_learning_goal": _checkpoint_learning_goal,
         "task_breakdown": parsed_breakdown,
         "task_breakdown_confirmed": breakdown_confirmed,
         "search_queries": [],

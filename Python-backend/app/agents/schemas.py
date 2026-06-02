@@ -81,6 +81,7 @@ class AgentState(TypedDict, total=False):
 
     # ==================== 任务分解 ====================
     learning_goal: str  # 学习目标
+    _checkpoint_learning_goal: str  # 上一轮 checkpointer 中的学习目标（供 controller 意图驱动判定）
     task_breakdown: Optional[Dict[str, Any]]  # 任务分解结果
     task_breakdown_confirmed: bool  # 用户是否已确认分解
 
