@@ -371,6 +371,24 @@ class JavaBackendClient:
             },
         )
 
+    def complete_generation_task(self, task_id: int, module_data: str) -> Dict[str, Any]:
+        """原子性完成任务：保存资源内容 + 更新任务状态（同一事务）"""
+        return self._request(
+            "PUT",
+            f"/api/task/internal/{task_id}/complete",
+            json={"moduleData": module_data},
+        )
+
+    def get_stuck_tasks(self) -> list:
+        """获取所有卡死任务（task_status=1，resource_status=1）"""
+        try:
+            result = self._request("GET", "/api/task/internal/stuck")
+            # _request 已经提取了 data 字段，result 就是列表
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            logger.warning("获取卡死任务失败: %s", e)
+            return []
+
     # ==================== 知识库管理 ====================
 
     def update_kb_status(self, kb_id: int, status: int, chunk_count: int = None, mineru_task_id: str = None, collection_name: str = None):

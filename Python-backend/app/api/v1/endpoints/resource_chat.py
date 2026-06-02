@@ -266,6 +266,17 @@ async def plan_chat(
                                                         json.dumps(module_data, ensure_ascii=False),
                                                         status=2,
                                                     )
+                                                    # 为该资源创建 task 记录并标记完成（resource_id 使用真实资源 ID）
+                                                    try:
+                                                        res_task = java_client.create_generation_task(
+                                                            plan_id=plan_id_int,
+                                                            resource_id=placeholder["id"],
+                                                            agent_chain="plan_chat",
+                                                        )
+                                                        if res_task and isinstance(res_task, dict):
+                                                            java_client.update_generation_task(res_task["id"], 2, update_resource_status=False)
+                                                    except Exception as e:
+                                                        logger.warning(f"[对话流] 创建资源 task 记录失败: {e}")
                                                     saved = {"id": placeholder["id"], "type": placeholder["type"], "title": mod.get("title", placeholder["title"])}
                                                     bg_state["generated_resource_info"].append(saved)
                                                     bg_state["saved_module_orders"].add(mod_order)
@@ -479,6 +490,15 @@ async def plan_chat(
                         "title": mod.get("title", f"模块 {idx + 1}"),
                     })
                     bs["saved_module_orders"].add(mod.get("module_order"))
+                    # 为该资源创建已完成的 task 记录
+                    try:
+                        res_task = java_client.create_generation_task(
+                            plan_id=plan_id_int, resource_id=rid, agent_chain="plan_chat",
+                        )
+                        if res_task and isinstance(res_task, dict):
+                            java_client.update_generation_task(res_task["id"], 2, update_resource_status=False)
+                    except Exception:
+                        pass
                 logger.info(f"[资源持久化] 保存 {len(new_modules)} 个新增模块")
 
         # 网络搜索资源（无 task_breakdown 流程）：直接从 module_list 保存
@@ -495,6 +515,14 @@ async def plan_chat(
                         "title": mod.get("title", f"模块 {idx + 1}"),
                     })
                     bs["saved_module_orders"].add(mod.get("module_order"))
+                    try:
+                        res_task = java_client.create_generation_task(
+                            plan_id=plan_id_int, resource_id=rid, agent_chain="plan_chat",
+                        )
+                        if res_task and isinstance(res_task, dict):
+                            java_client.update_generation_task(res_task["id"], 2, update_resource_status=False)
+                    except Exception:
+                        pass
                 logger.info(f"[资源持久化] 保存 {len(new_modules)} 个网络搜索资源")
 
         if bs["quiz_questions"] and plan_id_int:
@@ -505,6 +533,14 @@ async def plan_chat(
                     "type": "quiz",
                     "title": (bs["quiz_config"] or {}).get("title", "练习题"),
                 })
+                try:
+                    res_task = java_client.create_generation_task(
+                        plan_id=plan_id_int, resource_id=quiz_res_id, agent_chain="plan_chat",
+                    )
+                    if res_task and isinstance(res_task, dict):
+                        java_client.update_generation_task(res_task["id"], 2, update_resource_status=False)
+                except Exception:
+                    pass
 
         if bs["generated_resource_info"] and plan_id_int:
             summary = _build_resource_summary(bs["module_list"], bs["quiz_questions"], bs["orchestrated_content"])
@@ -1828,6 +1864,13 @@ def _create_placeholder_resources(plan_id: int, modules: list) -> dict:
                         "type": module_type,
                         "title": title,
                     }
+                    # 立即创建 task 记录（resource_id=真实资源ID），确保后端崩溃后前端能检测到卡死
+                    try:
+                        java_client.create_generation_task(
+                            plan_id=plan_id, resource_id=res_id, agent_chain="plan_chat",
+                        )
+                    except Exception as e:
+                        logger.warning(f"[占位资源] 创建 task 记录失败: {e}")
                     logger.info(f"[占位资源] 创建模块 {module_order} 占位记录，ID={res_id}")
             except Exception as e:
                 logger.warning(f"[占位资源] 创建模块 {module_order} 占位记录失败: {e}")
@@ -1915,6 +1958,14 @@ def _save_module_immediately(plan_id: int, module: dict) -> dict | None:
         )
         res_id = result.get("id") if isinstance(result, dict) else None
         if res_id:
+            try:
+                res_task = java_client.create_generation_task(
+                    plan_id=plan_id, resource_id=res_id, agent_chain="plan_chat",
+                )
+                if res_task and isinstance(res_task, dict):
+                    java_client.update_generation_task(res_task["id"], 2, update_resource_status=False)
+            except Exception:
+                pass
             return {"id": res_id, "type": module_type, "title": module.get("title", "")}
     except Exception as e:
         logger.warning(f"[即时保存] 保存模块失败: {e}")

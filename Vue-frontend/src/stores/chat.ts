@@ -246,6 +246,18 @@ export const useChatStore = defineStore('chat', () => {
       sessions.value = (res.data || []).filter(
         (s: any) => s.intentType !== 'chat' && !s.sessionId?.startsWith('tutor-')
       )
+
+      // 刷新后恢复活跃会话消息
+      if (activeSessionId.value && messages.value.length === 0) {
+        const match = sessions.value.find(s => s.sessionId === activeSessionId.value)
+        if (match) {
+          await selectSession(activeSessionId.value)
+        } else if (sessions.value.length > 0) {
+          await selectSession(sessions.value[0].sessionId)
+        }
+      } else if (!activeSessionId.value && sessions.value.length > 0) {
+        await selectSession(sessions.value[0].sessionId)
+      }
     } catch (e) {
       console.error('Failed to load sessions:', e)
     } finally {

@@ -27,6 +27,7 @@ public class StatsService {
     private final NoteMapper noteMapper;
     private final QuizRecordMapper quizRecordMapper;
     private final UserLearningProgressMapper progressMapper;
+    private final DailyStudyTimeMapper dailyStudyTimeMapper;
 
     public Map<String, Object> getDashboardStats(Long userId) {
         Map<String, Object> stats = new HashMap<>();
@@ -106,15 +107,15 @@ public class StatsService {
         }
         stats.put("totalResources", totalResources);
 
-        // 学习时长（从 user_learning_progress 累计）
+        // 学习时长（从 daily_study_time 累计）
         try {
-            List<UserLearningProgress> allProgress = progressMapper.selectList(
-                    new LambdaQueryWrapper<UserLearningProgress>()
-                            .eq(UserLearningProgress::getUserId, userId));
-            int progressTotalSeconds = allProgress.stream()
-                    .mapToInt(p -> p.getDurationSeconds() != null ? p.getDurationSeconds() : 0)
+            List<DailyStudyTime> allDaily = dailyStudyTimeMapper.selectList(
+                    new LambdaQueryWrapper<DailyStudyTime>()
+                            .eq(DailyStudyTime::getUserId, userId));
+            int dailyTotalSeconds = allDaily.stream()
+                    .mapToInt(d -> d.getDurationSeconds() != null ? d.getDurationSeconds() : 0)
                     .sum();
-            double totalStudyHours = progressTotalSeconds / 3600.0;
+            double totalStudyHours = dailyTotalSeconds / 3600.0;
             stats.put("totalStudyHours", Math.round(totalStudyHours * 10) / 10.0);
         } catch (Exception e) {
             log.error("获取学习时长失败", e);
@@ -132,18 +133,21 @@ public class StatsService {
         try {
             LocalDate today = LocalDate.now();
             LocalDate weekStart = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-            LocalDateTime weekStartTime = LocalDateTime.of(weekStart, LocalTime.MIN);
 
-            List<UserLearningProgress> weekProgress = progressMapper.selectList(
-                    new LambdaQueryWrapper<UserLearningProgress>()
-                            .eq(UserLearningProgress::getUserId, userId)
-                            .ge(UserLearningProgress::getLastAccessTime, weekStartTime));
+            List<DailyStudyTime> weekDaily = dailyStudyTimeMapper.selectList(
+                    new LambdaQueryWrapper<DailyStudyTime>()
+                            .eq(DailyStudyTime::getUserId, userId)
+                            .ge(DailyStudyTime::getStudyDate, weekStart));
+
+            Map<LocalDate, Integer> dailyMap = new HashMap<>();
+            for (DailyStudyTime d : weekDaily) {
+                dailyMap.put(d.getStudyDate(), d.getDurationSeconds());
+            }
 
             int[] dailySeconds = new int[7];
-            for (UserLearningProgress p : weekProgress) {
-                if (p.getLastAccessTime() == null || p.getDurationSeconds() == null) continue;
-                int dayIndex = p.getLastAccessTime().getDayOfWeek().getValue() - 1;
-                dailySeconds[dayIndex] += p.getDurationSeconds();
+            for (int i = 0; i < 7; i++) {
+                LocalDate date = weekStart.plusDays(i);
+                dailySeconds[i] = dailyMap.getOrDefault(date, 0);
             }
 
             String[] dayLabels = {"周一", "周二", "周三", "周四", "周五", "周六", "周日"};
@@ -170,6 +174,9 @@ public class StatsService {
         try {
             LocalDateTime thirtyDaysAgo = LocalDateTime.now().minusDays(30);
 
+            // 收集所有活动，带原始时间戳用于排序
+            List<Map<String, Object>> allActivities = new ArrayList<>();
+
             // 创建学习计划（最近 30 天）
             List<LearningPlan> recentPlans = planMapper.selectList(
                     new LambdaQueryWrapper<LearningPlan>()
@@ -181,8 +188,9 @@ public class StatsService {
                 Map<String, Object> act = new HashMap<>();
                 act.put("text", "创建了学习计划「" + plan.getTitle() + "」");
                 act.put("time", _formatTimeAgo(plan.getCreatedAt()));
+                act.put("ts", plan.getCreatedAt().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
                 act.put("color", "bg-blue-400");
-                recentActivity.add(act);
+                allActivities.add(act);
             }
 
             // 最近访问过的资源（有学习记录的）
@@ -203,7 +211,8 @@ public class StatsService {
                     act.put("color", "bg-blue-400");
                 }
                 act.put("time", _formatTimeAgo(p.getLastAccessTime()));
-                recentActivity.add(act);
+                act.put("ts", p.getLastAccessTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+                allActivities.add(act);
             }
 
             // 完成测验（最近 30 天，只选需要的列避免缺少列的问题）
@@ -222,18 +231,17 @@ public class StatsService {
                 Map<String, Object> act = new HashMap<>();
                 act.put("text", "完成了「" + title + "」测验");
                 act.put("time", _formatTimeAgo(q.getAnswerTime()));
+                act.put("ts", q.getAnswerTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
                 act.put("color", "bg-amber-400");
-                recentActivity.add(act);
+                allActivities.add(act);
             }
 
-            // 按时间倒序排列（最近的在前面）
-            recentActivity.sort((a, b) -> {
-                String ta = (String) a.get("time");
-                String tb = (String) b.get("time");
-                return tb.compareTo(ta);
-            });
-            if (recentActivity.size() > 5) {
-                recentActivity = new ArrayList<>(recentActivity.subList(0, 5));
+            // 按时间戳倒序排列（最近的在前面），取前 5 条
+            allActivities.sort((a, b) -> Long.compare((long) b.get("ts"), (long) a.get("ts")));
+            for (int i = 0; i < Math.min(5, allActivities.size()); i++) {
+                Map<String, Object> act = allActivities.get(i);
+                act.remove("ts");
+                recentActivity.add(act);
             }
         } catch (Exception e) {
             log.error("获取最近活动失败", e);

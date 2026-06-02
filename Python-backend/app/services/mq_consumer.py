@@ -10,6 +10,7 @@ import aio_pika
 from app.core.config import settings
 from app.graph.learning_graph import get_learning_graph
 from app.agents.schemas import AgentState, NODE_ANIMATION_SKILL_GENERATOR
+from app.schemas.sse_bridge import graph_step_to_sse
 from app.services.db.java_client import java_client
 
 logger = logging.getLogger("mq.consumer")
@@ -89,9 +90,69 @@ class MQConsumer:
             self._consumer_tag = await queue.consume(self._on_task)
             self._running = True
             logger.info("MQ 消费者已启动，监听队列: %s", self.QUEUE_GENERATION)
+
+            # 恢复上次崩溃遗留的卡死任务
+            await self._recover_stuck_tasks()
         except Exception as e:
             logger.warning("MQ 消费者启动失败（MQ 可能未就绪）: %s", e)
             self._running = False
+
+    async def _recover_stuck_tasks(self):
+        """启动时扫描卡死任务（task_status=1, resource_status=1），重新入队"""
+        import asyncio as _asyncio
+        try:
+            # 等待 Java 后端就绪
+            for attempt in range(3):
+                try:
+                    loop = _asyncio.get_event_loop()
+                    stuck_tasks = await loop.run_in_executor(None, java_client.get_stuck_tasks)
+                    break
+                except Exception as e:
+                    logger.warning("[恢复] Java 后端未就绪，重试 (%d/3): %s", attempt + 1, e)
+                    if attempt < 2:
+                        await _asyncio.sleep(3)
+                    else:
+                        logger.error("[恢复] Java 后端不可用，跳过恢复")
+                        return
+
+            logger.info("[恢复] 查询卡死任务结果: %d 条", len(stuck_tasks))
+            if not stuck_tasks:
+                return
+
+            for task in stuck_tasks:
+                task_id = task.get("id")
+                plan_id = task.get("planId")
+                resource_id = task.get("resourceId")
+                logger.info("[恢复] 处理任务: taskId=%s, planId=%s, resourceId=%s, retryCount=%s",
+                            task_id, plan_id, resource_id, task.get("retryCount", 0))
+                try:
+                    plan_info = java_client.get_plan(plan_id)
+                    user_id = plan_info.get("userId") if isinstance(plan_info, dict) else None
+                except Exception as e:
+                    logger.warning("[恢复] 获取计划信息失败: %s", e)
+                    user_id = None
+                if not all([task_id, plan_id, resource_id, user_id]):
+                    logger.warning("[恢复] 跳过不完整的任务: taskId=%s, userId=%s", task_id, user_id)
+                    continue
+                message = {
+                    "taskId": task_id,
+                    "planId": plan_id,
+                    "resourceId": resource_id,
+                    "userId": user_id,
+                    "agentChain": task.get("agentChain", "plan_chat"),
+                }
+                payload = json.dumps(message, ensure_ascii=False).encode("utf-8")
+                await self._channel.default_exchange.publish(
+                    aio_pika.Message(
+                        body=payload,
+                        delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                        content_type="application/json",
+                    ),
+                    routing_key=self.QUEUE_GENERATION,
+                )
+                logger.info("[恢复] 任务 %s 已重新入队 (resourceId=%s)", task_id, resource_id)
+        except Exception as e:
+            logger.error("[恢复] 扫描卡死任务失败: %s", e, exc_info=True)
 
     async def stop(self):
         """停止消费者"""
@@ -110,6 +171,13 @@ class MQConsumer:
 
     async def _on_task(self, message: aio_pika.IncomingMessage):
         """收到资源生成任务后的处理入口"""
+        # 记录投递次数（RabbitMQ header，首次为1）
+        delivery_count = 0
+        if message.headers:
+            x_death = message.headers.get("x-death")
+            if x_death and isinstance(x_death, list) and len(x_death) > 0:
+                delivery_count = x_death[0].get("count", 0)
+
         async with message.process():
             try:
                 body = json.loads(message.body.decode("utf-8"))
@@ -129,8 +197,8 @@ class MQConsumer:
 
             logger.info("─" * 60)
             logger.info("  [MQ 消费] 收到资源生成任务")
-            logger.info("    taskId=%s, planId=%s, resourceId=%s, userId=%s",
-                        task_id, plan_id, resource_id, user_id)
+            logger.info("    taskId=%s, planId=%s, resourceId=%s, userId=%s, deliveryCount=%s",
+                        task_id, plan_id, resource_id, user_id, delivery_count + 1)
             logger.info("─" * 60)
 
             if not all([task_id, plan_id, resource_id, user_id]):
@@ -147,6 +215,7 @@ class MQConsumer:
                 )
             except Exception as e:
                 logger.error("任务处理异常: %s", e, exc_info=True)
+                # 标记任务失败，Java 端会根据 retryCount 决定是否自动重试
                 await self._fail_task(int(task_id), int(user_id), str(e))
 
     async def _process_task(
@@ -177,7 +246,7 @@ class MQConsumer:
         logger.info("  [MQ 消费] 资源生成初始化:")
         logger.info("    计划: %s, 模块: %s, 类型: %s", plan_title, module_title, module_type)
 
-        # 2. 运行 LangGraph 工作流（非流式，收集完整结果）
+        # 2. 运行 LangGraph 工作流（流式，逐步收集结果）
         # 路由决策：quiz/类型资源/动画/通用资源
         is_type_resource = module_type in ("mindmap", "summary", "code")
         is_animation = module_type == "animation"
@@ -207,7 +276,7 @@ class MQConsumer:
             "next_node": next_node,
             "needs_human_confirm": False,
             "profile_update_needed": False,
-            "learning_goal": user_message,
+            "learning_goal": module_title,
             "task_breakdown": {
                 "modules": [{
                     "module_id": resource_id,
@@ -243,22 +312,40 @@ class MQConsumer:
             "background_generation": True,
         }
 
+        # 流式执行图工作流，逐步收集结果
+        orchestrated = {}
+        module_list = []
+        generated_content = None
+        quiz_questions = None
+        quiz_config = {}
+
         graph = get_learning_graph()
-        final_state = await graph.ainvoke(initial_state)
+        async for event in graph.astream(initial_state, stream_mode="updates"):
+            for node_name, node_output in event.items():
+                if node_output is None:
+                    continue
+                if isinstance(node_output, dict):
+                    if node_output.get("orchestrated_content"):
+                        orchestrated = node_output["orchestrated_content"]
+                    if node_output.get("module_list"):
+                        module_list = node_output["module_list"]
+                    if node_output.get("quiz_questions"):
+                        quiz_questions = node_output["quiz_questions"]
+                    if node_output.get("quiz_config"):
+                        quiz_config = node_output["quiz_config"]
+                    if node_output.get("generated_content"):
+                        generated_content = node_output["generated_content"]
+                # 记录进度日志
+                for sse_data in graph_step_to_sse(node_name, node_output):
+                    try:
+                        parsed = json.loads(sse_data.replace("data: ", "").strip())
+                        if parsed.get("type") == "progress":
+                            logger.info("  [MQ 消费] 进度: %s", parsed.get("content", ""))
+                    except Exception:
+                        pass
 
-        error = final_state.get("error")
-        if error:
-            raise Exception(f"工作流执行失败: {error}")
-
-        orchestrated = final_state.get("orchestrated_content") or {}
-        module_list = final_state.get("module_list", [])
-        generated_content = final_state.get("generated_content")
-        quiz_questions = final_state.get("quiz_questions")
-        quiz_config = final_state.get("quiz_config") or {}
-
-        # 3. 持久化到 Java 后端 + MQ
+        # 3. 持久化到 Java 后端（保留原始 title）
         if quiz_questions:
-            # quiz 资源：将题目列表存入 module_data.questions
             result_data = {
                 "title": quiz_config.get("title", module_title),
                 "description": quiz_config.get("description", resource_desc),
@@ -268,12 +355,11 @@ class MQConsumer:
             module_data_json = json.dumps(result_data, ensure_ascii=False)
             logger.info("  [MQ 消费] quiz 资源: %d 道题目", len(quiz_questions))
         elif generated_content and (is_type_resource or is_animation):
-            # 类型资源（mindmap/summary/code/animation）
             result_data = {
-                "title": generated_content.get("title", module_title),
-                "description": generated_content.get("description", resource_desc),
+                "title": module_title,
+                "description": resource_desc,
                 "content": generated_content.get("content", ""),
-                "module_title": generated_content.get("title", module_title),
+                "module_title": module_title,
             }
             if is_animation:
                 result_data["html"] = generated_content.get("html", generated_content.get("content", ""))
@@ -284,11 +370,12 @@ class MQConsumer:
         elif orchestrated or module_list:
             first_module = module_list[0] if module_list else {}
             result_data = {
-                "title": orchestrated.get("title") or first_module.get("title") or module_title,
-                "description": orchestrated.get("description") or first_module.get("description") or resource_desc,
+                "title": module_title,
+                "description": resource_desc,
                 "content": first_module.get("content", ""),
                 "modules": module_list or orchestrated.get("modules", []),
                 "summary": orchestrated.get("summary", ""),
+                "module_title": module_title,
             }
             images = first_module.get("images", [])
             if images:
@@ -297,10 +384,9 @@ class MQConsumer:
         else:
             raise Exception("工作流未生成有效内容")
 
-        # 通过 Java 内部 API 持久化资源内容并更新任务状态（内部触发 SSE 推送）
+        # 通过 Java 内部 API 原子性持久化资源内容并更新任务状态（同一事务，内部触发 SSE 推送）
         try:
-            java_client.update_resource_content(resource_id, module_data_json, 2)
-            java_client.update_generation_task(task_id, 2)
+            java_client.complete_generation_task(task_id, module_data_json)
             logger.info("  [MQ 消费] 资源内容已通过内部 API 持久化")
         except Exception as e:
             logger.error("  [MQ 消费] 内部 API 落库失败: %s", e)

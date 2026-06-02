@@ -21,6 +21,14 @@ export function getTaskStatus(taskId: number) {
   return request.get<any, { data: ResourceGenerationTask }>(`/task/${taskId}`)
 }
 
+export function getLatestTask(resourceId: number) {
+  return request.get<any, { data: ResourceGenerationTask | null }>(`/task/by-resource/${resourceId}`)
+}
+
+export function retryTask(taskId: number) {
+  return request.post<any, { data: null }>(`/task/${taskId}/retry`)
+}
+
 export function updateResourceContent(resourceId: number, moduleData: Record<string, any>, status: number) {
   return request.put<any, { data: null }>(`/resource/${resourceId}/content`, { moduleData, status })
 }

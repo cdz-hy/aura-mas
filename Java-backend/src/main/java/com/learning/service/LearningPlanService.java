@@ -77,8 +77,8 @@ public class LearningPlanService {
                 List<LearningResource> resources = resourceMap.getOrDefault(plan.getId(), Collections.emptyList());
                 if (resources.isEmpty()) {
                     plan.setDisplayStatus(0); // 待规划：没有资源
-                } else if (resources.stream().anyMatch(r -> r.getStatus() == null || r.getStatus() < 2)) {
-                    plan.setDisplayStatus(1); // 生成中：存在未完成的资源（status 0 或 1）
+                } else if (resources.stream().anyMatch(r -> r.getStatus() == null || r.getStatus() < 2 || r.getStatus() == 3)) {
+                    plan.setDisplayStatus(1); // 生成中：存在未完成或失败的资源（status 0、1 或 3）
                 } else {
                     plan.setDisplayStatus(4); // 已完成：所有资源 status >= 2
                 }

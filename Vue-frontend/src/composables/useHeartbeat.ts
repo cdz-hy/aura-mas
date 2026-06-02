@@ -46,6 +46,8 @@ export function useHeartbeat() {
     const elapsed = Math.round((now - lastTick) / 1000)
     if (elapsed <= 0) return
     lastTick = now
+    // 页面挂起（切后台/最小化/合盖）会导致 elapsed 异常大，丢弃
+    if (elapsed > 60) return
 
     request.post('/progress/heartbeat', null, {
       params: {
@@ -60,7 +62,7 @@ export function useHeartbeat() {
     if (!currentPlanId || !currentResourceId) return
     const now = Date.now()
     const elapsed = Math.round((now - lastTick) / 1000)
-    if (elapsed <= 0) return
+    if (elapsed <= 0 || elapsed > 60) return
     lastTick = now
 
     // Use fetch with keepalive for unload scenarios (supports auth header)
