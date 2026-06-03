@@ -436,14 +436,24 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
 
     logger.info(f"  [主控智能体] 处理完成")
 
+    final_goal = resolved_learning_goal or current_goal
     result = {
         "intent": intent,
         "next_node": next_node,
-        "current_step": f"主控智能体: 意图=[{intent}], 目标=[{(resolved_learning_goal or current_goal)[:40]}], {reasoning[:80]}",
+        "current_step": f"主控智能体: 意图=[{intent}], 目标=[{final_goal[:40]}], {reasoning[:80]}",
         "iteration_count": iteration + 1,
     }
+    if intent == "confirm":
+        result["task_breakdown_confirmed"] = True
+        result["human_feedback"] = None
+    if intent == "simple_qa":
+        result["task_breakdown"] = None
+        result["task_breakdown_confirmed"] = False
+        result["needs_human_confirm"] = False
+        result["human_feedback"] = None
     if resolved_learning_goal:
         result["learning_goal"] = resolved_learning_goal
+    result["_checkpoint_learning_goal"] = final_goal
     return result
 
 
@@ -452,15 +462,11 @@ def _route_by_intent(intent: str, state: AgentState) -> str:
     has_task_breakdown = state.get("task_breakdown") is not None
     needs_confirm = state.get("needs_human_confirm", False)
 
-    # 如果需要用户确认且用户已给出反馈
-    if needs_confirm and state.get("human_feedback"):
-        if has_task_breakdown:
-            logger.info(f"  [主控路由] 已有任务分解 + 用户反馈 -> RAG检索")
-            return NODE_RAG_RETRIEVER
-        logger.info(f"  [主控路由] 无任务分解 + 用户反馈 -> 任务分解")
-        return NODE_TASK_DECOMPOSER
+    if intent == "confirm":
+        logger.info(f"  [主控路由] LLM 识别为用户确认 -> RAG 检索")
+        return NODE_RAG_RETRIEVER
 
-    if intent == INTENT_GENERATE_RESOURCE:
+    elif intent == INTENT_GENERATE_RESOURCE:
         if has_task_breakdown and state.get("task_breakdown_confirmed"):
             logger.info(f"  [主控路由] 已确认分解 -> RAG检索")
             return NODE_RAG_RETRIEVER

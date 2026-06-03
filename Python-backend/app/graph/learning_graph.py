@@ -555,36 +555,28 @@ def build_learning_graph() -> StateGraph:
 
 def _human_confirm_node(state: AgentState) -> Dict[str, Any]:
     """人工确认节点 - 暂停图执行，等待用户确认或补充"""
-    task_breakdown = state.get("task_breakdown", {})
+    task_breakdown_confirmed = state.get("task_breakdown_confirmed", False)
     human_feedback = state.get("human_feedback")
 
     logger.info(f"  [人工确认节点] 开始处理")
-    logger.info(f"    有反馈: {'是' if human_feedback else '否'}")
+    logger.info(f"    确认状态: {task_breakdown_confirmed}, 反馈: {human_feedback[:50] if human_feedback else '无'}")
 
-    if human_feedback is not None:
-        feedback_lower = human_feedback.strip().lower()
-        confirm_keywords = ["确认", "可以", "没问题", "同意", "好的", "ok", "行", "嗯"]
-        is_confirm = any(kw in feedback_lower for kw in confirm_keywords)
-
-        if is_confirm:
-            logger.info(f"  [人工确认节点] 用户确认学习路径")
-            return {
-                "task_breakdown_confirmed": True,
-                "needs_human_confirm": False,
-                "human_feedback": None,  # 清除反馈，防止残留影响路由
-                "current_step": "用户已确认学习路径",
-            }
-        else:
-            logger.info(f"  [人工确认节点] 用户补充说明: {human_feedback[:80]}")
-            return {
-                "task_breakdown_confirmed": False,
-                "needs_human_confirm": False,
-                "current_step": f"用户补充说明: {human_feedback[:50]}",
-            }
+    if task_breakdown_confirmed:
+        logger.info(f"  [人工确认节点] 用户已确认学习路径")
+        return {
+            "needs_human_confirm": False,
+            "human_feedback": None,  # 清除反馈，防止残留影响路由
+            "current_step": "用户已确认学习路径",
+        }
+    elif human_feedback is not None:
+        logger.info(f"  [人工确认节点] 用户补充说明: {human_feedback[:80]}")
+        return {
+            "task_breakdown_confirmed": False,
+            "needs_human_confirm": False,
+            "current_step": f"用户补充说明: {human_feedback[:50]}",
+        }
 
     logger.info(f"  [人工确认节点] 等待用户确认，流程暂停")
-    # 注意：不返回 needs_human_confirm，避免 SSE bridge 兜底逻辑重复发送 need_confirmation
-    # task_decomposer_node 已发送过 confirm_needed，路由逻辑通过 state 中已有的值判断
     return {
         "current_step": "等待用户确认学习路径",
         "iteration_count": state.get("iteration_count", 0) + 1,

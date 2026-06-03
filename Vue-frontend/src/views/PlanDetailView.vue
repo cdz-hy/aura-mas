@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div>
   <div v-if="!plan" class="flex items-center justify-center h-64">
     <div class="text-center">

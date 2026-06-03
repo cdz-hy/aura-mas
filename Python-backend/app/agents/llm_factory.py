@@ -498,10 +498,11 @@ class MIMOClient:
         content = rest[1:]  # 跳过开头的 "
         new_buf = ""
         i = 0
+        esc = False
         while i < len(content):
             ch = content[i]
-            if field_escaped:
-                field_escaped = False
+            if esc:
+                esc = False
                 # 处理转义字符
                 if ch == 'n':
                     new_buf += '\n'
@@ -518,7 +519,7 @@ class MIMOClient:
                 i += 1
                 continue
             if ch == '\\':
-                field_escaped = True
+                esc = True
                 i += 1
                 continue
             if ch == '"':
@@ -530,9 +531,9 @@ class MIMOClient:
         # 只返回新增的文本
         if len(new_buf) > len(field_buf):
             delta = new_buf[len(field_buf):]
-            return (delta, True, field_escaped, new_buf)
+            return (delta, True, esc, new_buf)
 
-        return ("", in_field, field_escaped, field_buf)
+        return ("", in_field, esc, field_buf)
 
     @staticmethod
     def _fix_common_json_errors(s: str) -> str:

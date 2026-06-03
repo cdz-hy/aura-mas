@@ -13,6 +13,7 @@ from app.agents.search_utils import search_tavily, execute_searches
 from app.prompts import RESOURCE_GENERATOR_PROMPT, SEARCH_PLANNING_PROMPT
 from app.core.config import settings
 from app.utils.token_recorder import record_from_mimo
+from app.utils import stream_registry
 
 
 def _emit(state: dict, event_type: str, content: str):
@@ -253,8 +254,10 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
     task_breakdown = state.get("task_breakdown", {})
     user_profile = state.get("user_profile", {})
     rag_chunks = state.get("rag_context_chunks", [])
-    sse_callback = state.get("sse_callback")
-    placeholder_map = state.get("placeholder_resource_map", {})
+    session_id = state.get("session_id", "")
+    # 优先从 state 获取回调；回退到 stream_registry（checkpointer 序列化会丢失 callable）
+    sse_callback = state.get("sse_callback") or stream_registry.get_sse_callback(session_id)
+    placeholder_map = state.get("placeholder_resource_map") or stream_registry.get_placeholder_map(session_id)
 
     logger.info(f"{'='*60}")
     logger.info(f"  [资源生成智能体] 开始处理")
@@ -291,16 +294,24 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
 
     # 单模块场景：通过回调创建占位记录
     if not placeholder_map and target_modules:
-        create_placeholder_cb = state.get("create_placeholder_callback")
+        create_placeholder_cb = state.get("create_placeholder_callback") or stream_registry.get_create_placeholder_callback(session_id)
         if create_placeholder_cb:
             try:
                 placeholder_map = create_placeholder_cb(target_modules)
+                stream_registry.update_placeholder_map(session_id, placeholder_map)
             except Exception as e:
                 logger.warning(f"  [资源生成智能体] 创建占位资源失败: {e}")
 
     # 通知前端创建侧栏占位条目
     if placeholder_map:
+        logger.info(f"  [资源生成智能体] 发送 resource_stream_start，共 {len(placeholder_map)} 个占位")
         _emit(state, "resource_stream_start", json.dumps(list(placeholder_map.values()), ensure_ascii=False))
+        # 若 state 中无 sse_callback，直接通过 sse_callback 推送
+        if not state.get("sse_callback") and sse_callback:
+            try:
+                sse_callback(f'data: {json.dumps({"type": "resource_stream_start", "content": json.dumps(list(placeholder_map.values()), ensure_ascii=False)}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
 
     # ==================== 并行生成所有模块 ====================
     if len(target_modules) == 1:

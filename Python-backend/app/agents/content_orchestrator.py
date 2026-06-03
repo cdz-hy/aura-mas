@@ -15,6 +15,7 @@ from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_content_orchestrator_llm
 from app.prompts import CONTENT_ORCHESTRATOR_BATCH_PROMPT, CONTENT_ORCHESTRATOR_PARALLEL_PROMPT
 from app.utils.token_recorder import record
+from app.utils import stream_registry
 
 VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap"}
 
@@ -245,10 +246,11 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     user_profile = state.get("user_profile", {})
     generated_content = state.get("generated_content")
     chat_history = state.get("chat_history", [])
-    
+    session_id = state.get("session_id", "")
+
     # 是否使用并行模式（默认开启）
     use_parallel = state.get("use_parallel_orchestration", True)
-    
+
     # 检查是否为重试模式（只重新生成指定模块）
     retry_mode = state.get("retry_mode", False)
     target_module_ids = state.get("target_module_ids", [])
@@ -294,8 +296,9 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             })
         
         # 并发重新生成未通过的模块
-        sse_cb = state.get("sse_callback")
-        placeholder_map = state.get("placeholder_resource_map", {})
+        # 优先从 state 获取回调；回退到 stream_registry（checkpointer 序列化会丢失 callable）
+        sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(session_id)
+        placeholder_map = state.get("placeholder_resource_map") or stream_registry.get_placeholder_map(session_id)
 
         try:
             tasks = []
@@ -428,21 +431,30 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     if use_parallel and modules:
         logger.info(f"  [内容编排智能体] 使用并行模式，共 {len(modules)} 个模块")
         _emit(state, "progress", f"正在并行编排 {len(modules)} 个学习模块...")
-        sse_cb = state.get("sse_callback")
-        placeholder_map = state.get("placeholder_resource_map", {})
+        # 优先从 state 获取回调；回退到 stream_registry（checkpointer 序列化会丢失 callable）
+        sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(session_id)
+        placeholder_map = state.get("placeholder_resource_map") or stream_registry.get_placeholder_map(session_id)
 
         # 单模块自动确认场景：placeholder_resource_map 为空，通过回调动态创建
         if not placeholder_map and modules:
-            create_placeholder_cb = state.get("create_placeholder_callback")
+            create_placeholder_cb = state.get("create_placeholder_callback") or stream_registry.get_create_placeholder_callback(session_id)
             if create_placeholder_cb:
                 try:
                     placeholder_map = create_placeholder_cb(modules)
+                    stream_registry.update_placeholder_map(session_id, placeholder_map)
                 except Exception as e:
                     logger.warning(f"  [内容编排智能体] 创建占位资源失败: {e}")
 
         # 通知前端创建侧栏占位条目
         if placeholder_map:
+            logger.info(f"  [内容编排智能体] 发送 resource_stream_start，共 {len(placeholder_map)} 个占位")
             _emit(state, "resource_stream_start", json.dumps(list(placeholder_map.values()), ensure_ascii=False))
+            # 若 state 中无 sse_callback，直接通过 sse_cb 推送（state._emit 依赖 state["sse_callback"]）
+            if not state.get("sse_callback") and sse_cb:
+                try:
+                    sse_cb(f'data: {json.dumps({"type": "resource_stream_start", "content": json.dumps(list(placeholder_map.values()), ensure_ascii=False)}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
 
         try:
             tasks = []

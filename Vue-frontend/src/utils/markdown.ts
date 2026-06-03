@@ -20,10 +20,14 @@ function protectLatex(md: string): { text: string; placeholders: Map<string, str
   }
 
   let text = md
-  // 保护 $$...$$ 块级公式（不匹配不完整的公式）
-  text = text.replace(/\$\$([^$]+?)\$\$/g, replacer)
-  // 保护 $...$ 行内公式（不匹配不完整的公式）
-  text = text.replace(/(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)/g, replacer)
+  // 1. 保护 $$...$$ 块级公式
+  text = text.replace(/\$\$([\s\S]+?)\$\$/g, replacer)
+  // 2. 保护 \[...\] 块级公式
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, replacer)
+  // 3. 保护 \(...\) 行内公式
+  text = text.replace(/\\\(([\s\S]+?)\\\)/g, replacer)
+  // 4. 保护 $...$ 行内公式
+  text = text.replace(/(?<!\$)\$(?!\$)([\s\S]+?)(?<!\$)\$(?!\$)/g, replacer)
 
   return { text, placeholders }
 }
@@ -31,8 +35,24 @@ function protectLatex(md: string): { text: string; placeholders: Map<string, str
 // 还原占位符为 KaTeX HTML
 function restoreLatex(html: string, placeholders: Map<string, string>): string {
   for (const [key, latex] of Array.from(placeholders.entries())) {
-    const isBlock = latex.startsWith('$$')
-    const content = isBlock ? latex.slice(2, -2).trim() : latex.slice(1, -1).trim()
+    let isBlock = false
+    let content = ''
+    if (latex.startsWith('$$')) {
+      isBlock = true
+      content = latex.slice(2, -2).trim()
+    } else if (latex.startsWith('\\[')) {
+      isBlock = true
+      content = latex.slice(2, -2).trim()
+    } else if (latex.startsWith('\\(')) {
+      isBlock = false
+      content = latex.slice(2, -2).trim()
+    } else if (latex.startsWith('$')) {
+      isBlock = false
+      content = latex.slice(1, -1).trim()
+    } else {
+      content = latex.trim()
+    }
+
     if (!content) continue
 
     try {
@@ -41,7 +61,17 @@ function restoreLatex(html: string, placeholders: Map<string, string>): string {
         throwOnError: false,
         trust: true,
       })
-      html = html.replace(key, rendered)
+      if (isBlock) {
+        // If the block placeholder is wrapped in a paragraph tag by marked, remove the wrapper
+        const pRegex = new RegExp(`<p>\\s*${key}\\s*</p>`, 'g')
+        if (pRegex.test(html)) {
+          html = html.replace(pRegex, rendered)
+        } else {
+          html = html.replace(key, rendered)
+        }
+      } else {
+        html = html.replace(key, rendered)
+      }
     } catch {
       // KaTeX 渲染失败，保留原始文本
       html = html.replace(key, `<code>${content}</code>`)
@@ -52,43 +82,107 @@ function restoreLatex(html: string, placeholders: Map<string, string>): string {
 
 // 处理流式输出中的不完整 LaTeX（等待更多内容）
 function stripIncompleteLatex(md: string): string {
-  // 移除不完整的 $$ 块级公式（没有闭合的）
-  const blockOpen = md.lastIndexOf('$$')
-  if (blockOpen !== -1) {
-    const after = md.slice(blockOpen + 2)
-    if (!after.includes('$$')) {
-      // 不完整的块级公式，截断到 $$ 之前
-      md = md.slice(0, blockOpen)
-    }
-  }
+  let i = 0
+  const len = md.length
 
-  // 移除不完整的 $ 行内公式（没有闭合的）
-  // 从后往前查找未闭合的 $
-  let lastDollar = -1
-  let inBlock = false
-  for (let i = 0; i < md.length; i++) {
+  let lastDoubleDollar = -1
+  let lastSingleDollar = -1
+  let lastBackslashSquare = -1
+  let lastBackslashRound = -1
+
+  let inDoubleDollar = false
+  let inSingleDollar = false
+  let inBackslashSquare = false
+  let inBackslashRound = false
+
+  while (i < len) {
+    if (md[i] === '\\') {
+      if (i + 1 < len) {
+        const next = md[i + 1]
+        if (next === '\\') {
+          // Escaped backslash, skip both
+          i += 2
+          continue
+        } else if (next === '$') {
+          // Escaped dollar, skip both
+          i += 2
+          continue
+        } else if (next === '[') {
+          if (!inDoubleDollar && !inSingleDollar && !inBackslashSquare && !inBackslashRound) {
+            inBackslashSquare = true
+            lastBackslashSquare = i
+          }
+          i += 2
+          continue
+        } else if (next === ']') {
+          if (inBackslashSquare) {
+            inBackslashSquare = false
+            lastBackslashSquare = -1
+          }
+          i += 2
+          continue
+        } else if (next === '(') {
+          if (!inDoubleDollar && !inSingleDollar && !inBackslashSquare && !inBackslashRound) {
+            inBackslashRound = true
+            lastBackslashRound = i
+          }
+          i += 2
+          continue
+        } else if (next === ')') {
+          if (inBackslashRound) {
+            inBackslashRound = false
+            lastBackslashRound = -1
+          }
+          i += 2
+          continue
+        }
+      }
+      i++
+      continue
+    }
+
     if (md[i] === '$') {
-      if (i + 1 < md.length && md[i + 1] === '$') {
-        inBlock = !inBlock
-        i++ // 跳过第二个 $
+      if (i + 1 < len && md[i + 1] === '$') {
+        if (!inSingleDollar && !inBackslashSquare && !inBackslashRound) {
+          if (inDoubleDollar) {
+            inDoubleDollar = false
+            lastDoubleDollar = -1
+          } else {
+            inDoubleDollar = true
+            lastDoubleDollar = i
+          }
+        }
+        i += 2
+        continue
+      } else {
+        if (!inDoubleDollar && !inBackslashSquare && !inBackslashRound) {
+          if (inSingleDollar) {
+            inSingleDollar = false
+            lastSingleDollar = -1
+          } else {
+            inSingleDollar = true
+            lastSingleDollar = i
+          }
+        }
+        i++
         continue
       }
-      if (!inBlock) {
-        lastDollar = i
-      }
     }
+
+    i++
   }
-  // 如果最后有一个未闭合的行内公式，截断
-  if (lastDollar !== -1) {
-    const before = md.slice(0, lastDollar)
-    const after = md.slice(lastDollar + 1)
-    // 检查是否有闭合的 $
-    if (!after.includes('$') || after.indexOf('$') === after.lastIndexOf('$')) {
-      // 可能不完整，检查是否在公式中间
-      const openCount = (before.match(/(?<!\$)\$(?!\$)/g) || []).length
-      if (openCount % 2 !== 0) {
-        md = md.slice(0, lastDollar)
-      }
+
+  const unclosedIndices = [
+    inDoubleDollar ? lastDoubleDollar : -1,
+    inSingleDollar ? lastSingleDollar : -1,
+    inBackslashSquare ? lastBackslashSquare : -1,
+    inBackslashRound ? lastBackslashRound : -1
+  ].filter(idx => idx !== -1)
+
+  if (unclosedIndices.length > 0) {
+    const truncateIndex = Math.min(...unclosedIndices)
+    if (truncateIndex !== -1) {
+      return md.substring(0, truncateIndex)
     }
   }
 
@@ -98,22 +192,21 @@ function stripIncompleteLatex(md: string): string {
 export function parseMarkdown(md: string): string {
   if (!md) return ''
 
-  // 兜底：将字面 \n（反斜杠+n，非实际换行）转为实际换行
-  // 处理数据库中因双重序列化导致的转义字符
-  let fixed = md.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
-
-  // 剥离流式输出中的不完整内容
-  let cleaned = stripIncompleteLatex(fixed)
+  // 1. 剥离流式输出中的不完整内容
+  const cleaned = stripIncompleteLatex(md)
   // Strip incomplete image markdown during streaming to prevent layout jumps
-  cleaned = cleaned.replace(/!\[[^\]]*\]\([^)]*$/, '')
+  const cleanedImage = cleaned.replace(/!\[[^\]]*\]\([^)]*$/, '')
 
-  // 保护 LaTeX 公式
-  const { text, placeholders } = protectLatex(cleaned)
+  // 2. 保护 LaTeX 公式（公式内部的内容包括 \n、\r、\t 等将保持原样，免受外部替换和 marked 影响）
+  const { text, placeholders } = protectLatex(cleanedImage)
 
-  // marked 解析
-  let html = marked.parse(text) as string
+  // 3. 兜底处理外围文本的转义字符：将字面 \n（反斜杠+n）转为实际换行
+  const fixed = text.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
 
-  // 还原 LaTeX 为 KaTeX HTML
+  // 4. marked 解析
+  let html = marked.parse(fixed) as string
+
+  // 5. 还原 LaTeX 为 KaTeX HTML
   if (placeholders.size > 0) {
     html = restoreLatex(html, placeholders)
   }
