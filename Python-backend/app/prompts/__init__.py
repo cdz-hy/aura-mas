@@ -13,6 +13,10 @@ from app.prompts.resource_generator import (
     RESOURCE_GENERATOR_PROMPT,
     SEARCH_PLANNING_PROMPT,
 )
+from app.prompts.enhanced_search_prompts import (
+    REACT_SEARCH_SYSTEM_PROMPT,
+    CONTENT_GENERATION_WITH_SOURCES_PROMPT,
+)
 from app.prompts.resource_type_generator import (
     RESOURCE_TYPE_GENERATOR_PROMPTS,
     RESOURCE_TYPE_GENERATOR_DEFAULT_PROMPT,

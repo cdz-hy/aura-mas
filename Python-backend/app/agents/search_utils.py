@@ -3,10 +3,51 @@
 """
 import logging
 import concurrent.futures
+import requests
 from typing import Dict, List
 from app.core.config import settings
 
 logger = logging.getLogger("agents.search_utils")
+
+
+def validate_image_url(url: str, timeout: int = 3) -> bool:
+    """验证图片 URL 是否有效"""
+    try:
+        response = requests.head(
+            url,
+            timeout=timeout,
+            allow_redirects=True,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        )
+        if response.status_code != 200:
+            return False
+        content_type = response.headers.get('Content-Type', '').lower()
+        return any(img_type in content_type for img_type in ['image/', 'jpeg', 'png', 'gif', 'webp', 'svg'])
+    except Exception:
+        return False
+
+
+def batch_validate_images(images: List[Dict[str, str]], max_workers: int = 5) -> List[Dict[str, str]]:
+    """批量验证图片 URL，过滤掉无效的"""
+    if not images:
+        return []
+
+    valid_images = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_image = {
+            executor.submit(validate_image_url, img.get("url", "")): img
+            for img in images if img.get("url")
+        }
+        for future in concurrent.futures.as_completed(future_to_image):
+            img = future_to_image[future]
+            try:
+                if future.result(timeout=5):
+                    valid_images.append(img)
+            except Exception:
+                pass
+
+    logger.info(f"  [ImageValidation] {len(valid_images)}/{len(images)} images valid")
+    return valid_images
 
 
 def search_tavily(query: str, max_results: int = 5) -> tuple:
@@ -45,7 +86,12 @@ def search_tavily(query: str, max_results: int = 5) -> tuple:
                 if img_url and img_url not in seen_img_urls:
                     seen_img_urls.add(img_url)
                     images.append({"url": img_url, "description": img_desc})
-        logger.info(f"  [Tavily] '{query}' -> {len(results)} 条文本, {len(images)} 张图片")
+
+        # 验证图片 URL 有效性（过滤 404）
+        if images:
+            images = batch_validate_images(images, max_workers=5)
+
+        logger.info(f"  [Tavily] '{query}' -> {len(results)} 条文本, {len(images)} 张图片 (已验证)")
         return results, images
     except Exception as e:
         logger.warning(f"  [Tavily] 搜索失败 '{query}': {str(e)[:120]}")
