@@ -68,9 +68,20 @@ public class NoteController {
     }
 
     @Operation(summary = "关联笔记与资源")
-    @PostMapping("/link-resource")
-    public Result<Void> linkResource(@RequestBody Map<String, Long> body) {
-        noteService.linkResource(body.get("noteId"), body.get("resourceId"));
+    @PostMapping("/{noteId}/link-resource")
+    public Result<Void> linkResource(Authentication authentication,
+                                      @PathVariable Long noteId,
+                                      @RequestBody Map<String, Object> body) {
+        Long userId = (Long) authentication.getPrincipal();
+        noteService.getNoteById(noteId, userId); // 校验笔记所有权
+        Object resourceObj = body.get("resourceId");
+        if (resourceObj == null) {
+            return Result.error(400, "resourceId 不能为空");
+        }
+        Long resourceId = Long.valueOf(resourceObj.toString());
+        String selectedText = body.get("selectedText") != null ? body.get("selectedText").toString() : null;
+        String positionInfo = body.get("positionInfo") != null ? body.get("positionInfo").toString() : null;
+        noteService.linkResource(noteId, resourceId, selectedText, positionInfo);
         return Result.success();
     }
 
@@ -85,5 +96,11 @@ public class NoteController {
     @GetMapping("/{noteId}/resources")
     public Result<List<NoteResourceRel>> getNoteResources(@PathVariable Long noteId) {
         return Result.success(noteService.getNoteResourceRels(noteId));
+    }
+
+    @Operation(summary = "内部接口：获取笔记内容")
+    @GetMapping("/internal/{noteId}")
+    public Result<Note> getNoteInternal(@PathVariable Long noteId) {
+        return Result.success(noteService.getNoteById(noteId));
     }
 }

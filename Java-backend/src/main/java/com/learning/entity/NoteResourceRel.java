@@ -13,4 +13,8 @@ public class NoteResourceRel {
     private Long noteId;
 
     private Long resourceId;
+
+    private String selectedText;
+
+    private String positionInfo;
 }

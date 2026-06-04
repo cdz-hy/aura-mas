@@ -169,6 +169,8 @@
         <div
           class="flex-1 overflow-y-auto"
           :class="selectedResource.moduleType === 'animation' ? 'resource-content--animation' : 'p-4'"
+          @mouseup="onResourceMouseUp"
+          @click="onResourceClick"
         >
           <!-- 题目类型 -->
           <template v-if="selectedResource.moduleType === 'quiz'">
@@ -328,6 +330,47 @@
       @open-resource="openResourceById"
     />
   </div>
+
+  <!-- Selection popup -->
+  <Teleport to="body">
+    <div
+      v-if="selectionPopup.show"
+      class="selection-popup"
+      :style="{ left: selectionPopup.x + 'px', top: selectionPopup.y + 'px' }"
+    >
+      <div class="selection-popup-inner">
+        <button class="selection-popup-btn" @click="addToNewNote">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
+            <line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" />
+          </svg>
+          新建笔记
+        </button>
+        <button class="selection-popup-btn" @click="toggleNoteList">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
+            <line x1="8" y1="13" x2="16" y2="13" /><line x1="8" y1="17" x2="16" y2="17" />
+          </svg>
+          追加到笔记
+        </button>
+      </div>
+      <!-- Note list for append -->
+      <div v-if="showNoteList" class="selection-note-list">
+        <div
+          v-for="note in availableNotes"
+          :key="note.id"
+          class="selection-note-item"
+          @click="appendToExistingNote(note)"
+        >
+          <p class="text-sm font-medium text-navy-700 truncate">{{ note.noteName || '无标题笔记' }}</p>
+          <p class="text-xs text-navy-400 truncate">{{ (note.content || '').substring(0, 50) }}</p>
+        </div>
+        <div v-if="availableNotes.length === 0" class="px-3 py-2 text-xs text-navy-300 text-center">
+          暂无笔记
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </div>
 </template>
 
@@ -337,6 +380,7 @@ import { useRoute } from 'vue-router'
 import { getPlan, updatePlan } from '@/api/plan'
 import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi } from '@/api/resource'
 import { parseMarkdown } from '@/utils/markdown'
+import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
 import { issueTicket } from '@/api/auth'
 import { useChatStore } from '@/stores/chat'
@@ -346,6 +390,7 @@ import QuizPlayer from '@/components/resource/QuizPlayer.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
 import type { LearningPlan, LearningResource } from '@/types/plan'
+import type { Note } from '@/types/note'
 import type { GeneratedResourceRef } from '@/utils/sse'
 import type { QuizData, QuizQuestion } from '@/types/quiz'
 import type { MindElixirData } from 'mind-elixir'
@@ -363,6 +408,306 @@ const planChatPanelRef = ref<InstanceType<typeof PlanChatPanel> | null>(null)
 
 // ==================== 学习时长心跳 ====================
 const heartbeat = useHeartbeat()
+
+// ==================== 资源选中提取笔记 ====================
+const selectionPopup = ref({
+  show: false,
+  x: 0,
+  y: 0,
+  text: '',
+  planId: 0,
+  resourceId: 0,
+  resourceTitle: '',
+  moduleName: '',
+  mode: 'selection' as 'selection' | 'heading',
+})
+const showNoteList = ref(false)
+const availableNotes = ref<Note[]>([])
+const highlightedEls: HTMLElement[] = []
+
+function clearHighlight() {
+  highlightedEls.forEach(el => el.classList.remove('heading-highlight'))
+  highlightedEls.length = 0
+}
+
+function getHeadingRangeElements(headingEl: HTMLElement): HTMLElement[] {
+  const headingLevel = parseInt(headingEl.tagName.charAt(1))
+  const els: HTMLElement[] = [headingEl]
+  let sibling = headingEl.nextElementSibling as HTMLElement | null
+  while (sibling) {
+    if (/^H[1-6]$/.test(sibling.tagName)) {
+      const siblingLevel = parseInt(sibling.tagName.charAt(1))
+      if (siblingLevel <= headingLevel) break
+    }
+    els.push(sibling)
+    sibling = sibling.nextElementSibling as HTMLElement | null
+  }
+  return els
+}
+
+function clampPopupPos(x: number, y: number): { x: number; y: number } {
+  const popupW = 260
+  const popupH = 80
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  return {
+    x: Math.max(8, Math.min(x, vw - popupW - 8)),
+    y: Math.max(8, Math.min(y, vh - popupH - 8)),
+  }
+}
+
+function onResourceMouseUp(e: MouseEvent) {
+  const selection = window.getSelection()
+  const range = selection?.rangeCount > 0 ? selection.getRangeAt(0) : null
+  if (!range || range.collapsed) {
+    if (!showNoteList.value) { clearHighlight(); selectionPopup.value.show = false }
+    return
+  }
+
+  // 用 DOM 遍历提取文本+图片（markdown 格式）
+  const content = extractRangeContent(range)
+  const hasImages = content.includes('![')
+  const hasText = content.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim().length >= 10
+
+  if (!hasText && !hasImages) {
+    if (!showNoteList.value) selectionPopup.value.show = false
+    return
+  }
+
+  const rect = range.getBoundingClientRect()
+  const pos = clampPopupPos(rect.right + 8, rect.top - 10)
+  const res = selectedResource.value
+  const currentModule = modules.value.find(m => m.resources.some(r => r.id === res?.id))
+
+  selectionPopup.value = {
+    show: true,
+    x: pos.x,
+    y: pos.y,
+    text: content,
+    planId: planId.value,
+    resourceId: res?.id || 0,
+    resourceTitle: res?.moduleData?.title || '学习资源',
+    moduleName: currentModule?.title || '',
+    mode: 'selection',
+  }
+  showNoteList.value = false
+}
+
+function onResourceClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (!/^H[1-3]$/.test(target.tagName)) return
+  // Don't trigger heading extraction if user just selected text
+  const selection = window.getSelection()
+  if (selection && selection.toString().trim().length > 0) return
+
+  const content = extractHeadingContentMd(target)
+  const hasImages = content.includes('![')
+  const hasText = content.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim().length >= 10
+  if (!hasText && !hasImages) return
+
+  // Highlight heading + content range
+  clearHighlight()
+  const els = getHeadingRangeElements(target)
+  els.forEach(el => {
+    el.classList.add('heading-highlight')
+    highlightedEls.push(el)
+  })
+
+  const rect = target.getBoundingClientRect()
+  const pos = clampPopupPos(rect.right + 8, rect.top)
+  const res = selectedResource.value
+  const currentModule = modules.value.find(m => m.resources.some(r => r.id === res?.id))
+
+  selectionPopup.value = {
+    show: true,
+    x: pos.x,
+    y: pos.y,
+    text: content,
+    planId: planId.value,
+    resourceId: res?.id || 0,
+    resourceTitle: res?.moduleData?.title || '学习资源',
+    moduleName: currentModule?.title || '',
+    mode: 'heading',
+  }
+  showNoteList.value = false
+}
+
+function extractHeadingContentMd(headingEl: HTMLElement): string {
+  const headingLevel = parseInt(headingEl.tagName.charAt(1))
+  const parts: string[] = []
+  // 标题自身
+  const headingText = headingEl.textContent?.trim()
+  if (headingText) parts.push(headingText)
+  // 遍历后续兄弟节点
+  let sibling = headingEl.nextElementSibling
+  while (sibling) {
+    if (/^H[1-6]$/.test(sibling.tagName)) {
+      const siblingLevel = parseInt(sibling.tagName.charAt(1))
+      if (siblingLevel <= headingLevel) break
+    }
+    // 提取图片
+    const imgs = sibling.querySelectorAll('img')
+    imgs.forEach(img => {
+      const src = img.getAttribute('src')
+      if (src) {
+        const alt = img.getAttribute('alt') || ''
+        parts.push(`![${alt}](${src})`)
+      }
+    })
+    // 提取文本（去掉 img alt 文本避免重复）
+    const clone = sibling.cloneNode(true) as HTMLElement
+    clone.querySelectorAll('img').forEach(img => img.remove())
+    const text = clone.textContent?.trim()
+    if (text) parts.push(text)
+    sibling = sibling.nextElementSibling
+  }
+  return parts.join('\n').trim()
+}
+
+function extractRangeContent(range: Range): string {
+  const BLOCK_TAGS = new Set(['P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'TR', 'SECTION', 'ARTICLE'])
+  const parts: string[] = []
+
+  // 获取选区内的文档片段
+  const fragment = range.cloneContents()
+
+  // 递归遍历节点
+  function walk(node: Node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const t = node.textContent || ''
+      if (t.trim()) parts.push(t)
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+    const el = node as HTMLElement
+
+    // img 标签
+    if (el.tagName === 'IMG') {
+      const src = el.getAttribute('src')
+      if (src) {
+        parts.push(`\n![${el.getAttribute('alt') || ''}](${src})\n`)
+      }
+      return
+    }
+
+    // br
+    if (el.tagName === 'BR') {
+      parts.push('\n')
+      return
+    }
+
+    // 块级元素：前后加换行
+    const isBlock = BLOCK_TAGS.has(el.tagName)
+    if (isBlock) parts.push('\n')
+
+    // 递归子节点
+    el.childNodes.forEach(child => walk(child))
+
+    if (isBlock) parts.push('\n')
+  }
+
+  fragment.childNodes.forEach(child => walk(child))
+
+  // 清理：合并连续空行，trim
+  return parts.join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function formatNoteContent(text: string): string {
+  const p = selectionPopup.value
+  const label = p.moduleName
+    ? `来自「${p.moduleName}」模块 · ${p.resourceTitle}`
+    : `来自《${p.resourceTitle}》`
+  const link = p.planId && p.resourceId
+    ? `[${label}](/plan/${p.planId}?resource=${p.resourceId})`
+    : label
+  return `> ${text.replace(/\n/g, '\n> ')}\n——${link}`
+}
+
+function buildPositionInfo(): string {
+  const p = selectionPopup.value
+  // 去掉图片 markdown，只保留纯文本用于定位
+  const plainText = p.text.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim()
+  if (p.mode === 'heading') {
+    const firstLine = plainText.split('\n')[0].trim().substring(0, 80)
+    return `heading:${firstLine}`
+  }
+  const snippet = plainText.substring(0, 50).replace(/\n/g, ' ').trim()
+  return `selection:${snippet}`
+}
+
+async function addToNewNote() {
+  const text = selectionPopup.value.text
+  clearHighlight()
+  selectionPopup.value.show = false
+  showNoteList.value = false
+  if (!text) return
+
+  try {
+    const noteName = `摘录 - ${selectionPopup.value.resourceTitle}`
+    const content = formatNoteContent(text)
+    const res = await createNote({ noteName, content })
+    const noteId = (res as any)?.data?.id
+    if (noteId && selectionPopup.value.resourceId) {
+      await linkNoteToResource(noteId, {
+        resourceId: selectionPopup.value.resourceId,
+        selectedText: text.substring(0, 5000),
+        positionInfo: buildPositionInfo(),
+      }).catch(() => {})
+    }
+  } catch (e) {
+    console.error('Failed to create note from selection:', e)
+  }
+}
+
+async function loadAvailableNotes() {
+  try {
+    const res = await getNotes({ page: 1, size: 20 })
+    availableNotes.value = res.data?.records || []
+  } catch {
+    availableNotes.value = []
+  }
+}
+
+function toggleNoteList() {
+  if (!showNoteList.value) {
+    loadAvailableNotes()
+  }
+  showNoteList.value = !showNoteList.value
+}
+
+async function appendToExistingNote(note: Note) {
+  const text = selectionPopup.value.text
+  clearHighlight()
+  selectionPopup.value.show = false
+  showNoteList.value = false
+  if (!text) return
+
+  try {
+    const existing = note.content || ''
+    const newContent = existing + '\n\n' + formatNoteContent(text)
+    await updateNote(note.id, { noteName: note.noteName, content: newContent })
+    if (selectionPopup.value.resourceId) {
+      await linkNoteToResource(note.id, {
+        resourceId: selectionPopup.value.resourceId,
+        selectedText: text.substring(0, 5000),
+        positionInfo: buildPositionInfo(),
+      }).catch(() => {})
+    }
+  } catch (e) {
+    console.error('Failed to append to note:', e)
+  }
+}
+
+function onDocumentMouseDown(e: MouseEvent) {
+  const popup = document.querySelector('.selection-popup')
+  if (popup && !popup.contains(e.target as Node)) {
+    clearHighlight()
+    selectionPopup.value.show = false
+    showNoteList.value = false
+  }
+}
 
 // ==================== 面板拖拽调整 ====================
 const panelWidth = ref(400)
@@ -473,6 +818,7 @@ onUnmounted(() => {
   }
   document.removeEventListener('mousemove', onDividerMouseMove)
   document.removeEventListener('mouseup', onDividerMouseUp)
+  document.removeEventListener('mousedown', onDocumentMouseDown)
 })
 
 // ==================== 状态 ====================
@@ -537,9 +883,18 @@ async function loadResources() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadPlan()
-  loadResources()
+  await loadResources()
+  document.addEventListener('mousedown', onDocumentMouseDown)
+  // 支持 ?resource=xxx 跳转自动打开对应资源
+  const queryResource = route.query.resource
+  if (queryResource) {
+    const resId = Number(queryResource)
+    if (resId > 0) {
+      openResourceById(resId)
+    }
+  }
 })
 
 watch(planId, () => {
@@ -554,6 +909,13 @@ watch(planId, () => {
     mindmapData.value = null
     gradingResult.value = null
     quizSubmittedAnswers.value = null
+  }
+})
+
+// 监听 ?resource= 查询参数变化（同 plan 内跳转不同资源）
+watch(() => route.query.resource, (resId) => {
+  if (resId && resources.value.length > 0) {
+    openResourceById(Number(resId))
   }
 })
 
@@ -1550,5 +1912,104 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
   border: 0;
   background: #050505;
   display: block;
+}
+</style>
+
+<style>
+/* Selection popup styles (not scoped — teleported to body) */
+.selection-popup {
+  position: fixed;
+  z-index: 1200;
+  animation: selectionPopupFade 0.15s ease;
+}
+
+.selection-popup-inner {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: white;
+  border: 1px solid rgba(26, 40, 71, 0.1);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.selection-popup-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #273c6b;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+
+.selection-popup-btn:hover {
+  background: #f0f3f9;
+}
+
+.selection-note-list {
+  margin-top: 4px;
+  background: white;
+  border: 1px solid rgba(26, 40, 71, 0.1);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.selection-note-item {
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.selection-note-item:hover {
+  background: #f0f3f9;
+}
+
+/* Heading hover hint */
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  cursor: pointer;
+  position: relative;
+  transition: color 0.15s;
+}
+
+.markdown-body h1:hover,
+.markdown-body h2:hover,
+.markdown-body h3:hover {
+  color: #4164b2;
+}
+
+.markdown-body h1:hover::after,
+.markdown-body h2:hover::after,
+.markdown-body h3:hover::after {
+  content: '  ';
+  font-size: 12px;
+  margin-left: 8px;
+  opacity: 0.6;
+}
+
+@keyframes selectionPopupFade {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.heading-highlight {
+  background: rgba(124, 156, 135, 0.1);
+  border-left: 3px solid rgba(124, 156, 135, 0.6);
+  border-radius: 4px;
+  padding-left: 10px;
+  margin-left: -13px;
+  transition: background 0.2s, border-color 0.2s;
 }
 </style>

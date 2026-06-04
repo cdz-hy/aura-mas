@@ -5,6 +5,10 @@ export function createNote(data: NoteCreateRequest) {
   return request.post<any, { data: Note }>('/note', data)
 }
 
+export function getNoteById(noteId: number) {
+  return request.get<any, { data: Note }>(`/note/${noteId}`)
+}
+
 export function getNotes(params: { planId?: number; page?: number; size?: number }) {
   return request.get<any, { data: { records: Note[]; total: number } }>('/note/list', { params })
 }
