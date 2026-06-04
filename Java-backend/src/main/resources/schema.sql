@@ -131,10 +131,33 @@ CREATE TABLE IF NOT EXISTS `note_resource_rel` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `note_id` BIGINT UNSIGNED NOT NULL,
     `resource_id` BIGINT UNSIGNED NOT NULL,
+    `selected_text` TEXT DEFAULT NULL COMMENT '选中的原文',
+    `position_info` VARCHAR(255) DEFAULT NULL COMMENT '选区位置信息',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_note_resource` (`note_id`, `resource_id`),
     KEY `idx_resource_id` (`resource_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='笔记学习资源关联表';
+
+-- 如果表已存在，执行以下 ALTER 语句：
+-- ALTER TABLE note_resource_rel ADD COLUMN selected_text TEXT DEFAULT NULL COMMENT '选中的原文';
+-- ALTER TABLE note_resource_rel ADD COLUMN position_info VARCHAR(255) DEFAULT NULL COMMENT '选区位置信息';
+
+CREATE TABLE IF NOT EXISTS `flashcard` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `note_id` BIGINT UNSIGNED NOT NULL COMMENT '所属笔记ID',
+    `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
+    `question` TEXT NOT NULL COMMENT '问题（正面）',
+    `answer` TEXT NOT NULL COMMENT '答案（背面）',
+    `difficulty` TINYINT DEFAULT 1 COMMENT '初始难度 1-简单 2-中等 3-困难',
+    `ease_factor` DOUBLE DEFAULT 2.5 COMMENT 'SM-2 简易因子',
+    `review_interval` INT DEFAULT 0 COMMENT '当前复习间隔（天）',
+    `review_count` INT DEFAULT 0 COMMENT '已复习次数',
+    `next_review_at` DATETIME DEFAULT NULL COMMENT '下次复习时间',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_note_id` (`note_id`),
+    KEY `idx_user_next_review` (`user_id`, `next_review_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='闪卡表';
 
 CREATE TABLE IF NOT EXISTS `knowledge_base` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
