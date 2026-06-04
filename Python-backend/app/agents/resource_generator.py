@@ -1,6 +1,6 @@
 """
-多模态资源自主生成智能体 - 结合 Tavily 网络搜索自主生成高质量学习内容
-支持并行生成多个模块
+多模态资源自主生成智能体 - 结合增强版 ReAct 搜索循环自主生成高质量学习内容
+支持并行生成多个模块，支持自主搜索和网页提取
 """
 import logging
 import json
@@ -9,8 +9,15 @@ import concurrent.futures
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_resource_generator_llm
-from app.agents.search_utils import search_tavily, execute_searches
-from app.prompts import RESOURCE_GENERATOR_PROMPT, SEARCH_PLANNING_PROMPT
+from app.agents.enhanced_search import (
+    SearchHistoryTracker,
+    execute_actions_parallel,
+    format_action_results_for_llm
+)
+from app.prompts.enhanced_search_prompts import (
+    REACT_SEARCH_SYSTEM_PROMPT,
+    CONTENT_GENERATION_WITH_SOURCES_PROMPT
+)
 from app.core.config import settings
 from app.utils.token_recorder import record_from_mimo
 from app.utils import stream_registry
@@ -28,35 +35,8 @@ def _emit(state: dict, event_type: str, content: str):
 logger = logging.getLogger("agents.resource_generator")
 
 
-def _format_search_results(results: List[Dict[str, str]]) -> str:
-    """格式化搜索结果为 LLM 可读文本（带编号，供正文引用）"""
-    lines = []
-    for i, r in enumerate(results):
-        title = r.get("title", "无标题")
-        snippet = r.get("snippet", "")
-        url = r.get("url", "")
-        line = f"[{i + 1}] {title}\n    {snippet}"
-        if url:
-            line += f"\n    来源: {url}"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def _format_image_results(images: List[Dict[str, str]], max_images: int = 6) -> str:
-    """格式化图片列表为 LLM 可读文本，供 LLM 选择最相关的嵌入正文"""
-    if not images:
-        return ""
-    lines = []
-    for i, img in enumerate(images[:max_images]):
-        desc = img.get("description", "") or "相关图片"
-        url = img.get("url", "")
-        if url:
-            lines.append(f"[img{i + 1}] {desc}\n    URL: {url}")
-    return "\n".join(lines)
-
-
 def _summarize_existing_results(results: List[Dict[str, str]], max_items: int = 15) -> str:
-    """简要摘要已有搜索结果，供 LLM 判断是否需要补充搜索"""
+    """简要摘要已有搜索结果（保留用于向后兼容，但 ReAct 模式下不再使用）"""
     if not results:
         return "暂无搜索结果"
     lines = []
@@ -111,92 +91,173 @@ def _generate_single_module(
         style_hints.append("按照步骤顺序逐步讲解")
     style_text = "用户偏好: " + "; ".join(style_hints) if style_hints else ""
 
-    # ==================== 多轮搜索 ====================
-    search_context = ""
-    search_result_count = 0
-    all_search_results: List[Dict[str, str]] = []
-    all_images: List[Dict[str, str]] = []
-    MAX_SEARCH_ROUNDS = 3
+    # ==================== ReAct 自主搜索循环 ====================
+    MAX_REACT_ROUNDS = 6  # 最多 6 轮 ReAct 循环
+    history_tracker = SearchHistoryTracker()
 
     try:
-        for round_num in range(1, MAX_SEARCH_ROUNDS + 1):
+        system_prompt = REACT_SEARCH_SYSTEM_PROMPT.format(max_rounds=MAX_REACT_ROUNDS)
+
+        for round_num in range(1, MAX_REACT_ROUNDS + 1):
+            logger.info(f"  [ReAct] 模块{module_order} - 第 {round_num} 轮思考")
+
+            # 构建本轮 prompt
             if round_num == 1:
-                context_prompt = f"学习主题: {topic}\n\n目标: {learning_goal}\n\n请规划首次搜索策略，输出 JSON:"
+                user_prompt = f"""## 研究任务
+学习主题: {topic}
+学习目标: {learning_goal}
+
+这是第 1 轮，请开始规划你的搜索策略。"""
             else:
-                prev_summary = f"已完成 {round_num - 1} 轮搜索，共 {len(all_search_results)} 条结果"
-                context_prompt = f"""学习主题: {topic}
-目标: {learning_goal}
+                history_summary = history_tracker.get_summary_for_llm(max_recent_snippets=15)
+                user_prompt = f"""## 研究任务
+学习主题: {topic}
+学习目标: {learning_goal}
 
-{prev_summary}
-{_summarize_existing_results(all_search_results, max_items=15)}
+{history_summary}
 
-请审视现有资料是否充分。如果还有信息缺口，规划补充搜索；如果充足，输出 decision=sufficient。输出 JSON:"""
+这是第 {round_num} 轮，请基于已有信息判断是否需要继续搜索。"""
 
-            plan_messages = [
-                {"role": "system", "content": SEARCH_PLANNING_PROMPT},
-                {"role": "user", "content": context_prompt}
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            plan_result = llm.chat_json(plan_messages, max_tokens=4096)
-            decision = plan_result.get("decision", "search")
 
-            if decision == "sufficient":
+            # LLM 思考并决策（使用 chat_json_stream 而非 chat_json，避免 response_format 兼容问题）
+            react_result = llm.chat_json_stream(messages, max_tokens=4096)
+            logger.debug(f"  [ReAct] LLM 原始返回: {str(react_result)[:300]}")
+
+            # 确保 react_result 是字典
+            if not isinstance(react_result, dict):
+                logger.warning(f"  [ReAct] LLM 返回非字典类型: {type(react_result)}，结束搜索")
                 break
 
-            searches = plan_result.get("searches", [])
-            if not searches:
+            thought = str(react_result.get("thought", ""))
+            decision = str(react_result.get("decision", "continue")).lower().strip()
+            actions = react_result.get("actions", [])
+
+            # 确保 actions 是列表
+            if not isinstance(actions, list):
+                actions = []
+
+            logger.info(f"  [ReAct] 思考: {thought[:100]}...")
+            logger.info(f"  [ReAct] 决策: {decision}, 动作数: {len(actions)}")
+
+            # 如果决定结束
+            if decision == "finish":
+                logger.info(f"  [ReAct] 模块{module_order} 自主决定搜索结束")
                 break
 
-            if searches and isinstance(searches[0], dict):
-                queries = [s.get("query", "") for s in searches if s.get("query")]
-            else:
-                queries = [q for q in searches if isinstance(q, str) and q]
-
-            if not queries:
+            # 如果没有动作，视为结束
+            if not actions:
+                logger.info(f"  [ReAct] 模块{module_order} 无动作，结束搜索")
                 break
 
-            round_results, round_images = execute_searches(queries)
+            # 验证动作格式
+            valid_actions = []
+            for action in actions:
+                if isinstance(action, dict):
+                    action_type = action.get("action", "")
+                    if action_type in ["search", "extract"]:
+                        valid_actions.append(action)
+            if not valid_actions:
+                logger.warning(f"  [ReAct] 无有效动作，结束搜索")
+                break
 
-            existing_urls = {r.get("url", "") for r in all_search_results}
-            new_items = [item for item in round_results if item.get("url", "") not in existing_urls]
-            all_search_results.extend(new_items)
+            # 并发执行所有有效动作
+            action_results = execute_actions_parallel(valid_actions)
 
-            existing_img_urls = {img.get("url", "") for img in all_images}
-            new_imgs = [img for img in round_images if img.get("url", "") not in existing_img_urls]
-            all_images.extend(new_imgs)
+            # 更新历史记录
+            for result in action_results:
+                action_type = result.get("action_type", "")
 
-        search_result_count = len(all_search_results)
-        if all_search_results:
-            search_context = _format_search_results(all_search_results)
-        logger.info(f"  [资源生成] 模块{module_order} 搜索完成: {search_result_count} 条结果")
+                if action_type == "search":
+                    query = result.get("query", "")
+                    results = result.get("results", [])
+                    images = result.get("images", [])
+                    if results or images:
+                        history_tracker.add_search_result(query, results, images)
+
+                elif action_type == "extract":
+                    url = result.get("url", "")
+                    title = result.get("title", "")
+                    content = result.get("content", "")
+                    success = result.get("success", False)
+                    if success and content:
+                        history_tracker.add_extracted_page(url, title, content)
+
+            # 格式化结果供 LLM 观察（实际不会再次调用，但记录日志）
+            observation = format_action_results_for_llm(action_results)
+            logger.debug(f"  [ReAct] 观察:\n{observation[:300]}...")
+
+        logger.info(f"  [资源生成] 模块{module_order} ReAct 搜索完成: {len(history_tracker.all_snippets)} 条片段, {len(history_tracker.extracted_pages)} 个完整网页")
 
     except Exception as e:
-        logger.warning(f"  [资源生成] 模块{module_order} 搜索异常: {str(e)[:120]}，降级为无搜索生成")
+        import traceback
+        logger.warning(f"  [资源生成] 模块{module_order} ReAct 搜索异常: {str(e)[:200]}，降级为无搜索生成")
+        logger.debug(f"  [资源生成] 异常详情:\n{traceback.format_exc()}")
 
     # ==================== 内容生成 ====================
-    if search_context:
-        image_context = _format_image_results(all_images, max_images=6)
-        image_section = ""
-        if image_context:
-            image_section = f"""
+    all_content = history_tracker.get_all_content_for_generation()
+    snippets = all_content["snippets"]
+    extracted_pages = all_content["extracted_pages"]
+    images = all_content["images"]
 
-## 可用图片（从中选择最多 3 张最相关的，用 ![描述](URL) 嵌入正文中对应段落旁）
-{image_context}"""
+    # 限制传给生成阶段的资源数量（模型上下文 128K，可容纳较丰富的内容）
+    MAX_SNIPPETS = 40      # 最多 35 条片段
+    MAX_PAGES = 5          # 最多 5 个完整网页
+    PAGE_PREVIEW = 4000    # 每个网页预览 2000 字
+    SNIPPET_TEXT_LEN = 500 # 每条片段摘要 300 字
+    MAX_IMAGES = 20        # 最多 20 张图片
 
-        gen_user_prompt = f"""请基于以下搜索结果生成学习内容（必须以搜索结果为主要依据，用自己的知识补充细节）。
+    # 如果有搜索结果，基于搜索结果生成
+    if snippets or extracted_pages:
+        # 格式化搜索片段（按 score 降序，取 top N）
+        sorted_snippets = sorted(snippets, key=lambda x: x.get("score", 0), reverse=True)[:MAX_SNIPPETS]
+        snippet_lines = []
+        for i, snippet in enumerate(sorted_snippets, 1):
+            title = snippet.get("title", "无标题")
+            text = (snippet.get("snippet", "") or "")[:SNIPPET_TEXT_LEN]
+            url = snippet.get("url", "")
+            snippet_lines.append(f"[{i}] {title}\n    {text}\n    URL: {url}")
+        snippet_context = "\n\n".join(snippet_lines) if snippet_lines else "（无搜索片段）"
 
+        # 格式化完整网页（取前 N 个）
+        page_lines = []
+        for i, (url, content) in enumerate(list(extracted_pages.items())[:MAX_PAGES], 1):
+            page_lines.append(f"[page{i}] {url} ({len(content)} 字)")
+            page_lines.append(f"{content[:PAGE_PREVIEW]}...")
+        page_context = "\n\n".join(page_lines) if page_lines else "（无完整网页）"
+
+        # 格式化图片
+        image_lines = []
+        for i, img in enumerate(images[:MAX_IMAGES], 1):
+            desc = img.get("description", "") or "相关图片"
+            url = img.get("url", "")
+            image_lines.append(f"[img{i}] {desc}\n    URL: {url}")
+        image_context = "\n\n".join(image_lines) if image_lines else "（无可用图片）"
+        logger.info(f"  [资源生成] 模块{module_order} 传递给生成: {len(sorted_snippets)}/{len(snippets)} 条片段, {min(len(extracted_pages), MAX_PAGES)}/{len(extracted_pages)} 个网页, {min(len(images), MAX_IMAGES)}/{len(images)} 张图片")
+
+        gen_user_prompt = f"""请基于以下搜索资源生成高质量学习内容。
+
+## 研究主题
 主题: {topic}
 学习目标: {learning_goal}
 {style_text}
 
-## 搜索结果（共 {len(all_search_results)} 条，请按编号 [1] [2] ... 在正文中引用）
-{search_context}{image_section}
+## 搜索结果片段（共 {len(sorted_snippets)} 条，按相关度排序）
+{snippet_context}
 
-## 生成要求
-1. 正文中必须用 [编号] 标注信息来源，例如："深度学习是机器学习的分支 [1]，其核心是神经网络 [2][3]"
-2. references 字段列出你实际引用的搜索结果编号和标题
-3. 如果搜索结果覆盖不足，可以用自己的知识补充，但需标注 "[综合知识]"
-4. 输出 JSON:"""
+## 提取的完整网页（共 {min(len(extracted_pages), MAX_PAGES)} 个）
+{page_context}
+
+## 可用图片（共 {min(len(images), MAX_IMAGES)} 张）
+{image_context}
+
+请生成完整的学习内容，输出 JSON。"""
+
     else:
+        # 降级：无搜索结果，基于 LLM 知识生成
         gen_user_prompt = f"""请生成以下主题的学习内容:
 
 主题: {topic}
@@ -206,7 +267,7 @@ def _generate_single_module(
 请基于你的知识生成详细的学习内容，输出 JSON:"""
 
     gen_messages = [
-        {"role": "system", "content": RESOURCE_GENERATOR_PROMPT},
+        {"role": "system", "content": CONTENT_GENERATION_WITH_SOURCES_PROMPT},
         {"role": "user", "content": gen_user_prompt}
     ]
 
@@ -218,12 +279,12 @@ def _generate_single_module(
                 except Exception:
                     pass
 
-        result = llm.chat_json_stream(gen_messages, on_chunk=_on_chunk, max_tokens=6144, stream_field="content")
+        result = llm.chat_json_stream(gen_messages, on_chunk=_on_chunk, max_tokens=8192, stream_field="content")
 
-        # 图片处理
+        # 图片处理（如果生成结果没有嵌入图片，附加在结果中）
         content_text = result.get("content", "")
-        if all_images and "![" not in content_text:
-            result["images"] = all_images[:3]
+        if images and "![" not in content_text:
+            result["images"] = images[:3]
 
         result["module_order"] = module_order
         result["module_id"] = module_info.get("module_id", module_order)
