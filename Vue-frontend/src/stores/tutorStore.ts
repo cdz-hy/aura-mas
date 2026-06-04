@@ -34,7 +34,6 @@ export const useTutorStore = defineStore('tutor', () => {
   const sessions = ref<TutorSession[]>([])
   const sessionsLoading = ref(false)
 
-  let sessionCounter = 0
   let isNewlyCreated = false
 
   // ─── Getters ───
@@ -60,8 +59,13 @@ export const useTutorStore = defineStore('tutor', () => {
   function _buildSessionId(): string {
     const authStore = useAuthStore()
     const userId = authStore.user?.id || 0
-    const base = `tutor-${contextPlanId.value}-${userId}`
-    return sessionCounter > 0 ? `${base}-${sessionCounter}` : base
+    let rand = ''
+    while (rand.length < 12) {
+      rand += Math.random().toString(36).slice(2)
+    }
+    rand = rand.slice(0, 12)
+    const id = `tutor-${contextPlanId.value}-${userId}-${rand}`
+    return id.slice(0, 36)
   }
 
   // Refresh session list metadata only (no message reload)
@@ -147,7 +151,6 @@ export const useTutorStore = defineStore('tutor', () => {
   function newSession() {
     closeConnection()
     messages.value = []
-    sessionCounter++
     _setActiveSession(_buildSessionId())
     isNewlyCreated = true
     // Refresh session list in background

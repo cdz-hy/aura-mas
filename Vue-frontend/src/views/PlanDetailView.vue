@@ -1,15 +1,15 @@
 <template>
-  <div>
-  <div v-if="!plan" class="flex items-center justify-center h-64">
-    <div class="text-center">
-      <svg class="w-12 h-12 mx-auto text-navy-200 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10" class="opacity-25" /><path d="M4 12a8 8 0 018-8" class="opacity-75" stroke-linecap="round" />
-      </svg>
-      <p class="mt-3 text-navy-400">加载中...</p>
+  <div class="h-full w-full flex flex-col overflow-hidden">
+    <div v-if="!plan" class="flex items-center justify-center h-full flex-1">
+      <div class="text-center">
+        <svg class="w-12 h-12 mx-auto text-navy-200 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10" class="opacity-25" /><path d="M4 12a8 8 0 018-8" class="opacity-75" stroke-linecap="round" />
+        </svg>
+        <p class="mt-3 text-navy-400">加载中...</p>
+      </div>
     </div>
-  </div>
 
-  <div v-else class="flex gap-0 h-[calc(100vh-12rem)]">
+    <div v-else class="flex gap-0 h-full w-full overflow-x-auto overflow-y-hidden flex-1 custom-scrollbar">
     <!-- ==================== 左侧栏：模块列表（可折叠） ==================== -->
     <div
       class="flex-shrink-0 flex flex-col card overflow-hidden transition-all duration-300 animate-fade-in-up"
@@ -139,9 +139,14 @@
 
     <!-- ==================== 中间栏：资源详情（始终在 DOM 中，width 过渡动画） ==================== -->
     <div
-      class="resource-panel flex flex-col card overflow-hidden mx-2"
-      :class="{ 'resource-panel--closed': !selectedResource && !showResourceStreamPreview, '!transition-none': isDragging }"
-      :style="panelStyle"
+      class="resource-panel flex flex-col card overflow-hidden"
+      :class="{
+        'resource-panel--closed': !selectedResource && !showResourceStreamPreview,
+        '!transition-none': isDragging,
+        'fixed inset-0 z-40 m-0 bg-white rounded-none border-none shadow-none': isFullscreen,
+        'mx-2': !isFullscreen
+      }"
+      :style="isFullscreen ? {} : panelStyle"
     >
       <template v-if="selectedResource">
         <!-- 标题栏 -->
@@ -154,15 +159,29 @@
               {{ selectedResource.moduleData?.title || '学习资源' }}
             </h3>
           </div>
-          <button
-            class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors flex-shrink-0"
-            @click="selectedResourceId = null; selectedResource = null; quizData = null; mindmapData = null; gradingResult = null; quizSubmittedAnswers = null; showExplanations = false"
-            title="关闭"
-          >
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
+          <div class="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
+              @click="isFullscreen = !isFullscreen"
+              :title="isFullscreen ? '退出全屏' : '全屏显示'"
+            >
+              <svg v-if="isFullscreen" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 14h6v6m10-6h-6v6M4 10h6V4m10 6h-6V4" />
+              </svg>
+              <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+              </svg>
+            </button>
+            <button
+              class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
+              @click="selectedResourceId = null; selectedResource = null; quizData = null; mindmapData = null; gradingResult = null; quizSubmittedAnswers = null; showExplanations = false; isFullscreen = false"
+              title="关闭"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <!-- 内容区 -->
@@ -264,7 +283,7 @@
 
           <!-- 动画类型 -->
           <template v-else-if="selectedResource.moduleType === 'animation'">
-            <div v-if="animationHtml" class="animation-stage">
+            <div v-if="animationHtml" class="animation-stage" :style="isFullscreen ? { width: 'min(100%, calc((100vh - 80px) * 16 / 9))' } : {}">
               <iframe
                 class="animation-frame"
                 :class="{ 'pointer-events-none': isDragging }"
@@ -463,11 +482,14 @@ const planChatPanelRef = ref<InstanceType<typeof PlanChatPanel> | null>(null)
 const heartbeat = useHeartbeat()
 
 // ==================== 面板拖拽调整 ====================
-const panelWidth = ref(400)
+const panelWidth = ref(window.innerWidth > 1400 ? 520 : 420)
 const isDragging = ref(false)
 
 // 中间面板的宽度样式（包含关闭态：width=0，由 CSS transition 驱动动画）
 const panelStyle = computed(() => {
+  if (isFullscreen.value) {
+    return {}
+  }
   if (!selectedResource.value && !showResourceStreamPreview.value) {
     return { width: '0px', minWidth: '0px', marginLeft: '0px', marginRight: '0px' }
   }
@@ -475,11 +497,11 @@ const panelStyle = computed(() => {
     const preferredWidth = Math.max(panelWidth.value, 760)
     return {
       width: `min(${preferredWidth}px, calc(100vw - 620px))`,
-      minWidth: '360px',
+      minWidth: '320px',
       flexShrink: '0',
     }
   }
-  return { width: panelWidth.value + 'px', minWidth: '280px' }
+  return { width: panelWidth.value + 'px', minWidth: '240px' }
 })
 
 // 是否显示资源流式生成预览（中间面板）
@@ -523,7 +545,8 @@ function onDividerMouseDown(e: MouseEvent) {
 
 function onDividerMouseMove(e: MouseEvent) {
   if (!dragState) return
-  dragState.pendingWidth = Math.max(280, Math.min(800,
+  const maxLimit = Math.max(300, window.innerWidth - (sidebarCollapsed.value ? 360 : 640))
+  dragState.pendingWidth = Math.max(280, Math.min(maxLimit,
     e.clientX - dragState.containerLeft - dragState.sidebarW - dragState.collapseW - dragState.offset
   ))
 
@@ -571,6 +594,7 @@ onUnmounted(() => {
   }
   document.removeEventListener('mousemove', onDividerMouseMove)
   document.removeEventListener('mouseup', onDividerMouseUp)
+  window.removeEventListener('keydown', handleKeyDown)
 })
 
 // ==================== 状态 ====================
@@ -580,6 +604,7 @@ const stuckResources = ref(new Set<number>())
 const selectedModuleIndex = ref(-1)
 const selectedResourceId = ref<number | null>(null)
 const selectedResource = ref<LearningResource | null>(null)
+const isFullscreen = ref(false)
 const quizData = ref<QuizData | null>(null)
 const mindmapData = ref<MindElixirData | null>(null)
 const gradingResult = ref<Record<string, any> | null>(null)
@@ -636,9 +661,22 @@ async function loadResources() {
   }
 }
 
+function handleKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && isFullscreen.value) {
+    isFullscreen.value = false
+  }
+}
+
 onMounted(() => {
   loadPlan()
   loadResources()
+  window.addEventListener('keydown', handleKeyDown)
+})
+
+watch(selectedResource, (newRes) => {
+  if (!newRes) {
+    isFullscreen.value = false
+  }
 })
 
 watch(planId, () => {

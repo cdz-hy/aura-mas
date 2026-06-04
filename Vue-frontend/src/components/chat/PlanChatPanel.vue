@@ -1,47 +1,62 @@
 <template>
-  <div class="flex-1 flex-shrink-0 flex flex-col card overflow-hidden animate-fade-in-up min-w-[300px]" style="animation-delay: 0.1s">
+  <div class="flex-1 flex-shrink-0 flex flex-col card overflow-hidden animate-fade-in-up min-w-[260px] md:min-w-[300px]" style="animation-delay: 0.1s">
     <!-- Header with mode toggle -->
-    <div class="px-6 py-3 border-b border-navy-100/50">
-      <div class="flex items-center justify-between">
-        <!-- Mode tabs -->
-        <div class="flex items-center gap-1 bg-navy-50/60 rounded-lg p-0.5">
-          <button
-            class="px-3 py-1.5 rounded-md text-xs font-medium transition-all"
-            :class="mode === 'assistant' ? 'bg-white text-navy-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
-            @click="switchMode('assistant')"
-          >AI 学习助手</button>
-          <button
-            class="px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5"
-            :class="mode === 'tutor' ? 'bg-white text-purple-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
-            @click="switchMode('tutor')"
-          >
-            <img :src="tutorGif" alt="" class="w-3.5 h-3.5 rounded" />
-            智能辅导
-          </button>
-        </div>
+    <div class="px-4 py-3 border-b border-navy-100/50">
+      <div class="flex items-center justify-between gap-3">
+        <!-- Mode Toggler (Merged Sliding Button) -->
+        <button
+          class="relative px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all duration-300 border shadow-sm select-none group flex-shrink-0"
+          :class="mode === 'assistant' 
+            ? 'bg-navy-50 hover:bg-navy-100 border-navy-200/80 text-navy-700' 
+            : 'bg-purple-50 hover:bg-purple-100 border-purple-200/80 text-purple-700'"
+          @click="switchMode(mode === 'assistant' ? 'tutor' : 'assistant')"
+          title="切换工作模式"
+        >
+          <!-- Dynamic transition inside the button -->
+          <transition name="mode-icon-fade" mode="out-in">
+            <span :key="mode" class="flex items-center gap-1.5">
+              <template v-if="mode === 'assistant'">
+                <svg class="w-3.5 h-3.5 text-navy-600 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
+                </svg>
+                <span>AI 学习助手</span>
+              </template>
+              <template v-else>
+                <img :src="tutorGif" alt="" class="w-3.5 h-3.5 rounded flex-shrink-0" />
+                <span>智能辅导</span>
+              </template>
+            </span>
+          </transition>
+          
+          <!-- Swap arrows with hover rotation -->
+          <svg class="w-3.5 h-3.5 opacity-40 group-hover:opacity-80 transition-all duration-500 transform group-hover:rotate-180 ml-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 17H4M4 17l4 4M4 17l4-4M4 7h16m0 0l-4-4m4 4l-4 4" />
+          </svg>
+        </button>
 
         <!-- Actions -->
-        <div class="flex items-center gap-2 flex-shrink-0">
+        <div class="flex items-center gap-1.5 flex-shrink-0">
           <button
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+            class="p-2 rounded-lg transition-colors relative"
             :class="showSessionList ? 'bg-navy-100 text-navy-700' : 'bg-navy-50 text-navy-500 hover:bg-navy-100'"
             @click="showSessionList = !showSessionList"
             title="会话历史"
           >
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
             </svg>
-            会话 ({{ currentSessions.length }})
+            <span v-if="currentSessions.length" class="absolute -top-1 -right-1 bg-navy-600 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center border border-white">
+              {{ currentSessions.length }}
+            </span>
           </button>
           <button
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-navy-50 text-navy-500 hover:bg-navy-100 transition-colors"
+            class="p-2 rounded-lg bg-navy-50 text-navy-500 hover:bg-navy-100 transition-colors"
             @click="handleNewSession()"
             title="新建会话"
           >
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
             </svg>
-            新会话
           </button>
           <button
             v-if="isStreaming"
@@ -103,12 +118,14 @@
     <!-- Messages area -->
     <div
       ref="messagesContainer"
-      class="flex-1 overflow-y-auto px-6 py-4 space-y-4"
+      class="flex-1 overflow-y-auto px-6 py-4"
       @click="handleCitationClick"
       @mouseover="handleCitationMouseOver"
       @mouseout="handleCitationMouseOut"
     >
-      <!-- ═══ Assistant mode messages ═══ -->
+      <transition name="chat-fade" mode="out-in">
+        <div :key="mode" class="space-y-4">
+          <!-- ═══ Assistant mode messages ═══ -->
       <template v-if="mode === 'assistant'">
         <!-- Welcome -->
         <div v-if="chatStore.messages.length === 0" class="flex items-start gap-3">
@@ -290,6 +307,8 @@
           <div class="tutor-followup-bubble">{{ currentFollowUp }}</div>
         </div>
       </template>
+        </div>
+      </transition>
     </div>
 
     <!-- Input bar -->
@@ -522,7 +541,6 @@ function handleNewSession() {
   if (props.mode === 'tutor') {
     tutor.newSession()
     currentFollowUp.value = pickFollowUp()
-    lastFollowUpContent = ''
   } else {
     chatStore.newSession()
     chatStore.loadSessions(props.planId)
@@ -555,15 +573,29 @@ function handleStop() {
 // ─── Scroll ───
 function scrollBottom() {
   if (messagesContainer.value) {
-    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+    const el = messagesContainer.value
+    el.scrollTop = el.scrollHeight
+    // Double-check after a short delay for images/transitions
+    setTimeout(() => {
+      if (el) el.scrollTop = el.scrollHeight
+    }, 150)
+    setTimeout(() => {
+      if (el) el.scrollTop = el.scrollHeight
+    }, 400)
   }
 }
+
+import { onMounted } from 'vue'
+
+onMounted(() => {
+  nextTick(() => scrollBottom())
+})
 
 // Auto-scroll on new messages
 watch(() => {
   if (props.mode === 'tutor') return tutor.messages.value.length + (tutor.loading.value ? 1 : 0)
   return chatStore.messages.length + chatStore.streamBuffer.length
-}, () => nextTick(() => scrollBottom()))
+}, () => nextTick(() => scrollBottom()), { immediate: true })
 
 // Load assistant sessions on mount and when planId changes
 watch(() => props.planId, (planId) => {
@@ -715,6 +747,19 @@ defineExpose({ updateResourceTitle, updateResourceType, scrollBottom })
 .slide-down-enter-to,
 .slide-down-leave-from {
   max-height: 240px;
+}
+
+.chat-fade-enter-active,
+.chat-fade-leave-active {
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.chat-fade-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.chat-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
 }
 
 /* Tutor message styles */
@@ -918,5 +963,19 @@ defineExpose({ updateResourceTitle, updateResourceType, scrollBottom })
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* Mode Switcher Micro-animations */
+.mode-icon-fade-enter-active,
+.mode-icon-fade-leave-active {
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.mode-icon-fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px) scale(0.9);
+}
+.mode-icon-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.9);
 }
 </style>

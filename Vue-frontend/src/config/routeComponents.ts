@@ -45,6 +45,7 @@ function buildImplicitRoutes(menuCodes: Set<string>): RouteRecordRaw[] {
       name: 'PlanDetail',
       component: () => import('@/views/PlanDetailView.vue'),
       props: true,
+      meta: { fullWidth: true },
     })
   }
 
