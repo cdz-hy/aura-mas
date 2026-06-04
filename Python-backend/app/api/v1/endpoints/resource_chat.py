@@ -91,9 +91,10 @@ def _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, us
                                 "title": mod.get("title", placeholder.get("title", "")),
                                 "content": mod.get("content", ""),
                                 "description": mod.get("description", ""),
-                                "key_concepts": mod.get("metadata", {}).get("key_concepts", []),
+                                "key_concepts": mod.get("metadata", {}).get("key_concepts", []) or mod.get("key_points", []),
                                 "module_title": mod.get("title", ""),
                                 "estimated_hours": mod.get("estimated_hours", 2),
+                                "references": mod.get("references", []),
                             }
                             images = mod.get("images", [])
                             if images:
@@ -637,6 +638,7 @@ async def plan_chat(
                 "module_type": _normalize_module_type(gc.get("content_type", "text")),
                 "key_points": gc.get("key_points", []),
                 "images": gc.get("images", []),
+                "references": gc.get("references", []),
                 "description": message,
             }]
             bs["orchestrated_content"] = {
@@ -1038,6 +1040,7 @@ async def generate_single_resource(
                             "module_type": _normalize_module_type(gc.get("module_type") or gc.get("content_type", "text")),
                             "key_points": gc.get("key_points", []),
                             "images": gc.get("images", []),
+                            "references": gc.get("references", []),
                             "animationSpec": gc.get("animationSpec"),
                             "metadata": gc.get("metadata", {}),
                             "description": description,
@@ -1646,6 +1649,7 @@ def _persist_generated_resources(
             "description": generated_content.get("description", description),
             "content": generated_content.get("content", ""),
             "module_title": generated_content.get("title", title),
+            "references": generated_content.get("references", []),
         }
         if resource_type == "animation":
             module_data["html"] = generated_content.get("html", generated_content.get("content", ""))
@@ -1689,6 +1693,8 @@ def _persist_generated_resources(
                 module_data["description"] = orchestrated_content.get("description", description)
                 module_data["summary"] = orchestrated_content.get("summary", "")
                 module_data["modules"] = orchestrated_content.get("modules", [])
+                if "references" in orchestrated_content:
+                    module_data["references"] = orchestrated_content["references"]
             if module_list:
                 module_data["content"] = module_list[0].get("content", "") if module_list else ""
                 if not module_data.get("title"):
@@ -1697,6 +1703,10 @@ def _persist_generated_resources(
                 images = module_list[0].get("images", [])
                 if images:
                     module_data["images"] = images
+                # 传递参考文献数据
+                references = module_list[0].get("references", [])
+                if references:
+                    module_data["references"] = references
             if not module_data.get("title"):
                 module_data["title"] = title
             try:
@@ -1751,8 +1761,8 @@ def _search_videos(module_title: str) -> list:
         return []
 
     # 中英文双语搜索
-    results_cn, _ = search_tavily(f"{module_title} 教学视频", max_results=5)
-    results_en, _ = search_tavily(f"{module_title} tutorial video", max_results=3)
+    results_cn, _ = search_tavily(f"{module_title} 教学视频", max_results=5, validate_images=False)
+    results_en, _ = search_tavily(f"{module_title} tutorial video", max_results=3, validate_images=False)
 
     # 视频平台白名单
     video_domains = [
@@ -2071,7 +2081,6 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
             # 使用模块自身的 module_order，而不是 enumerate 的索引
             module_order_in_list = mod.get("module_order", 0)
             
-            module_type = _normalize_module_type(mod.get("module_type", "text"))
             module_data = {
                 "title": mod.get("title", f"模块 {module_order_in_list}"),
                 "content": mod.get("content", ""),
@@ -2079,6 +2088,7 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
                 "key_concepts": mod.get("metadata", {}).get("key_concepts", []),
                 "module_title": mod.get("title", f"模块 {module_order_in_list}"),
                 "estimated_hours": mod.get("estimated_hours", 2),
+                "references": mod.get("references", []),
             }
             # 传递图片数据
             images = mod.get("images", [])
@@ -2118,6 +2128,7 @@ def _save_module_immediately(plan_id: int, module: dict) -> dict | None:
             "key_concepts": module.get("metadata", {}).get("key_concepts", []),
             "module_title": module.get("title", f"模块 {module_order}"),
             "estimated_hours": module.get("estimated_hours", 2),
+            "references": module.get("references", []),
         }
         images = module.get("images", [])
         if images:

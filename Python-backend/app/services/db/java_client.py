@@ -19,6 +19,11 @@ class JavaBackendClient:
     def __init__(self):
         self.base_url = settings.JAVA_BACKEND_URL.rstrip("/")
         self.timeout = 30
+        self.session = requests.Session()
+        # 配置连接池，支持与 Java 后端的高效长连接复用
+        adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=30)
+        self.session.mount('https://', adapter)
+        self.session.mount('http://', adapter)
 
     def validate_ticket(self, ticket: str) -> Dict[str, Any]:
         """
@@ -68,7 +73,7 @@ class JavaBackendClient:
         headers["X-Service-Secret"] = settings.JAVA_SERVICE_SECRET
         kwargs["headers"] = headers
         try:
-            resp = requests.request(method, url, **kwargs)
+            resp = self.session.request(method, url, **kwargs)
             if resp.status_code == 200:
                 result = resp.json()
                 code = result.get("code", 200)

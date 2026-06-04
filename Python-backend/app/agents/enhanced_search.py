@@ -8,47 +8,101 @@ import requests
 from typing import Dict, List, Literal, Optional
 from app.core.config import settings
 
+# 全局共享的 requests.Session，配置连接池复用，解决高并发端口耗尽问题
+_enhanced_search_session = requests.Session()
+_adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=50)
+_enhanced_search_session.mount('https://', _adapter)
+_enhanced_search_session.mount('http://', _adapter)
+
 logger = logging.getLogger("agents.enhanced_search")
 
 
-def validate_image_url(url: str, timeout: int = 3) -> bool:
+def validate_image_url(url: str, timeout: int = 5) -> bool:
     """
-    验证图片 URL 是否有效（快速 HEAD 请求）
+    验证图片 URL 是否有效（GET stream + 魔术字节校验）
 
     Args:
         url: 图片 URL
         timeout: 超时时间（秒）
 
     Returns:
-        True 如果图片可访问，False 否则
+        True 如果图片可访问且是真实图片，False 否则
     """
+    if not url or not url.startswith("http"):
+        return False
+
     try:
-        # 使用 HEAD 请求减少流量
-        response = requests.head(
+        # 使用 GET stream 比 HEAD 更可靠（很多 CDN 对 HEAD 返回 403）
+        resp = _enhanced_search_session.get(
             url,
             timeout=timeout,
             allow_redirects=True,
+            stream=True,
             headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'image/*,*/*',
             }
         )
 
-        # 检查状态码
-        if response.status_code != 200:
+        # 1. 状态码检查：2xx 和 3xx（重定向）都算有效
+        if resp.status_code >= 400:
+            resp.close()
             return False
 
-        # 检查 Content-Type 是否为图片
-        content_type = response.headers.get('Content-Type', '').lower()
-        if not any(img_type in content_type for img_type in ['image/', 'jpeg', 'png', 'gif', 'webp', 'svg']):
+        # 2. Content-Type 检查：图片类型 或 通用二进制流
+        content_type = resp.headers.get('Content-Type', '').lower()
+        is_image_type = any(t in content_type for t in [
+            'image/', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tiff',
+            'application/octet-stream'
+        ])
+
+        # 3. Content-Length 检查：至少 100 字节才算真实图片
+        content_length = resp.headers.get('Content-Length')
+        if content_length and int(content_length) < 100:
+            resp.close()
             return False
 
-        return True
+        # 4. 魔术字节校验：读取前 16 字节判断是否为真实图片
+        is_real_image = False
+        try:
+            header = resp.raw.read(16)
+            if header:
+                # PNG: 89 50 4E 47
+                if header[:4] == b'\x89PNG':
+                    is_real_image = True
+                # JPEG: FF D8 FF
+                elif header[:3] == b'\xff\xd8\xff':
+                    is_real_image = True
+                # GIF: 47 49 46
+                elif header[:3] == b'GIF':
+                    is_real_image = True
+                # WebP: 52 49 46 46 ... 57 45 42 50
+                elif header[:4] == b'RIFF' and len(header) >= 12 and header[8:12] == b'WEBP':
+                    is_real_image = True
+                # BMP: 42 4D
+                elif header[:2] == b'BM':
+                    is_real_image = True
+                # SVG (文本格式): <?xml 或 <svg
+                elif b'<svg' in header or b'<?xml' in header:
+                    is_real_image = True
+        except Exception:
+            # 无法读取内容时，退回到 Content-Type 判断
+            is_real_image = is_image_type
+
+        resp.close()
+
+        # 综合判断：魔术字节确认 或 Content-Type 确认
+        return is_real_image or is_image_type
+
+    except requests.exceptions.Timeout:
+        logger.debug(f"  [ImageValidation] Timeout: {url[:80]}")
+        return False
     except Exception as e:
-        logger.debug(f"  [ImageValidation] Failed to validate {url}: {str(e)[:80]}")
+        logger.debug(f"  [ImageValidation] Failed: {url[:80]} - {str(e)[:60]}")
         return False
 
 
-def batch_validate_images(images: List[Dict[str, str]], max_workers: int = 5) -> List[Dict[str, str]]:
+def batch_validate_images(images: List[Dict[str, str]], max_workers: int = 8) -> List[Dict[str, str]]:
     """
     批量验证图片 URL，过滤掉无效的
 
@@ -62,26 +116,31 @@ def batch_validate_images(images: List[Dict[str, str]], max_workers: int = 5) ->
     if not images:
         return []
 
+    # 去重 URL
+    seen = set()
+    unique_images = []
+    for img in images:
+        url = img.get("url", "")
+        if url and url not in seen:
+            seen.add(url)
+            unique_images.append(img)
+
     valid_images = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # 提交验证任务
         future_to_image = {
             executor.submit(validate_image_url, img.get("url", "")): img
-            for img in images if img.get("url")
+            for img in unique_images
         }
-
-        # 收集验证结果
         for future in concurrent.futures.as_completed(future_to_image):
             img = future_to_image[future]
             try:
-                is_valid = future.result(timeout=5)
-                if is_valid:
+                if future.result(timeout=8):
                     valid_images.append(img)
-            except Exception as e:
-                logger.debug(f"  [ImageValidation] Exception for {img.get('url', '')[:50]}: {str(e)[:50]}")
+            except Exception:
+                pass
 
-    logger.info(f"  [ImageValidation] {len(valid_images)}/{len(images)} images valid")
+    logger.info(f"  [ImageValidation] {len(valid_images)}/{len(unique_images)} images valid")
     return valid_images
 
 

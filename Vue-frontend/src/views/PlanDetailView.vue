@@ -140,7 +140,7 @@
     <!-- ==================== 中间栏：资源详情（始终在 DOM 中，width 过渡动画） ==================== -->
     <div
       class="resource-panel flex flex-col card overflow-hidden mx-2"
-      :class="{ 'resource-panel--closed': !selectedResource && !showResourceStreamPreview }"
+      :class="{ 'resource-panel--closed': !selectedResource && !showResourceStreamPreview, '!transition-none': isDragging }"
       :style="panelStyle"
     >
       <template v-if="selectedResource">
@@ -169,6 +169,9 @@
         <div
           class="flex-1 overflow-y-auto"
           :class="selectedResource.moduleType === 'animation' ? 'resource-content--animation' : 'p-4'"
+          @click="handleCitationClick"
+          @mouseover="handleCitationMouseOver"
+          @mouseout="handleCitationMouseOut"
         >
           <!-- 题目类型 -->
           <template v-if="selectedResource.moduleType === 'quiz'">
@@ -264,6 +267,7 @@
             <div v-if="animationHtml" class="animation-stage">
               <iframe
                 class="animation-frame"
+                :class="{ 'pointer-events-none': isDragging }"
                 :srcdoc="animationHtml"
                 sandbox="allow-scripts allow-same-origin"
                 title="教学动画"
@@ -281,6 +285,46 @@
               <p>资源内容待生成</p>
             </div>
           </template>
+
+          <!-- 网页参考文献列表（可折叠） -->
+          <div v-if="currentResourceCitations.length > 0" class="mt-8 border-t border-navy-100/50 pt-4 pb-6">
+            <div>
+              <button
+                class="w-full flex items-center justify-between font-display text-sm font-semibold text-navy-800 cursor-pointer select-none focus:outline-none"
+                @click="showCitations = !showCitations"
+              >
+                <div class="flex items-center gap-2 text-navy-500 hover:text-navy-700 transition-colors">
+                  <svg class="w-4 h-4 text-navy-400 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                  </svg>
+                  <span>参考网页来源 ({{ currentResourceCitations.length }})</span>
+                </div>
+                <svg class="w-4 h-4 text-navy-400 transition-transform duration-300" :class="showCitations ? 'rotate-180' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+              
+              <div class="grid transition-all duration-300 ease-in-out" :class="showCitations ? 'grid-rows-[1fr] opacity-100 mt-3.5' : 'grid-rows-[0fr] opacity-0 mt-0'">
+                <div class="overflow-hidden pl-6">
+                  <div class="space-y-3 pt-0.5 pb-1">
+                    <div v-for="cit in currentResourceCitations" :key="cit.id" class="flex items-start gap-3 text-xs">
+                      <span class="text-[10px] text-navy-500 bg-navy-50/80 px-1.5 py-0.5 rounded font-mono font-semibold text-center w-8 flex-shrink-0 inline-flex items-center justify-center">
+                        {{ cit.id }}
+                      </span>
+                      <div class="flex-1 min-w-0">
+                        <a :href="cit.url" target="_blank" rel="noopener noreferrer" class="text-navy-700 hover:text-purple-600 transition-colors font-medium break-all line-clamp-1">
+                          {{ cit.title }}
+                        </a>
+                        <a :href="cit.url" target="_blank" rel="noopener noreferrer" class="text-[10px] text-navy-400 font-mono tracking-tight mt-0.5 block hover:underline break-all">
+                          {{ cit.url }}
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </template>
 
@@ -328,6 +372,60 @@
       @open-resource="openResourceById"
     />
   </div>
+
+  <!-- 引用悬浮预览卡片 -->
+  <Teleport to="body">
+    <transition name="fade">
+      <div
+        v-if="hoveredCitation"
+        class="fixed z-50 p-3.5 rounded-xl border border-navy-100/50 bg-white/80 backdrop-blur-md shadow-[0_8px_30px_rgb(0,0,0,0.04)] max-w-xs text-left pointer-events-auto transition-all duration-150"
+        :style="popoverStyle"
+        @mouseenter="clearPopoverTimeout"
+        @mouseleave="handleCitationMouseOut"
+      >
+        <div class="flex items-start gap-2.5">
+          <div class="w-7 h-7 rounded-lg bg-navy-50 flex items-center justify-center flex-shrink-0 mt-0.5 text-navy-400">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
+            </svg>
+          </div>
+          <div class="flex-1 min-w-0">
+            <p class="text-xs font-semibold text-navy-800 line-clamp-2 leading-snug">
+              {{ hoveredCitation.title }}
+            </p>
+            <p class="text-[10px] text-navy-400 font-mono tracking-tight mt-1.5 flex items-center gap-1">
+              <svg class="w-3 h-3 text-navy-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
+              </svg>
+              {{ hoveredCitation.domain }}
+            </p>
+            <div class="flex items-center justify-between mt-3 pt-2 border-t border-navy-100/30">
+              <span class="text-[9px] px-1.5 py-0.5 rounded bg-navy-50 text-navy-500 font-medium font-sans">
+                来源 [{{ hoveredCitation.id }}]
+              </span>
+              <a
+                :href="hoveredCitation.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-[10px] text-navy-500 hover:text-purple-600 flex items-center gap-1 font-medium transition-colors"
+              >
+                查看原文
+                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+                  <polyline points="15 3 21 3 21 9" />
+                  <line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+  </Teleport>
 </div>
 </template>
 
@@ -336,7 +434,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick
 import { useRoute } from 'vue-router'
 import { getPlan, updatePlan } from '@/api/plan'
 import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi } from '@/api/resource'
-import { parseMarkdown } from '@/utils/markdown'
+import { parseMarkdown, extractCitations } from '@/utils/markdown'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
 import { issueTicket } from '@/api/auth'
 import { useChatStore } from '@/stores/chat'
@@ -487,6 +585,7 @@ const mindmapData = ref<MindElixirData | null>(null)
 const gradingResult = ref<Record<string, any> | null>(null)
 const quizSubmittedAnswers = ref<Record<number, any> | null>(null)
 const showExplanations = ref(false)
+const showCitations = ref(true)
 
 // 逐题批改结果（按 index 索引，供 QuizPlayer 使用）
 const questionResults = computed(() => {
@@ -722,10 +821,146 @@ function renderMd(text: string) { return parseMarkdown(text) }
 
 // 缓存资源内容的 markdown 渲染结果，避免每次 Vue 重渲染都重新解析
 const renderedResourceContent = computed(() => {
-  const content = selectedResource.value?.moduleData?.content
+  let content = selectedResource.value?.moduleData?.content
   if (!content) return ''
+  // 移除 markdown 中的参考文献列表部分，避免双重显示
+  const refHeaders = ['## 参考文献', '### 参考文献', '## 参考资料', '### 参考资料', '## 引用文献', '### 引用文献']
+  for (const header of refHeaders) {
+    const idx = content.indexOf(header)
+    if (idx !== -1) {
+      content = content.substring(0, idx).trim()
+      break
+    }
+  }
   return renderMd(content)
 })
+
+// === 引用源（Citation）解析与交互逻辑 ===
+const hoveredCitation = ref<{ id: string; title: string; url: string; domain: string } | null>(null)
+const popoverX = ref(0)
+const popoverY = ref(0)
+const popoverPlacement = ref<'top' | 'bottom'>('top')
+let popoverTimeout: ReturnType<typeof setTimeout> | null = null
+
+const popoverStyle = computed(() => {
+  return {
+    left: `${popoverX.value}px`,
+    top: `${popoverY.value}px`,
+    transform: popoverPlacement.value === 'top' ? 'translate(-50%, -100%) translateY(-8px)' : 'translate(-50%, 8px)'
+  }
+})
+
+const currentResourceCitations = computed(() => {
+  const md = selectedResource.value?.moduleData?.content || ''
+  const dbRefs = selectedResource.value?.moduleData?.references || []
+  
+  // 1. 从 Markdown 内容中提取引用
+  const extracted = extractCitations(md)
+  
+  // 2. 合并提取到的和数据库保存的引用列表（以 ID 去重）
+  const refsMap = new Map<string, { id: string; title: string; url: string }>()
+  extracted.forEach(c => refsMap.set(c.id, c))
+  
+  dbRefs.forEach((refStr: string) => {
+    if (typeof refStr !== 'string') return
+    const match = refStr.match(/^\[(\d+|page\d+)\]\s*(.*?)\s*(?:-|:|来源:)\s*(https?:\/\/[^\s\)]+)/i)
+    if (match) {
+      const id = match[1]
+      refsMap.set(id, {
+        id,
+        title: match[2].trim() || `来源 [${id}]`,
+        url: match[3].trim()
+      })
+    } else {
+      const simpleMatch = refStr.match(/^\[(\d+|page\d+)\]\s*(https?:\/\/[^\s\)]+)/i)
+      if (simpleMatch) {
+        const id = simpleMatch[1]
+        refsMap.set(id, {
+          id,
+          title: `网页来源 [${id}]`,
+          url: simpleMatch[2].trim()
+        })
+      }
+    }
+  })
+  
+  // 3. 排序：数字引用在前，page 引用在后，按 ID 数字升序排列
+  return Array.from(refsMap.values()).sort((a, b) => {
+    const aIsPage = a.id.startsWith('page')
+    const bIsPage = b.id.startsWith('page')
+    if (aIsPage && !bIsPage) return 1
+    if (!aIsPage && bIsPage) return -1
+    const aNum = parseInt(a.id.replace('page', '')) || 0
+    const bNum = parseInt(b.id.replace('page', '')) || 0
+    return aNum - bNum
+  })
+})
+
+function getDomainName(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
+}
+
+function handleCitationMouseOver(e: MouseEvent) {
+  const target = (e.target as HTMLElement).closest('.citation-ref') as HTMLElement
+  if (!target) return
+
+  if (popoverTimeout) clearTimeout(popoverTimeout)
+
+  const refId = target.getAttribute('data-ref') || ''
+  const cit = currentResourceCitations.value.find(c => c.id === refId)
+  if (!cit) return
+
+  const rect = target.getBoundingClientRect()
+  popoverX.value = rect.left + rect.width / 2
+  
+  // 边缘检测：如果元素距离顶部太近，气泡向下展示，否则向上
+  if (rect.top < 150) {
+    popoverPlacement.value = 'bottom'
+    popoverY.value = rect.bottom
+  } else {
+    popoverPlacement.value = 'top'
+    popoverY.value = rect.top
+  }
+
+  hoveredCitation.value = {
+    id: cit.id,
+    title: cit.title,
+    url: cit.url,
+    domain: getDomainName(cit.url)
+  }
+}
+
+function handleCitationMouseOut(e: MouseEvent) {
+  if (popoverTimeout) clearTimeout(popoverTimeout)
+  const target = (e.target as HTMLElement).closest('.citation-ref') as HTMLElement
+  const related = e.relatedTarget as HTMLElement
+  // 如果离开后进入的元素依然属于当前 citation-ref，则忽略，避免抖动
+  if (target && related && target.contains(related)) {
+    return
+  }
+  
+  popoverTimeout = setTimeout(() => {
+    hoveredCitation.value = null
+  }, 250)
+}
+
+function clearPopoverTimeout() {
+  if (popoverTimeout) clearTimeout(popoverTimeout)
+}
+
+function handleCitationClick(e: MouseEvent) {
+  const target = (e.target as HTMLElement).closest('.citation-ref') as HTMLElement
+  if (!target) return
+  
+  const url = target.getAttribute('data-url')
+  if (url) {
+    window.open(url, '_blank')
+  }
+}
 
 const animationHtml = computed(() => {
   const md = selectedResource.value?.moduleData
@@ -1550,5 +1785,14 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
   border: 0;
   background: #050505;
   display: block;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.15s ease-out;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

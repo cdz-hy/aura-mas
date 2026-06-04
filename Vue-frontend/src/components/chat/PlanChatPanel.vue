@@ -101,7 +101,13 @@
     </transition>
 
     <!-- Messages area -->
-    <div ref="messagesContainer" class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+    <div
+      ref="messagesContainer"
+      class="flex-1 overflow-y-auto px-6 py-4 space-y-4"
+      @click="handleCitationClick"
+      @mouseover="handleCitationMouseOver"
+      @mouseout="handleCitationMouseOut"
+    >
       <!-- ═══ Assistant mode messages ═══ -->
       <template v-if="mode === 'assistant'">
         <!-- Welcome -->
@@ -315,6 +321,60 @@
         </button>
       </form>
     </div>
+
+    <!-- 引用悬浮预览卡片 -->
+    <Teleport to="body">
+      <transition name="fade">
+        <div
+          v-if="hoveredCitation"
+          class="fixed z-50 p-3.5 rounded-xl border border-navy-100/50 bg-white/80 backdrop-blur-md shadow-[0_8px_30px_rgb(0,0,0,0.04)] max-w-xs text-left pointer-events-auto transition-all duration-150"
+          :style="popoverStyle"
+          @mouseenter="clearPopoverTimeout"
+          @mouseleave="handleCitationMouseOut"
+        >
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-lg bg-navy-50 flex items-center justify-center flex-shrink-0 mt-0.5 text-navy-400">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                <path d="M2 17l10 5 10-5" />
+                <path d="M2 12l10 5 10-5" />
+              </svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-xs font-semibold text-navy-800 line-clamp-2 leading-snug">
+                {{ hoveredCitation.title }}
+              </p>
+              <p class="text-[10px] text-navy-400 font-mono tracking-tight mt-1.5 flex items-center gap-1">
+                <svg class="w-3 h-3 text-navy-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
+                </svg>
+                {{ hoveredCitation.domain }}
+              </p>
+              <div class="flex items-center justify-between mt-3 pt-2 border-t border-navy-100/30">
+                <span class="text-[9px] px-1.5 py-0.5 rounded bg-navy-50 text-navy-500 font-medium font-sans">
+                  来源 [{{ hoveredCitation.id }}]
+                </span>
+                <a
+                  :href="hoveredCitation.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-[10px] text-navy-500 hover:text-purple-600 flex items-center gap-1 font-medium transition-colors"
+                >
+                  查看原文
+                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+                    <polyline points="15 3 21 3 21 9" />
+                    <line x1="10" y1="14" x2="21" y2="3" />
+                  </svg>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </Teleport>
   </div>
 </template>
 
@@ -556,6 +616,87 @@ watch(() => props.mode, (newMode) => {
   }
 })
 
+// === 引用源（Citation）悬浮与点击交互 ===
+const hoveredCitation = ref<{ id: string; title: string; url: string; domain: string } | null>(null)
+const popoverX = ref(0)
+const popoverY = ref(0)
+const popoverPlacement = ref<'top' | 'bottom'>('top')
+let popoverTimeout: ReturnType<typeof setTimeout> | null = null
+
+const popoverStyle = computed(() => {
+  return {
+    left: `${popoverX.value}px`,
+    top: `${popoverY.value}px`,
+    transform: popoverPlacement.value === 'top' ? 'translate(-50%, -100%) translateY(-8px)' : 'translate(-50%, 8px)'
+  }
+})
+
+function getDomainName(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
+}
+
+function handleCitationMouseOver(e: MouseEvent) {
+  const target = (e.target as HTMLElement).closest('.citation-ref') as HTMLElement
+  if (!target) return
+
+  if (popoverTimeout) clearTimeout(popoverTimeout)
+
+  const refId = target.getAttribute('data-ref') || ''
+  const url = target.getAttribute('data-url') || ''
+  const title = target.getAttribute('data-title') || `网页来源 [${refId}]`
+  if (!url) return
+
+  const rect = target.getBoundingClientRect()
+  popoverX.value = rect.left + rect.width / 2
+  
+  if (rect.top < 150) {
+    popoverPlacement.value = 'bottom'
+    popoverY.value = rect.bottom
+  } else {
+    popoverPlacement.value = 'top'
+    popoverY.value = rect.top
+  }
+
+  hoveredCitation.value = {
+    id: refId,
+    title,
+    url,
+    domain: getDomainName(url)
+  }
+}
+
+function handleCitationMouseOut(e: MouseEvent) {
+  if (popoverTimeout) clearTimeout(popoverTimeout)
+  const target = (e.target as HTMLElement).closest('.citation-ref') as HTMLElement
+  const related = e.relatedTarget as HTMLElement
+  // 如果离开后进入的元素依然属于当前 citation-ref，则忽略，避免抖动
+  if (target && related && target.contains(related)) {
+    return
+  }
+  
+  popoverTimeout = setTimeout(() => {
+    hoveredCitation.value = null
+  }, 250)
+}
+
+function clearPopoverTimeout() {
+  if (popoverTimeout) clearTimeout(popoverTimeout)
+}
+
+function handleCitationClick(e: MouseEvent) {
+  const target = (e.target as HTMLElement).closest('.citation-ref') as HTMLElement
+  if (!target) return
+  
+  const url = target.getAttribute('data-url')
+  if (url) {
+    window.open(url, '_blank')
+  }
+}
+
 // Expose for parent
 defineExpose({ updateResourceTitle, updateResourceType, scrollBottom })
 </script>
@@ -768,5 +909,14 @@ defineExpose({ updateResourceTitle, updateResourceType, scrollBottom })
 }
 .tutor-md-content :deep(img:hover) {
   transform: scale(1.02);
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.15s ease-out;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

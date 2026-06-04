@@ -7,51 +7,100 @@ import requests
 from typing import Dict, List
 from app.core.config import settings
 
+# 全局共享的 requests.Session，配置连接池复用，解决高并发端口耗尽问题
+_search_session = requests.Session()
+_adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=50)
+_search_session.mount('https://', _adapter)
+_search_session.mount('http://', _adapter)
+
 logger = logging.getLogger("agents.search_utils")
 
 
-def validate_image_url(url: str, timeout: int = 3) -> bool:
-    """验证图片 URL 是否有效"""
+def validate_image_url(url: str, timeout: int = 5) -> bool:
+    """验证图片 URL 是否有效（GET stream + 魔术字节校验）"""
+    if not url or not url.startswith("http"):
+        return False
     try:
-        response = requests.head(
-            url,
-            timeout=timeout,
-            allow_redirects=True,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        resp = _search_session.get(
+            url, timeout=timeout, allow_redirects=True, stream=True,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                     'Accept': 'image/*,*/*'}
         )
-        if response.status_code != 200:
+        if resp.status_code >= 400:
+            resp.close()
             return False
-        content_type = response.headers.get('Content-Type', '').lower()
-        return any(img_type in content_type for img_type in ['image/', 'jpeg', 'png', 'gif', 'webp', 'svg'])
+
+        content_type = resp.headers.get('Content-Type', '').lower()
+        is_image_type = any(t in content_type for t in [
+            'image/', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tiff',
+            'application/octet-stream'
+        ])
+
+        content_length = resp.headers.get('Content-Length')
+        if content_length and int(content_length) < 100:
+            resp.close()
+            return False
+
+        is_real_image = False
+        try:
+            header = resp.raw.read(16)
+            if header:
+                if header[:4] == b'\x89PNG':
+                    is_real_image = True
+                elif header[:3] == b'\xff\xd8\xff':
+                    is_real_image = True
+                elif header[:3] == b'GIF':
+                    is_real_image = True
+                elif header[:4] == b'RIFF' and len(header) >= 12 and header[8:12] == b'WEBP':
+                    is_real_image = True
+                elif header[:2] == b'BM':
+                    is_real_image = True
+                elif b'<svg' in header or b'<?xml' in header:
+                    is_real_image = True
+        except Exception:
+            is_real_image = is_image_type
+
+        resp.close()
+        return is_real_image or is_image_type
     except Exception:
         return False
 
 
-def batch_validate_images(images: List[Dict[str, str]], max_workers: int = 5) -> List[Dict[str, str]]:
+def batch_validate_images(images: List[Dict[str, str]], max_workers: int = 8) -> List[Dict[str, str]]:
     """批量验证图片 URL，过滤掉无效的"""
     if not images:
         return []
+
+    seen = set()
+    unique_images = []
+    for img in images:
+        url = img.get("url", "")
+        if url and url not in seen:
+            seen.add(url)
+            unique_images.append(img)
 
     valid_images = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_image = {
             executor.submit(validate_image_url, img.get("url", "")): img
-            for img in images if img.get("url")
+            for img in unique_images
         }
         for future in concurrent.futures.as_completed(future_to_image):
             img = future_to_image[future]
             try:
-                if future.result(timeout=5):
+                if future.result(timeout=8):
                     valid_images.append(img)
             except Exception:
                 pass
 
-    logger.info(f"  [ImageValidation] {len(valid_images)}/{len(images)} images valid")
+    logger.info(f"  [ImageValidation] {len(valid_images)}/{len(unique_images)} images valid")
     return valid_images
 
 
-def search_tavily(query: str, max_results: int = 5) -> tuple:
-    """Tavily 网页搜索，返回 (文本结果列表, 图片URL列表)"""
+def search_tavily(query: str, max_results: int = 5, validate_images: bool = True) -> tuple:
+    """Tavily 网页搜索，返回 (文本结果列表, 图片URL列表)
+    validate_images: 是否验证图片有效性，视频搜索等不需要图片的场景可设为 False
+    """
     try:
         from tavily import TavilyClient
         client = TavilyClient(api_key=settings.TAVILY_API_KEY)
@@ -87,11 +136,11 @@ def search_tavily(query: str, max_results: int = 5) -> tuple:
                     seen_img_urls.add(img_url)
                     images.append({"url": img_url, "description": img_desc})
 
-        # 验证图片 URL 有效性（过滤 404）
-        if images:
+        # 验证图片 URL 有效性（过滤 404），视频搜索等场景可跳过
+        if images and validate_images:
             images = batch_validate_images(images, max_workers=5)
 
-        logger.info(f"  [Tavily] '{query}' -> {len(results)} 条文本, {len(images)} 张图片 (已验证)")
+        logger.info(f"  [Tavily] '{query}' -> {len(results)} 条文本, {len(images)} 张图片")
         return results, images
     except Exception as e:
         logger.warning(f"  [Tavily] 搜索失败 '{query}': {str(e)[:120]}")

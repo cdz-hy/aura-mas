@@ -289,14 +289,14 @@ async def tutor_chat(
     if not is_simple and not rag_context:
         _emit(sse_callback, "progress", "知识库未找到相关内容，正在网络搜索...")
         try:
-            queries = search_points[:2]
+            queries = search_points[:3]
             results, web_images = execute_searches(queries)
             if results:
-                web_context = format_search_results(results[:5])
+                web_context = format_search_results(results[:10])
                 logger.info(f"  [辅导智能体] 网络搜索到 {len(results)} 条结果")
             # RAG 没有图片时，从 web 搜索中取
             if not available_images and web_images:
-                for img in web_images[:2]:
+                for img in web_images[:5]:
                     if img.get("url"):
                         available_images.append({
                             "url": img["url"],

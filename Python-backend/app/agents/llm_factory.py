@@ -7,6 +7,13 @@ import json
 from typing import Generator, Optional, Dict, Any
 from app.core.config import settings
 
+# 全局共享的 requests.Session，配置连接池复用，解决高并发端口耗尽问题
+_llm_session = requests.Session()
+_adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=50)
+_llm_session.mount('https://', _adapter)
+_llm_session.mount('http://', _adapter)
+
+
 
 class MIMOClient:
     """小米 MIMO 模型客户端 (OpenAI 兼容接口)"""
@@ -139,7 +146,7 @@ class MIMOClient:
         url = f"{self.base_url.rstrip('/')}/chat/completions"
         
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=self.request_timeout)
+            resp = _llm_session.post(url, headers=headers, json=payload, timeout=self.request_timeout)
         except requests.exceptions.Timeout:
             raise Exception(f"MIMO API 请求超时（{self.request_timeout}秒），可能是网络问题或服务繁忙")
         except requests.exceptions.RequestException as e:
@@ -225,7 +232,7 @@ class MIMOClient:
         }
 
         url = f"{self.base_url.rstrip('/')}/chat/completions"
-        resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=self.request_timeout)
+        resp = _llm_session.post(url, headers=headers, json=payload, stream=True, timeout=self.request_timeout)
 
         if resp.status_code != 200:
             raise Exception(f"MIMO API 流式调用失败 ({resp.status_code}): {resp.text}")

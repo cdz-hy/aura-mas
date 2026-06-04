@@ -35,6 +35,7 @@ export const useTutorStore = defineStore('tutor', () => {
   const sessionsLoading = ref(false)
 
   let sessionCounter = 0
+  let isNewlyCreated = false
 
   // ─── Getters ───
   const hasActiveSession = computed(() => !!activeSessionId.value)
@@ -96,6 +97,12 @@ export const useTutorStore = defineStore('tutor', () => {
       // Don't reload messages while SSE is streaming — it would overwrite in-flight content
       if (loading.value) return
 
+      // 新建会话后跳过自动选择，避免覆盖用户刚创建的空会话
+      if (isNewlyCreated) {
+        isNewlyCreated = false
+        return
+      }
+
       // Prefer restoring the persisted session if it still exists
       if (activeSessionId.value && sessions.value.some(s => s.sessionId === activeSessionId.value)) {
         await loadSessionMessages(activeSessionId.value)
@@ -142,6 +149,7 @@ export const useTutorStore = defineStore('tutor', () => {
     messages.value = []
     sessionCounter++
     _setActiveSession(_buildSessionId())
+    isNewlyCreated = true
     // Refresh session list in background
     loadSessions()
   }
