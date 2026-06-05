@@ -44,6 +44,14 @@ public class NoteService {
         return note;
     }
 
+    public Note getNoteById(Long noteId) {
+        Note note = noteMapper.selectById(noteId);
+        if (note == null) {
+            throw new BusinessException(ErrorCode.NOTE_NOT_FOUND);
+        }
+        return note;
+    }
+
     public PageResult<Note> getUserNotes(Long userId, int page, int size) {
         Page<Note> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<Note> wrapper = new LambdaQueryWrapper<Note>()
@@ -73,10 +81,24 @@ public class NoteService {
     }
 
     @Transactional
-    public void linkResource(Long noteId, Long resourceId) {
+    public void linkResource(Long noteId, Long resourceId, String selectedText, String positionInfo) {
+        // 检查是否已存在关联
+        NoteResourceRel existing = noteResourceRelMapper.selectOne(
+                new LambdaQueryWrapper<NoteResourceRel>()
+                        .eq(NoteResourceRel::getNoteId, noteId)
+                        .eq(NoteResourceRel::getResourceId, resourceId));
+        if (existing != null) {
+            // 已存在则更新选中信息
+            existing.setSelectedText(selectedText);
+            existing.setPositionInfo(positionInfo);
+            noteResourceRelMapper.updateById(existing);
+            return;
+        }
         NoteResourceRel rel = new NoteResourceRel();
         rel.setNoteId(noteId);
         rel.setResourceId(resourceId);
+        rel.setSelectedText(selectedText);
+        rel.setPositionInfo(positionInfo);
         noteResourceRelMapper.insert(rel);
     }
 

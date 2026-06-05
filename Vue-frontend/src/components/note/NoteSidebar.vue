@@ -87,9 +87,40 @@ async function saveActiveNote() {
   }
 }
 
+const BLOCK_TAGS = new Set(['P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'TR', 'SECTION', 'ARTICLE'])
+
+function htmlToMarkdown(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const parts: string[] = []
+
+  function walk(node: Node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const t = node.textContent || ''
+      if (t.trim()) parts.push(t)
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+    const el = node as HTMLElement
+    if (el.tagName === 'IMG') {
+      const src = el.getAttribute('src')
+      if (src) parts.push(`\n![${el.getAttribute('alt') || ''}](${src})\n`)
+      return
+    }
+    if (el.tagName === 'BR') { parts.push('\n'); return }
+    const isBlock = BLOCK_TAGS.has(el.tagName)
+    if (isBlock) parts.push('\n')
+    el.childNodes.forEach(child => walk(child))
+    if (isBlock) parts.push('\n')
+  }
+
+  doc.body.childNodes.forEach(child => walk(child))
+  return parts.join('').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 function handleDrop(e: DragEvent) {
   isDragOver.value = false
-  const text = e.dataTransfer?.getData('text/plain')
+  const html = e.dataTransfer?.getData('text/html')
+  const text = html ? htmlToMarkdown(html) : e.dataTransfer?.getData('text/plain')
   if (text) {
     if (!activeNote.value) {
       activeNote.value = { id: 0, userId: 0, noteName: '新笔记', content: '', createdAt: '', updatedAt: '' }

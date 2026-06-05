@@ -7,12 +7,14 @@ import com.learning.mapper.QuizRecordMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Tag(name = "答题记录")
 @RestController
 @RequestMapping("/api")
@@ -24,21 +26,26 @@ public class QuizRecordController {
     @Operation(summary = "内部接口：创建答题记录")
     @PostMapping("/quiz/internal/create")
     public Result<QuizRecord> createQuizRecord(@RequestBody Map<String, Object> body) {
-        QuizRecord record = new QuizRecord();
-        record.setResourceId(Long.valueOf(body.get("resourceId").toString()));
-        record.setUserId(Long.valueOf(body.get("userId").toString()));
-        record.setPlanId(Long.valueOf(body.get("planId").toString()));
-        record.setQuestionType((String) body.get("questionType"));
-        record.setQuestionText((String) body.get("questionText"));
-        record.setCorrectAnswer((String) body.get("correctAnswer"));
-        record.setUserAnswer((String) body.get("userAnswer"));
-        record.setScore(body.get("score") != null ? Double.valueOf(body.get("score").toString()) : null);
-        record.setIsCorrect(Integer.valueOf(body.get("isCorrect").toString()));
-        record.setFeedback((String) body.get("feedback"));
-        record.setDifficulty(body.get("difficulty") != null ? Integer.valueOf(body.get("difficulty").toString()) : 3);
-        record.setAnswerTime(LocalDateTime.now());
-        quizRecordMapper.insert(record);
-        return Result.success(record);
+        try {
+            QuizRecord record = new QuizRecord();
+            record.setResourceId(Long.valueOf(body.get("resourceId").toString()));
+            record.setUserId(Long.valueOf(body.get("userId").toString()));
+            record.setPlanId(Long.valueOf(body.get("planId").toString()));
+            record.setQuestionType((String) body.get("questionType"));
+            record.setQuestionText((String) body.get("questionText"));
+            record.setCorrectAnswer((String) body.get("correctAnswer"));
+            record.setUserAnswer((String) body.get("userAnswer"));
+            record.setScore(body.get("score") != null ? Double.valueOf(body.get("score").toString()) : null);
+            record.setIsCorrect(Integer.valueOf(body.get("isCorrect").toString()));
+            record.setFeedback((String) body.get("feedback"));
+            record.setDifficulty(body.get("difficulty") != null ? Integer.valueOf(body.get("difficulty").toString()) : 3);
+            record.setAnswerTime(LocalDateTime.now());
+            quizRecordMapper.insert(record);
+            return Result.success(record);
+        } catch (Exception e) {
+            log.error("创建答题记录失败: {}", e.getMessage(), e);
+            throw e;
+        }
     }
 
     @Operation(summary = "内部接口：获取用户答题记录")
