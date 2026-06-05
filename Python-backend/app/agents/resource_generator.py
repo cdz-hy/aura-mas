@@ -312,7 +312,7 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
     """多模态资源自主生成智能体节点 - 并行生成所有模块"""
     user_message = state.get("user_message", "")
     learning_goal = state.get("learning_goal", user_message)
-    task_breakdown = state.get("task_breakdown", {})
+    task_breakdown = state.get("task_breakdown") or {}
     user_profile = state.get("user_profile", {})
     rag_chunks = state.get("rag_context_chunks", [])
     session_id = state.get("session_id", "")

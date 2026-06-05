@@ -26,7 +26,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
     """
     user_message = state.get("user_message", "")
     learning_goal = state.get("learning_goal", user_message)
-    task_breakdown = state.get("task_breakdown", {})
+    task_breakdown = state.get("task_breakdown") or {}
     user_profile = state.get("user_profile", {})
     rag_chunks = state.get("rag_context_chunks", [])
     chat_history = state.get("chat_history", [])

@@ -70,7 +70,7 @@ class HybridRetrievalService:
             # 文本 Dense 通道
             models.Prefetch(query=dense_vec, using="text-dense", filter=text_filter, limit=limit, score_threshold=0.6),
             # 图片 Dense 通道（仅 Dense，BM25 对图片 caption 检索无显著增益）
-            models.Prefetch(query=dense_vec, using="text-dense", filter=image_filter, limit=limit, score_threshold=0.7),
+            models.Prefetch(query=dense_vec, using="text-dense", filter=image_filter, limit=limit, score_threshold=0.5),
         ]
         # 护栏：只有查询词 Sparse 向量非空时，才开启 BM25 并联通道，防止空 indices 送入 DBSF 引发崩溃
         if sparse_vec.get("indices") and len(sparse_vec["indices"]) > 0:

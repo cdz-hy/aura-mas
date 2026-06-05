@@ -136,6 +136,8 @@ def _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, us
         bg_state["quiz_config"] = node_output["quiz_config"]
     if node_output.get("generated_content"):
         bg_state["generated_content"] = node_output["generated_content"]
+    if node_output.get("profile_update_needed"):
+        bg_state["profile_update_needed"] = True
     tb = node_output.get("task_breakdown")
     if tb and node_name == "task_decomposer":
         bg_state["new_breakdown"] = tb
@@ -330,6 +332,7 @@ async def plan_chat(
         }
 
         async def event_stream() -> AsyncGenerator[str, None]:
+            clear_stop(session_id)
             update_stream_text(session_id, "", "chat")
             _sentinel = object()
             _queue: asyncio.Queue = asyncio.Queue()
@@ -525,6 +528,7 @@ async def plan_chat(
         }
 
         async def event_stream() -> AsyncGenerator[str, None]:
+            clear_stop(session_id)
             update_stream_text(session_id, "", "chat")
             _sentinel = object()
             _queue: asyncio.Queue = asyncio.Queue()
@@ -743,9 +747,13 @@ async def plan_chat(
             except Exception:
                 pass
 
-        # 画像维护
-        if bs["generated_resource_info"]:
-            _async_profile_maintenance_sync(user_id, message, chat_history, user_profile)
+        # 画像维护 (放入后台线程执行，避免阻塞前端渲染卡片)
+        if bs["generated_resource_info"] or bs.get("profile_update_needed"):
+            threading.Thread(
+                target=_async_profile_maintenance_sync, 
+                args=(user_id, message, chat_history, user_profile),
+                daemon=True
+            ).start()
 
         # 会话压缩（后台线程）
         threading.Thread(target=lambda: asyncio.run(async_compress_and_save(

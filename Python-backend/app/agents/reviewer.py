@@ -101,7 +101,7 @@ async def reviewer_node(state: AgentState) -> Dict[str, Any]:
     user_message = state.get("user_message", "")
     learning_goal = state.get("learning_goal", user_message)
     module_list = state.get("module_list", [])
-    task_breakdown = state.get("task_breakdown", {})
+    task_breakdown = state.get("task_breakdown") or {}
     
     # 判断使用哪种模式
     use_module_review = len(module_list) > 0

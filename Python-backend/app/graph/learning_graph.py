@@ -164,8 +164,8 @@ def route_after_simple_answer(state: AgentState) -> str:
     
     # 优先处理画像更新
     if profile_update_needed:
-        logger.info(f"  [路由] 简答完成 -> 画像维护智能体")
-        return NODE_PROFILE_MAINTAINER
+        logger.info(f"  [路由] 简答完成 -> END (画像维护将在后台异步执行)")
+        return END
     
     # RAG 无结果 + 资源生成意图 -> 资源自主生成
     if not rag_sufficient and intent == INTENT_GENERATE_RESOURCE:
@@ -183,7 +183,7 @@ def route_after_task_decomposer(state: AgentState) -> str:
     if anomaly:
         return anomaly
 
-    task_breakdown = state.get("task_breakdown", {})
+    task_breakdown = state.get("task_breakdown") or {}
     needs_decomposition = task_breakdown.get("needs_decomposition", True)
 
     if needs_decomposition:
@@ -253,9 +253,9 @@ def route_after_quiz_grader(state: AgentState) -> str:
     if anomaly:
         return anomaly
 
-    # 题目判定完成 → 路由到画像维护智能体
-    logger.info(f"  [路由] 题目判定完成 -> 画像维护智能体")
-    return NODE_PROFILE_MAINTAINER
+    # 题目判定完成 → 结束流程 (画像维护将在后台异步执行)
+    logger.info(f"  [路由] 题目判定完成 -> END (画像维护将在后台异步执行)")
+    return END
 
 
 def route_after_resource_generator(state: AgentState) -> str:
@@ -517,13 +517,13 @@ def build_learning_graph() -> StateGraph:
         }
     )
 
-    # 题目判定 -> 画像维护或异常回主控
     graph.add_conditional_edges(
         NODE_QUIZ_GRADER,
         route_after_quiz_grader,
         {
             NODE_PROFILE_MAINTAINER: NODE_PROFILE_MAINTAINER,
             NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
+            END: END,
         }
     )
 

@@ -130,7 +130,7 @@ def _optimize_search_queries(
 async def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
     """RAG 多模态检索智能体节点"""
     user_message = state.get("user_message", "")
-    task_breakdown = state.get("task_breakdown", {})
+    task_breakdown = state.get("task_breakdown") or {}
     user_profile = state.get("user_profile", {})
     modules = task_breakdown.get("modules", [])
     chat_history = state.get("chat_history", [])

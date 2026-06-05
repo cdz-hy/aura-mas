@@ -525,7 +525,7 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
     """
     source_resource_content = state.get("source_resource_content", "")
     user_profile = state.get("user_profile", {})
-    task_breakdown = state.get("task_breakdown", {})
+    task_breakdown = state.get("task_breakdown") or {}
 
     # 从 task_breakdown 提取标题
     modules = task_breakdown.get("modules", [])

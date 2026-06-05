@@ -240,7 +240,7 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     - 无 token 限制（每个模块独立生成）
     """
     rag_chunks = state.get("rag_context_chunks", [])
-    task_breakdown = state.get("task_breakdown", {})
+    task_breakdown = state.get("task_breakdown") or {}
     user_message = state.get("user_message", "")
     learning_goal = state.get("learning_goal", user_message)
     user_profile = state.get("user_profile", {})
