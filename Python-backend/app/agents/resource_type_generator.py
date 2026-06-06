@@ -73,8 +73,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
 
     # 用户偏好
     behavior = user_profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
-    vv = fs.get("visual_verbal", 0)
+    vv = behavior.get("visual_vs_verbal", 0)
     pref_text = "视觉型" if vv < -0.3 else ("言语型" if vv > 0.3 else "均衡型")
 
     # 对话历史

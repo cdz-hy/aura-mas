@@ -219,20 +219,19 @@ def _format_profile(profile: Dict[str, Any]) -> str:
         if knowledge:
             parts.append(f"已有知识基础: {', '.join(knowledge)}")
 
-        fs = behavior.get("felder_silverman", {})
-        if fs:
+        si = behavior.get("sensing_vs_intuitive", 0)
+        vv = behavior.get("visual_vs_verbal", 0)
+        ar = behavior.get("active_vs_reflective", 0)
+        sg = behavior.get("sequential_vs_global", 0)
+        if any([si, vv, ar, sg]):
             dimensions = []
-            si = fs.get("sensing_intuitive", 0)
             dimensions.append(f"{'感官型' if si < 0 else '直觉型'}(倾向度: {abs(si):.1f})")
-            vv = fs.get("visual_verbal", 0)
             dimensions.append(f"{'视觉型' if vv < 0 else '言语型'}(倾向度: {abs(vv):.1f})")
-            ar = fs.get("active_reflective", 0)
             dimensions.append(f"{'活跃型' if ar < 0 else '沉思型'}(倾向度: {abs(ar):.1f})")
-            sg = fs.get("sequential_global", 0)
             dimensions.append(f"{'序列型' if sg < 0 else '全局型'}(倾向度: {abs(sg):.1f})")
             parts.append(f"学习风格: {'; '.join(dimensions)}")
 
-        weak_points = behavior.get("weak_points", [])
+        weak_points = behavior.get("weak_areas", [])
         if weak_points:
             parts.append(f"薄弱点: {', '.join(weak_points)}")
 
@@ -240,7 +239,7 @@ def _format_profile(profile: Dict[str, Any]) -> str:
         if pref_quiz:
             parts.append(f"偏好题型: {', '.join(pref_quiz)}")
 
-        prefs = behavior.get("content_preferences", [])
+        prefs = behavior.get("preferred_resource_types", [])
         if prefs:
             parts.append(f"内容偏好: {', '.join(prefs)}")
 

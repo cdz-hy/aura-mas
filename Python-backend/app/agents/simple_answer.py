@@ -17,22 +17,22 @@ logger = logging.getLogger("agents.simple_answer")
 
 
 PROFILE_QUESTIONS = {
-    "sensing_intuitive": [
+    "sensing_vs_intuitive": [
         "在学习新知识时，你更倾向于通过具体的实例和实验来理解，还是更喜欢先了解抽象的理论和概念框架？",
         "如果让你学习一个新的技术概念，你会更喜欢看一个完整的实际案例演示，还是先阅读理论原理的阐述？",
         "你觉得自己在学习时是更注重细节和事实，还是更善于把握整体的概念和关联？",
     ],
-    "visual_verbal": [
+    "visual_vs_verbal": [
         "你学习时更喜欢看图表、流程图、思维导图这类视觉化的内容，还是更喜欢阅读详细的文字说明？",
         "当理解一个复杂概念时，一张好的示意图和一段详细的文字解释，哪个对你帮助更大？",
         "你平时记笔记时更习惯画图示还是写文字？",
     ],
-    "active_reflective": [
+    "active_vs_reflective": [
         "学完一个新知识点后，你更喜欢立刻动手实践尝试，还是先在脑海中反复思考消化？",
         "你更喜欢通过小组讨论来加深理解，还是独自安静地思考？",
         "面对一个新的学习任务，你的第一反应是马上开始动手做，还是先花时间规划和思考？",
     ],
-    "sequential_global": [
+    "sequential_vs_global": [
         "你学习时更喜欢按照逻辑顺序一步一步地深入，还是先了解整体框架再逐步细化？",
         "当面对一个复杂的知识体系时，你更希望先看到完整的知识地图，还是从第一个知识点开始逐步学习？",
         "你是否经常在学到后面的内容时，突然对前面的知识有了更深的理解？",
@@ -41,11 +41,11 @@ PROFILE_QUESTIONS = {
         "在当前学习的领域中，你之前已经学过哪些相关的课程或知识？",
         "你对这个领域的基础概念了解程度如何？有没有特别熟悉或特别陌生的部分？",
     ],
-    "quiz_preference": [
+    "preferred_quiz_types": [
         "你平时做练习题时，更喜欢选择题、填空题还是简答题？",
         "你觉得自己在哪类题型上表现更好？哪类题型需要加强练习？",
     ],
-    "content_preference": [
+    "preferred_resource_types": [
         "在学习资源方面，你更偏好视频讲解、图文教程、流程图，还是代码示例？",
         "你学习时更喜欢看实际案例分析，还是理论知识的系统梳理？",
     ],
@@ -293,14 +293,13 @@ def _should_ask_profile(chat_history: List[Dict[str, str]], profile: Dict[str, A
 def _pick_profile_question(profile: Dict[str, Any]) -> tuple:
     """选择一个画像维度的问题（尽量不重复）"""
     behavior = profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
 
     candidates = []
     dimension_map = {
-        "sensing_intuitive": fs.get("sensing_intuitive") is None,
-        "visual_verbal": fs.get("visual_verbal") is None,
-        "active_reflective": fs.get("active_reflective") is None,
-        "sequential_global": fs.get("sequential_global") is None,
+        "sensing_vs_intuitive": abs(behavior.get("sensing_vs_intuitive", 0)) < 0.01,
+        "visual_vs_verbal": abs(behavior.get("visual_vs_verbal", 0)) < 0.01,
+        "active_vs_reflective": abs(behavior.get("active_vs_reflective", 0)) < 0.01,
+        "sequential_vs_global": abs(behavior.get("sequential_vs_global", 0)) < 0.01,
     }
 
     for dim, is_none in dimension_map.items():
@@ -310,7 +309,7 @@ def _pick_profile_question(profile: Dict[str, Any]) -> tuple:
     if not candidates:
         candidates = list(dimension_map.keys())
 
-    for dim in ["knowledge_base", "quiz_preference", "content_preference"]:
+    for dim in ["knowledge_base", "preferred_quiz_types", "preferred_resource_types"]:
         candidates.append(dim)
 
     chosen = random.choice(candidates)

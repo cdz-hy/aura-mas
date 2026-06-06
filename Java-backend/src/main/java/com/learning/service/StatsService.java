@@ -28,6 +28,9 @@ public class StatsService {
     private final QuizRecordMapper quizRecordMapper;
     private final UserLearningProgressMapper progressMapper;
     private final DailyStudyTimeMapper dailyStudyTimeMapper;
+    private final FlashcardMapper flashcardMapper;
+    private final AiDialogueMapper aiDialogueMapper;
+    private final UserProfileMapper userProfileMapper;
 
     public Map<String, Object> getDashboardStats(Long userId) {
         Map<String, Object> stats = new HashMap<>();
@@ -249,6 +252,435 @@ public class StatsService {
         stats.put("recentActivity", recentActivity);
 
         return stats;
+    }
+
+    // ======================== 答题详细分析 ========================
+    public Map<String, Object> getQuizAnalysis(Long userId) {
+        Map<String, Object> result = new HashMap<>();
+
+        List<QuizRecord> records = quizRecordMapper.selectList(
+                new LambdaQueryWrapper<QuizRecord>()
+                        .eq(QuizRecord::getUserId, userId)
+                        .orderByDesc(QuizRecord::getAnswerTime));
+
+        if (records.isEmpty()) {
+            result.put("byQuestionType", Collections.emptyList());
+            result.put("byDifficulty", Collections.emptyList());
+            result.put("dailyAccuracy", Collections.emptyList());
+            Map<String, Object> trend = new HashMap<>();
+            trend.put("direction", "stable");
+            trend.put("changePercent", 0);
+            result.put("recentTrend", trend);
+            return result;
+        }
+
+        // 按题型分组
+        Map<String, List<QuizRecord>> byType = records.stream()
+                .filter(r -> r.getQuestionType() != null)
+                .collect(Collectors.groupingBy(QuizRecord::getQuestionType));
+
+        List<Map<String, Object>> byQuestionType = new ArrayList<>();
+        for (Map.Entry<String, List<QuizRecord>> entry : byType.entrySet()) {
+            List<QuizRecord> group = entry.getValue();
+            long correct = group.stream().filter(r -> r.getIsCorrect() != null && r.getIsCorrect() == 1).count();
+            Map<String, Object> item = new HashMap<>();
+            item.put("type", entry.getKey());
+            item.put("total", group.size());
+            item.put("correct", correct);
+            item.put("accuracy", group.size() > 0 ? Math.round((double) correct / group.size() * 1000) / 10.0 : 0);
+            byQuestionType.add(item);
+        }
+        result.put("byQuestionType", byQuestionType);
+
+        // 按难度分组
+        Map<Integer, List<QuizRecord>> byDiff = records.stream()
+                .filter(r -> r.getDifficulty() != null)
+                .collect(Collectors.groupingBy(QuizRecord::getDifficulty));
+
+        List<Map<String, Object>> byDifficulty = new ArrayList<>();
+        for (int d = 1; d <= 5; d++) {
+            List<QuizRecord> group = byDiff.getOrDefault(d, Collections.emptyList());
+            long correct = group.stream().filter(r -> r.getIsCorrect() != null && r.getIsCorrect() == 1).count();
+            Map<String, Object> item = new HashMap<>();
+            item.put("difficulty", d);
+            item.put("total", group.size());
+            item.put("correct", correct);
+            item.put("accuracy", group.size() > 0 ? Math.round((double) correct / group.size() * 1000) / 10.0 : 0);
+            byDifficulty.add(item);
+        }
+        result.put("byDifficulty", byDifficulty);
+
+        // 每日正确率趋势（最近30天）
+        LocalDate thirtyDaysAgo = LocalDate.now().minusDays(30);
+        Map<LocalDate, List<QuizRecord>> byDate = records.stream()
+                .filter(r -> r.getAnswerTime() != null && r.getAnswerTime().toLocalDate().isAfter(thirtyDaysAgo))
+                .collect(Collectors.groupingBy(r -> r.getAnswerTime().toLocalDate()));
+
+        List<Map<String, Object>> dailyAccuracy = new ArrayList<>();
+        for (int i = 29; i >= 0; i--) {
+            LocalDate date = LocalDate.now().minusDays(i);
+            List<QuizRecord> dayRecords = byDate.getOrDefault(date, Collections.emptyList());
+            long correct = dayRecords.stream().filter(r -> r.getIsCorrect() != null && r.getIsCorrect() == 1).count();
+            Map<String, Object> day = new HashMap<>();
+            day.put("date", date.toString());
+            day.put("total", dayRecords.size());
+            day.put("accuracy", dayRecords.size() > 0 ? Math.round((double) correct / dayRecords.size() * 1000) / 10.0 : 0);
+            dailyAccuracy.add(day);
+        }
+        result.put("dailyAccuracy", dailyAccuracy);
+
+        // 近期趋势（最近7天 vs 前7天）
+        LocalDate sevenDaysAgo = LocalDate.now().minusDays(7);
+        LocalDate fourteenDaysAgo = LocalDate.now().minusDays(14);
+        long recentCorrect = records.stream()
+                .filter(r -> r.getAnswerTime() != null && r.getAnswerTime().toLocalDate().isAfter(sevenDaysAgo))
+                .filter(r -> r.getIsCorrect() != null && r.getIsCorrect() == 1).count();
+        long recentTotal = records.stream()
+                .filter(r -> r.getAnswerTime() != null && r.getAnswerTime().toLocalDate().isAfter(sevenDaysAgo))
+                .count();
+        long prevCorrect = records.stream()
+                .filter(r -> r.getAnswerTime() != null &&
+                        r.getAnswerTime().toLocalDate().isAfter(fourteenDaysAgo) &&
+                        r.getAnswerTime().toLocalDate().isBefore(sevenDaysAgo.plusDays(1)))
+                .filter(r -> r.getIsCorrect() != null && r.getIsCorrect() == 1).count();
+        long prevTotal = records.stream()
+                .filter(r -> r.getAnswerTime() != null &&
+                        r.getAnswerTime().toLocalDate().isAfter(fourteenDaysAgo) &&
+                        r.getAnswerTime().toLocalDate().isBefore(sevenDaysAgo.plusDays(1)))
+                .count();
+
+        double recentAcc = recentTotal > 0 ? (double) recentCorrect / recentTotal : 0;
+        double prevAcc = prevTotal > 0 ? (double) prevCorrect / prevTotal : 0;
+        double changePercent = prevAcc > 0 ? Math.round((recentAcc - prevAcc) / prevAcc * 1000) / 10.0 : 0;
+        String direction = changePercent > 5 ? "up" : (changePercent < -5 ? "down" : "stable");
+
+        Map<String, Object> recentTrend = new HashMap<>();
+        recentTrend.put("direction", direction);
+        recentTrend.put("changePercent", changePercent);
+        result.put("recentTrend", recentTrend);
+
+        return result;
+    }
+
+    // ======================== 学习热力图 ========================
+    public Map<String, Object> getStudyHeatmap(Long userId, int days) {
+        Map<String, Object> result = new HashMap<>();
+
+        LocalDate startDate = LocalDate.now().minusDays(days);
+        List<DailyStudyTime> dailyData = dailyStudyTimeMapper.selectList(
+                new LambdaQueryWrapper<DailyStudyTime>()
+                        .eq(DailyStudyTime::getUserId, userId)
+                        .ge(DailyStudyTime::getStudyDate, startDate)
+                        .orderByAsc(DailyStudyTime::getStudyDate));
+
+        Map<LocalDate, Integer> dailyMap = new HashMap<>();
+        for (DailyStudyTime d : dailyData) {
+            dailyMap.put(d.getStudyDate(), d.getDurationSeconds());
+        }
+
+        // 生成热力图数据
+        List<Map<String, Object>> heatmapData = new ArrayList<>();
+        for (int i = days - 1; i >= 0; i--) {
+            LocalDate date = LocalDate.now().minusDays(i);
+            int seconds = dailyMap.getOrDefault(date, 0);
+            int minutes = seconds / 60;
+            int level = 0;
+            if (minutes > 0 && minutes <= 30) level = 1;
+            else if (minutes > 30 && minutes <= 60) level = 2;
+            else if (minutes > 60 && minutes <= 120) level = 3;
+            else if (minutes > 120) level = 4;
+
+            Map<String, Object> day = new HashMap<>();
+            day.put("date", date.toString());
+            day.put("minutes", minutes);
+            day.put("level", level);
+            heatmapData.add(day);
+        }
+        result.put("dailyData", heatmapData);
+
+        // 计算连续天数
+        int currentStreak = 0;
+        int longestStreak = 0;
+        int tempStreak = 0;
+        int totalActiveDays = 0;
+
+        for (int i = 0; i < days; i++) {
+            LocalDate date = LocalDate.now().minusDays(i);
+            int minutes = dailyMap.getOrDefault(date, 0) / 60;
+            if (minutes > 0) {
+                totalActiveDays++;
+                if (i == currentStreak) currentStreak++;
+                tempStreak++;
+                longestStreak = Math.max(longestStreak, tempStreak);
+            } else {
+                tempStreak = 0;
+            }
+        }
+
+        result.put("currentStreak", currentStreak);
+        result.put("longestStreak", longestStreak);
+        result.put("totalActiveDays", totalActiveDays);
+
+        return result;
+    }
+
+    // ======================== 闪卡复习统计 ========================
+    public Map<String, Object> getFlashcardStats(Long userId) {
+        Map<String, Object> result = new HashMap<>();
+
+        List<Flashcard> cards = flashcardMapper.selectList(
+                new LambdaQueryWrapper<Flashcard>()
+                        .eq(Flashcard::getUserId, userId));
+
+        LocalDateTime now = LocalDateTime.now();
+
+        long totalCards = cards.size();
+        long dueToday = cards.stream()
+                .filter(c -> c.getNextReviewAt() != null && c.getNextReviewAt().isBefore(now))
+                .count();
+        long mastered = cards.stream()
+                .filter(c -> c.getReviewCount() != null && c.getReviewCount() >= 5 &&
+                        c.getEaseFactor() != null && c.getEaseFactor() >= 2.5)
+                .count();
+        long learning = cards.stream()
+                .filter(c -> c.getReviewCount() != null && c.getReviewCount() > 0 &&
+                        !(c.getReviewCount() >= 5 && c.getEaseFactor() != null && c.getEaseFactor() >= 2.5))
+                .count();
+        long newCards = cards.stream()
+                .filter(c -> c.getReviewCount() == null || c.getReviewCount() == 0)
+                .count();
+
+        double avgEaseFactor = cards.stream()
+                .filter(c -> c.getEaseFactor() != null)
+                .mapToDouble(Flashcard::getEaseFactor)
+                .average()
+                .orElse(2.5);
+
+        result.put("totalCards", totalCards);
+        result.put("dueToday", dueToday);
+        result.put("mastered", mastered);
+        result.put("learning", learning);
+        result.put("newCards", newCards);
+        result.put("avgEaseFactor", Math.round(avgEaseFactor * 100) / 100.0);
+
+        // 复习历史（简化：按easeFactor区间分组）
+        List<Map<String, Object>> easeFactorDistribution = new ArrayList<>();
+        int[] ranges = {0, 150, 200, 250, 300};
+        String[] labels = {"<1.5", "1.5-2.0", "2.0-2.5", "2.5-3.0", ">3.0"};
+        for (int i = 0; i < ranges.length; i++) {
+            int min = ranges[i];
+            int max = i < ranges.length - 1 ? ranges[i + 1] : 999;
+            long count = cards.stream()
+                    .filter(c -> c.getEaseFactor() != null &&
+                            c.getEaseFactor() * 100 >= min &&
+                            c.getEaseFactor() * 100 < max)
+                    .count();
+            Map<String, Object> range = new HashMap<>();
+            range.put("label", labels[i]);
+            range.put("count", count);
+            easeFactorDistribution.add(range);
+        }
+        result.put("easeFactorDistribution", easeFactorDistribution);
+
+        return result;
+    }
+
+    // ======================== AI对话分析 ========================
+    public Map<String, Object> getAiInteractionStats(Long userId) {
+        Map<String, Object> result = new HashMap<>();
+
+        List<AiDialogue> dialogues = aiDialogueMapper.selectList(
+                new LambdaQueryWrapper<AiDialogue>()
+                        .eq(AiDialogue::getUserId, userId)
+                        .orderByDesc(AiDialogue::getDialogueTime));
+
+        long totalDialogues = dialogues.size();
+        result.put("totalDialogues", totalDialogues);
+
+        // 按意图类型分组
+        Map<String, Long> byIntent = dialogues.stream()
+                .filter(d -> d.getIntentType() != null)
+                .collect(Collectors.groupingBy(AiDialogue::getIntentType, Collectors.counting()));
+
+        List<Map<String, Object>> byIntentType = new ArrayList<>();
+        for (Map.Entry<String, Long> entry : byIntent.entrySet()) {
+            Map<String, Object> item = new HashMap<>();
+            item.put("intent", entry.getKey());
+            item.put("count", entry.getValue());
+            item.put("percentage", totalDialogues > 0 ? Math.round((double) entry.getValue() / totalDialogues * 1000) / 10.0 : 0);
+            byIntentType.add(item);
+        }
+        result.put("byIntentType", byIntentType);
+
+        // 每日对话次数（最近30天）
+        LocalDate thirtyDaysAgo = LocalDate.now().minusDays(30);
+        Map<LocalDate, Long> dailyCount = dialogues.stream()
+                .filter(d -> d.getDialogueTime() != null && d.getDialogueTime().toLocalDate().isAfter(thirtyDaysAgo))
+                .collect(Collectors.groupingBy(d -> d.getDialogueTime().toLocalDate(), Collectors.counting()));
+
+        List<Map<String, Object>> dailyDialogues = new ArrayList<>();
+        for (int i = 29; i >= 0; i--) {
+            LocalDate date = LocalDate.now().minusDays(i);
+            Map<String, Object> day = new HashMap<>();
+            day.put("date", date.toString());
+            day.put("count", dailyCount.getOrDefault(date, 0L));
+            dailyDialogues.add(day);
+        }
+        result.put("dailyDialogues", dailyDialogues);
+
+        // 平均会话长度
+        Map<String, List<AiDialogue>> bySession = dialogues.stream()
+                .filter(d -> d.getSessionId() != null)
+                .collect(Collectors.groupingBy(AiDialogue::getSessionId));
+        double avgSessionLength = bySession.values().stream()
+                .mapToInt(List::size)
+                .average()
+                .orElse(0);
+        result.put("avgSessionLength", Math.round(avgSessionLength * 10) / 10.0);
+
+        return result;
+    }
+
+    // ======================== 知识掌握度 ========================
+    public Map<String, Object> getKnowledgeMastery(Long userId) {
+        Map<String, Object> result = new HashMap<>();
+
+        // 从UserProfile获取画像数据
+        UserProfile profile = userProfileMapper.selectOne(
+                new LambdaQueryWrapper<UserProfile>()
+                        .eq(UserProfile::getUserId, userId)
+                        .eq(UserProfile::getIsCurrent, 1)
+                        .last("LIMIT 1"));
+
+        List<String> mastered = new ArrayList<>();
+        List<String> weakAreas = new ArrayList<>();
+        List<String> interests = new ArrayList<>();
+        Map<String, Object> performance = new HashMap<>();
+
+        if (profile != null && profile.getLearningBehavior() != null) {
+            try {
+                String json = profile.getLearningBehavior();
+                // 简单JSON解析
+                if (json.contains("\"knowledge_base\"")) {
+                    List<String> kb = extractJsonArray(json, "knowledge_base");
+                    mastered.addAll(kb);
+                }
+                if (json.contains("\"weak_areas\"")) {
+                    List<String> wa = extractJsonArray(json, "weak_areas");
+                    weakAreas.addAll(wa);
+                }
+                if (json.contains("\"interest_tags\"")) {
+                    List<String> it = extractJsonArray(json, "interest_tags");
+                    interests.addAll(it);
+                }
+
+                performance.put("learningSpeed", extractJsonDouble(json, "learning_speed", 0.5));
+                performance.put("engagement", extractJsonDouble(json, "engagement_level", 0.5));
+                performance.put("quizAccuracy", extractJsonDouble(json, "quiz_accuracy", 0.0));
+                performance.put("completionRate", extractJsonDouble(json, "completion_rate", 0.0));
+            } catch (Exception e) {
+                log.error("解析用户画像失败", e);
+            }
+        }
+
+        result.put("mastered", mastered);
+        result.put("weakAreas", weakAreas);
+        result.put("interests", interests);
+        result.put("performance", performance);
+
+        return result;
+    }
+
+    // ======================== 聚合全部分析数据 ========================
+    public Map<String, Object> getAnalyticsData(Long userId) {
+        Map<String, Object> result = new HashMap<>();
+
+        try {
+            result.put("overview", getDashboardStats(userId));
+        } catch (Exception e) {
+            log.error("获取overview失败", e);
+            result.put("overview", new HashMap<>());
+        }
+
+        try {
+            result.put("quizAnalysis", getQuizAnalysis(userId));
+        } catch (Exception e) {
+            log.error("获取quizAnalysis失败", e);
+            result.put("quizAnalysis", new HashMap<>());
+        }
+
+        try {
+            result.put("heatmap", getStudyHeatmap(userId, 180));
+        } catch (Exception e) {
+            log.error("获取heatmap失败", e);
+            result.put("heatmap", new HashMap<>());
+        }
+
+        try {
+            result.put("flashcardStats", getFlashcardStats(userId));
+        } catch (Exception e) {
+            log.error("获取flashcardStats失败", e);
+            result.put("flashcardStats", new HashMap<>());
+        }
+
+        try {
+            result.put("aiInteraction", getAiInteractionStats(userId));
+        } catch (Exception e) {
+            log.error("获取aiInteraction失败", e);
+            result.put("aiInteraction", new HashMap<>());
+        }
+
+        try {
+            result.put("knowledgeMastery", getKnowledgeMastery(userId));
+        } catch (Exception e) {
+            log.error("获取knowledgeMastery失败", e);
+            result.put("knowledgeMastery", new HashMap<>());
+        }
+
+        return result;
+    }
+
+    // ======================== JSON解析辅助方法 ========================
+    private List<String> extractJsonArray(String json, String key) {
+        List<String> result = new ArrayList<>();
+        try {
+            int start = json.indexOf("\"" + key + "\"");
+            if (start < 0) return result;
+            start = json.indexOf("[", start);
+            int end = json.indexOf("]", start);
+            if (start < 0 || end < 0) return result;
+            String arrayStr = json.substring(start + 1, end).trim();
+            if (arrayStr.isEmpty()) return result;
+            // 分割引号包围的字符串
+            String[] items = arrayStr.split(",");
+            for (String item : items) {
+                String trimmed = item.trim().replace("\"", "");
+                if (!trimmed.isEmpty()) {
+                    result.add(trimmed);
+                }
+            }
+        } catch (Exception e) {
+            log.error("解析JSON数组失败: " + key, e);
+        }
+        return result;
+    }
+
+    private double extractJsonDouble(String json, String key, double defaultValue) {
+        try {
+            int start = json.indexOf("\"" + key + "\"");
+            if (start < 0) return defaultValue;
+            start = json.indexOf(":", start);
+            if (start < 0) return defaultValue;
+            start++;
+            int end = start;
+            while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '.' || json.charAt(end) == '-')) {
+                end++;
+            }
+            String numStr = json.substring(start, end).trim();
+            return Double.parseDouble(numStr);
+        } catch (Exception e) {
+            return defaultValue;
+        }
     }
 
     private String _getResourceTitle(Long resourceId) {

@@ -13,6 +13,9 @@ export interface NoteResourceRel {
   resourceId: number
   selectedText?: string
   positionInfo?: string
+  planId?: number
+  moduleName?: string
+  resourceTitle?: string
 }
 
 export interface NoteCreateRequest {
@@ -24,4 +27,7 @@ export interface NoteLinkRequest {
   resourceId: number
   selectedText: string
   positionInfo: string
+  planId?: number
+  moduleName?: string
+  resourceTitle?: string
 }

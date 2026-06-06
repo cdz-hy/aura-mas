@@ -81,16 +81,19 @@ public class NoteService {
     }
 
     @Transactional
-    public void linkResource(Long noteId, Long resourceId, String selectedText, String positionInfo) {
+    public void linkResource(Long noteId, Long resourceId, String selectedText, String positionInfo,
+                             Long planId, String moduleName, String resourceTitle) {
         // 检查是否已存在关联
         NoteResourceRel existing = noteResourceRelMapper.selectOne(
                 new LambdaQueryWrapper<NoteResourceRel>()
                         .eq(NoteResourceRel::getNoteId, noteId)
                         .eq(NoteResourceRel::getResourceId, resourceId));
         if (existing != null) {
-            // 已存在则更新选中信息
             existing.setSelectedText(selectedText);
             existing.setPositionInfo(positionInfo);
+            existing.setPlanId(planId);
+            existing.setModuleName(moduleName);
+            existing.setResourceTitle(resourceTitle);
             noteResourceRelMapper.updateById(existing);
             return;
         }
@@ -99,6 +102,9 @@ public class NoteService {
         rel.setResourceId(resourceId);
         rel.setSelectedText(selectedText);
         rel.setPositionInfo(positionInfo);
+        rel.setPlanId(planId);
+        rel.setModuleName(moduleName);
+        rel.setResourceTitle(resourceTitle);
         noteResourceRelMapper.insert(rel);
     }
 

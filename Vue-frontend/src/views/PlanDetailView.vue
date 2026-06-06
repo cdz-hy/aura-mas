@@ -729,14 +729,7 @@ function extractRangeContent(range: Range): string {
 }
 
 function formatNoteContent(text: string): string {
-  const p = selectionPopup.value
-  const label = p.moduleName
-    ? `来自「${p.moduleName}」模块 · ${p.resourceTitle}`
-    : `来自《${p.resourceTitle}》`
-  const link = p.planId && p.resourceId
-    ? `[${label}](/plan/${p.planId}?resource=${p.resourceId})`
-    : label
-  return `> ${text.replace(/\n/g, '\n> ')}\n——${link}`
+  return text
 }
 
 function buildPositionInfo(): string {
@@ -759,15 +752,19 @@ async function addToNewNote() {
   if (!text) return
 
   try {
-    const noteName = `摘录 - ${selectionPopup.value.resourceTitle}`
+    const p = selectionPopup.value
+    const noteName = `摘录 - ${p.resourceTitle}`
     const content = formatNoteContent(text)
     const res = await createNote({ noteName, content })
     const noteId = (res as any)?.data?.id
-    if (noteId && selectionPopup.value.resourceId) {
+    if (noteId && p.resourceId) {
       await linkNoteToResource(noteId, {
-        resourceId: selectionPopup.value.resourceId,
+        resourceId: p.resourceId,
         selectedText: text.substring(0, 5000),
         positionInfo: buildPositionInfo(),
+        planId: p.planId,
+        moduleName: p.moduleName,
+        resourceTitle: p.resourceTitle,
       }).catch(() => {})
     }
   } catch (e) {
@@ -799,14 +796,18 @@ async function appendToExistingNote(note: Note) {
   if (!text) return
 
   try {
+    const p = selectionPopup.value
     const existing = note.content || ''
-    const newContent = existing + '\n\n' + formatNoteContent(text)
+    const newContent = existing + (existing ? '\n\n' : '') + formatNoteContent(text)
     await updateNote(note.id, { noteName: note.noteName, content: newContent })
-    if (selectionPopup.value.resourceId) {
+    if (p.resourceId) {
       await linkNoteToResource(note.id, {
-        resourceId: selectionPopup.value.resourceId,
+        resourceId: p.resourceId,
         selectedText: text.substring(0, 5000),
         positionInfo: buildPositionInfo(),
+        planId: p.planId,
+        moduleName: p.moduleName,
+        resourceTitle: p.resourceTitle,
       }).catch(() => {})
     }
   } catch (e) {
