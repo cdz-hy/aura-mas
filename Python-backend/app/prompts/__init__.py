@@ -3,7 +3,7 @@
 from app.prompts.controller import CONTROLLER_PROMPT
 from app.prompts.task_decomposer import TASK_DECOMPOSER_PROMPT
 from app.prompts.simple_answer import SIMPLE_ANSWER_PROMPT
-from app.prompts.rag_retriever import RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT
+from app.prompts.rag_retriever import RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT, RAG_RETRIEVER_CONFIG_PROMPT
 from app.prompts.content_orchestrator import (
     CONTENT_ORCHESTRATOR_BATCH_PROMPT,
     CONTENT_ORCHESTRATOR_PARALLEL_PROMPT,

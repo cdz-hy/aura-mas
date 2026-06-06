@@ -73,6 +73,33 @@ def _flush_module_usage(modules_list: list, user_id: int, scene: str, task_id=No
             task_id=task_id,
         )
 
+def _get_personalized_preferences(user_profile: Dict[str, Any]) -> str:
+    """根据用户画像中的 Felder-Silverman 学习风格计算个性化编排要求"""
+    behavior = user_profile.get("learning_behavior", {})
+    fs = behavior.get("felder_silverman", {})
+    vv = fs.get("visual_verbal", 0.0)
+    si = fs.get("sensing_intuitive", 0.0)
+
+    # 1. 详细度与文本长度偏好 (Sensing vs Intuitive)
+    if si < -0.3:
+        detail_pref = "详细度极高！必须尽可能输出极长且内容极度丰富的文本。提供极其详尽、具体的概念深度剖析、海量实例应用和事无巨细的步骤拆解，切勿精简任何细节，字数越多越好！"
+    elif si > 0.3:
+        detail_pref = "偏好高层概念和原理解释。核心理论讲解需尽量丰富透彻，输出较长的篇幅以确保原理解释的深度，但在举例说明时可适当保持精炼，避免过于碎片化的细节，但总体篇幅仍需保持较长且充实。"
+    else:
+        detail_pref = "详细度高，需要输出较长篇幅的文本。提供丰富的理论说明与充实的实例分析，请放开字数限制，尽可能详尽地展开讲解。"
+
+    # 2. 图片数量与图文配比偏好 (Visual vs Verbal)
+    if vv < -0.3:
+        image_pref = "强偏好视觉。必须积极且合理地将检索上下文中提供的所有相关的真实图片（使用提供的完整HTML <img>标签格式）嵌入内容中（每个包含图片资料的模块建议插入 2-3 张图片，如果有）"
+    elif vv > 0.3:
+        image_pref = "强偏好纯文字与逻辑表述。除非对理解核心概念极其关键，否则请尽量少用图片（每个模块最多插入 1 张最核心的图片，如无极其关键的图片则完全不用）"
+    else:
+        image_pref = "图文平衡。根据内容自然搭配图片，每个模块合理插入 1-2 张核心图片（如果有）"
+
+    return (
+        f"1. 详细度与篇幅：{detail_pref}\n"
+        f"2. 图文配比与图片数量：{image_pref}"
+    )
 
 
 def _generate_single_module(
@@ -151,10 +178,8 @@ def _generate_single_module(
     content_text = "\n\n---\n\n".join(content_parts)
     
     # 用户偏好
-    behavior = user_profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
-    vv = fs.get("visual_verbal", 0)
-    pref_text = "视觉型" if vv < -0.3 else ("言语型" if vv > 0.3 else "均衡型")
+    user_pref_text = _get_personalized_preferences(user_profile)
+    logger.info(f"  [模块{module_order}] 编排个性化偏好约束:\n{user_pref_text}")
     
     # 构造对话历史上下文
     history_text = ""
@@ -190,7 +215,8 @@ def _generate_single_module(
 - 关键要点: {', '.join(key_points)}
 - 模块顺序: 第 {module_order} 个模块
 {type_hint}
-用户内容偏好: {pref_text}
+用户个性化内容偏好要求（必须严格遵守且在此模块中体现）:
+{user_pref_text}
 
 检索到的相关知识资料:
 {content_text}
@@ -666,10 +692,8 @@ def _batch_orchestration(
             desc_lines.append(line)
         modules_desc = "\n".join(desc_lines)
 
-    behavior = user_profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
-    vv = fs.get("visual_verbal", 0)
-    pref_text = "视觉型" if vv < -0.3 else ("言语型" if vv > 0.3 else "均衡型")
+    user_pref_text = _get_personalized_preferences(user_profile)
+    logger.info(f"  [内容编排] 批量编排启动，用户画像偏好要求:\n{user_pref_text}")
 
     # 构造对话历史上下文
     history_text = ""
@@ -692,7 +716,8 @@ def _batch_orchestration(
 参考学习路径:
 {modules_desc}
 
-用户内容偏好: {pref_text}
+用户个性化内容偏好要求（必须严格遵守且在生成的各个模块中体现）:
+{user_pref_text}
 
 检索到的知识资料:
 {content_text}

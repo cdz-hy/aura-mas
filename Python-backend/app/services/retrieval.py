@@ -37,7 +37,7 @@ class HybridRetrievalService:
                 return ""
         return self.parents_cache[doc_id].get(parent_id, "")
 
-    async def search(self, query: str, limit: int = 20, rerank_top_n: int = 5, min_rerank_score: float = 0.0) -> Dict[str, Any]:
+    async def search(self, query: str, limit: int = 20, rerank_top_n: int = 5, min_rerank_score: float = 0.0, image_bias: float = 0.5) -> Dict[str, Any]:
         """
         混合检索流程：
         1. 获取查询向量。
@@ -59,43 +59,62 @@ class HybridRetrievalService:
         dense_vec, sparse_vec = await asyncio.gather(dense_task, sparse_task)
         print(f"  [阶段 1/4] 查询向量生成完成 (Dense 维度: {len(dense_vec)}, Sparse 非零项: {len(sparse_vec.get('indices', []))})")
 
-        # 2. 执行混合检索 (DBSF 融合)
-        # 文本走 Dense+Sparse 双通道，图片只走 Dense 通道
-        # 原因：BM25 基于关键词匹配，对图片 caption 检索无实质增益，
-        # 反而因图片在 Sparse 通道排名极低而影响 DBSF 融合质量
+        # 2. 并行独立检索 (解决 DBSF 算分不公问题)
+        text_limit = max(1, int(limit * (1.0 - image_bias)))
+        image_limit = max(1, int(limit * image_bias))
+        
         text_filter = models.Filter(must=[models.FieldCondition(key="type", match=models.MatchValue(value="text"))])
         image_filter = models.Filter(must=[models.FieldCondition(key="type", match=models.MatchValue(value="image"))])
-        # 先放入绝对安全的 Dense 通道（score_threshold 过滤低分噪声，防止拉低 DBSF 融合质量）
-        prefetch_list = [
-            # 文本 Dense 通道
-            models.Prefetch(query=dense_vec, using="text-dense", filter=text_filter, limit=limit, score_threshold=0.6),
-            # 图片 Dense 通道（仅 Dense，BM25 对图片 caption 检索无显著增益）
-            models.Prefetch(query=dense_vec, using="text-dense", filter=image_filter, limit=limit, score_threshold=0.5),
+        
+        # 文本专用检索 (DBSF)
+        text_prefetch = [
+            models.Prefetch(query=dense_vec, using="text-dense", filter=text_filter, limit=text_limit, score_threshold=0.6)
         ]
-        # 护栏：只有查询词 Sparse 向量非空时，才开启 BM25 并联通道，防止空 indices 送入 DBSF 引发崩溃
         if sparse_vec.get("indices") and len(sparse_vec["indices"]) > 0:
-            prefetch_list.append(
+            text_prefetch.append(
                 models.Prefetch(
                     query=models.SparseVector(indices=sparse_vec["indices"], values=sparse_vec["values"]),
-                    using="text-sparse", filter=text_filter, limit=limit, score_threshold=6.0
+                    using="text-sparse", filter=text_filter, limit=text_limit, score_threshold=6.0
                 )
             )
         else:
-            print(f"  [降级] 查询词稀疏向量为空，本次检索自动关闭 text-sparse 并联通道")
-
-        print(f"\n  [阶段 2/4] 正在执行并联混合检索 (Dense文本 + Sparse文本 + Dense图片 -> DBSF 融合), 候选上限: {limit}...")
-        search_func = partial(
+            print(f"  [降级] 查询词稀疏向量为空，本次文本检索自动关闭 text-sparse 并联通道")
+            
+        print(f"\n  [阶段 2/4] 正在执行独立并发检索: 文本(DBSF, 限额 {text_limit}) + 图片(Dense, 限额 {image_limit})...")
+        
+        text_search_func = partial(
             self.vector_db.client.query_points,
             collection_name=self.vector_db.collection_name,
-            prefetch=prefetch_list,
+            prefetch=text_prefetch,
             query=models.FusionQuery(fusion=models.Fusion.DBSF),
-            limit=limit,
+            limit=text_limit,
         )
-        search_result = await loop.run_in_executor(_executor, search_func)
 
-        # 3. 整理初步检索结果 (Top N 小切块)
+        # 图片专用检索 (Dense Only)
+        image_search_func = partial(
+            self.vector_db.client.query_points,
+            collection_name=self.vector_db.collection_name,
+            query=dense_vec,
+            using="text-dense",
+            query_filter=image_filter,
+            limit=image_limit,
+            score_threshold=0.5,
+        )
+
+        text_result, image_result = await asyncio.gather(
+            loop.run_in_executor(_executor, text_search_func),
+            loop.run_in_executor(_executor, image_search_func)
+        )
+
+        # 3. 整理初步检索结果 (合并)
         initial_results = []
-        for point in search_result.points:
+        for point in text_result.points:
+            initial_results.append({
+                "id": point.id,
+                "score": point.score,
+                "payload": point.payload
+            })
+        for point in image_result.points:
             initial_results.append({
                 "id": point.id,
                 "score": point.score,

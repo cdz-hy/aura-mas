@@ -82,14 +82,41 @@ def _generate_single_module(
     # 用户画像风格提示
     behavior = user_profile.get("learning_behavior", {})
     fs = behavior.get("felder_silverman", {})
-    style_hints = []
-    if fs.get("visual_verbal", 0) < -0.3:
-        style_hints.append("多使用图表、流程图描述")
-    if fs.get("sensing_intuitive", 0) < -0.3:
-        style_hints.append("多给出具体实例和实际案例")
-    if fs.get("sequential_global", 0) < -0.3:
-        style_hints.append("按照步骤顺序逐步讲解")
-    style_text = "用户偏好: " + "; ".join(style_hints) if style_hints else ""
+    vv = fs.get("visual_verbal", 0.0)
+    si = fs.get("sensing_intuitive", 0.0)
+    sg = fs.get("sequential_global", 0.0)
+    
+    # 1. 详细度与文本长度偏好
+    if si < -0.3:
+        detail_pref = "详细度极高！必须尽可能输出极长且内容极度丰富的文本。提供极其详尽、具体的概念深度剖析、海量实例应用和事无巨细的步骤拆解，切勿精简任何细节，字数越多越好！"
+    elif si > 0.3:
+        detail_pref = "偏好高层概念和原理解释。核心理论讲解需尽量丰富透彻，输出较长的篇幅以确保原理解释的深度，但在举例说明时可适当保持精炼，避免过于碎片化的细节，但总体篇幅仍需保持较长且充实。"
+    else:
+        detail_pref = "详细度高，需要输出较长篇幅的文本。提供丰富的理论说明与充实的实例分析，请放开字数限制，尽可能详尽地展开讲解。"
+        
+    # 2. 图片使用偏好
+    if vv < -0.3:
+        image_pref = "强偏好视觉。必须积极从可用图片列表中挑选多张相关的真实图片嵌入内容中（强烈建议选用 2-3 张甚至更多合适图片，只要相关即可）"
+    elif vv > 0.3:
+        image_pref = "强偏好文字。尽量少用图片（除非对理解核心概念不可或缺，最多插入 1 张最核心的图片，否则完全不用）"
+    else:
+        image_pref = "图文平衡。自然搭配图片，根据需要适量插入（1-2 张核心图片）"
+        
+    # 3. 结构偏好
+    if sg < -0.3:
+        struct_pref = "按严格的逻辑步骤顺序逐步讲解"
+    elif sg > 0.3:
+        struct_pref = "先给出全局宏观图景和最终结论，再填充细节"
+    else:
+        struct_pref = "结构自然，按常规逻辑推进"
+
+    style_text = (
+        "用户个性化内容偏好要求（生成时必须严格遵守）:\n"
+        f"1. 详细度与篇幅：{detail_pref}\n"
+        f"2. 图文配比与图片数量：{image_pref}\n"
+        f"3. 结构化讲解顺序：{struct_pref}"
+    )
+    logger.info(f"  [资源生成] 模块{module_order} 个性化偏好约束:\n{style_text}")
 
     # ==================== ReAct 自主搜索循环 ====================
     MAX_REACT_ROUNDS = 6  # 最多 6 轮 ReAct 循环

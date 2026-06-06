@@ -6,7 +6,7 @@ import asyncio
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_rag_retriever_llm
-from app.prompts import RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT
+from app.prompts import RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT, RAG_RETRIEVER_CONFIG_PROMPT
 from app.utils.token_recorder import record_from_mimo
 from app.services.retrieval import HybridRetrievalService
 
@@ -25,14 +25,15 @@ def _get_retrieval_service() -> HybridRetrievalService:
     return _retrieval_service
 
 
-def _compute_retrieval_config(profile: Dict[str, Any]) -> Dict[str, Any]:
-    """根据用户画像的 Felder-Silverman 模型决定检索策略"""
+async def _compute_retrieval_config(profile: Dict[str, Any], user_message: str, learning_goal: str, llm) -> Dict[str, Any]:
+    """根据用户画像决定基线检索策略，并交由 LLM 结合上下文做最终调整"""
+    import json
     behavior = profile.get("learning_behavior", {})
     fs = behavior.get("felder_silverman", {})
 
     config = {
-        "total_recall": 40,
-        "rerank_top_n": 15,
+        "total_recall": 50,
+        "rerank_top_n": 20,
         "image_bias": 0.5,
         "text_bias": 0.5,
         "min_rerank_score": RERANK_SCORE_THRESHOLD,
@@ -43,11 +44,49 @@ def _compute_retrieval_config(profile: Dict[str, Any]) -> Dict[str, Any]:
     config["text_bias"] = 1.0 - config["image_bias"]
 
     si = fs.get("sensing_intuitive", 0)
-    config["total_recall"] = int(40 + si * -10)
-    config["total_recall"] = max(30, min(60, config["total_recall"]))
-    config["rerank_top_n"] = max(10, min(30, config["total_recall"] // 3))
+    config["total_recall"] = int(50 + si * -10)
+    config["total_recall"] = max(30, min(70, config["total_recall"]))
+    config["rerank_top_n"] = max(10, min(35, int(config["total_recall"] * 0.4)))
 
-    logger.info(f"  [RAG检索] 检索配置: 召回={config['total_recall']}, 精排={config['rerank_top_n']}, 图片偏向={config['image_bias']:.2f}")
+    baseline_image_limit = max(1, int(config["total_recall"] * config["image_bias"]))
+    baseline_text_limit = max(1, int(config["total_recall"] * (1.0 - config["image_bias"])))
+    logger.info(f"  [RAG检索] 基础配置基线: 召回={config['total_recall']} (图片: {baseline_image_limit}个, 文本: {baseline_text_limit}个), 精排={config['rerank_top_n']}, 图片偏向={config['image_bias']:.2f}")
+
+    # 交由 LLM 动态决策
+    try:
+        prompt = RAG_RETRIEVER_CONFIG_PROMPT.format(
+            learning_goal=learning_goal,
+            user_message=user_message,
+            baseline_recall=config["total_recall"],
+            baseline_rerank=config["rerank_top_n"],
+            baseline_image_bias=config["image_bias"]
+        )
+        messages = [{"role": "user", "content": prompt}]
+        response = await llm.ainvoke(messages)
+        content = response.content.strip()
+        
+        # 提取 JSON
+        if "{" in content and "}" in content:
+            json_str = content[content.find("{"):content.rfind("}")+1]
+            decision = json.loads(json_str)
+            
+            if "total_recall" in decision:
+                config["total_recall"] = int(decision["total_recall"])
+            if "rerank_top_n" in decision:
+                config["rerank_top_n"] = int(decision["rerank_top_n"])
+            if "image_bias" in decision:
+                config["image_bias"] = float(decision["image_bias"])
+                config["text_bias"] = 1.0 - config["image_bias"]
+                
+            image_limit = max(1, int(config["total_recall"] * config["image_bias"]))
+            text_limit = max(1, int(config["total_recall"] * (1.0 - config["image_bias"])))
+            logger.info(f"  [RAG检索] LLM自主调优后配置: 召回={config['total_recall']} (图片: {image_limit}个, 文本: {text_limit}个), 精排={config['rerank_top_n']}, 图片偏向={config['image_bias']:.2f}")
+    except Exception as e:
+        logger.warning(f"  [RAG检索] LLM 调优配置失败 ({e})，降级使用基线配置")
+
+    # 最终计算并记录具体通道限制，存入配置字典中
+    config["image_limit"] = max(1, int(config["total_recall"] * config["image_bias"]))
+    config["text_limit"] = max(1, int(config["total_recall"] * (1.0 - config["image_bias"])))
     return config
 
 
@@ -59,6 +98,7 @@ async def _retrieve_for_module(query: str, retrieval_config: Dict[str, Any]) -> 
         limit=retrieval_config["total_recall"],
         rerank_top_n=retrieval_config["rerank_top_n"],
         min_rerank_score=retrieval_config.get("min_rerank_score", RERANK_SCORE_THRESHOLD),
+        image_bias=retrieval_config.get("image_bias", 0.5)
     )
     return result
 
@@ -145,7 +185,7 @@ async def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
     
     # 重试模式：只检索未通过的模块
     if retry_mode and target_module_ids:
-        logger.info(f"  [RAG检索智能体] 🔄 重试模式：只检索模块 {target_module_ids}")
+        logger.info(f"  [RAG检索智能体] 重试模式：只检索模块 {target_module_ids}")
         
         # 筛选出需要重新检索的模块
         target_modules = []
@@ -164,7 +204,15 @@ async def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
         modules_to_retrieve = modules
 
     llm = get_rag_retriever_llm()
-    retrieval_config = _compute_retrieval_config(user_profile)
+
+    retrieval_config = await _compute_retrieval_config(
+        profile=user_profile,
+        user_message=user_message,
+        learning_goal=state.get("learning_goal", ""),
+        llm=llm
+    )
+    
+    # 获取各个模块的优化检索词
     search_queries = _optimize_search_queries(
         modules_to_retrieve,
         user_message,
