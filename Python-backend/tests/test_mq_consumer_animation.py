@@ -58,11 +58,7 @@ def test_mq_animation_task_routes_to_animation_generator_and_persists_html():
         "id": 32,
         "moduleType": "animation",
         "moduleOrder": 3,
-        "moduleData": json.dumps({
-            "module_title": "排序算法",
-            "module_description": "理解比较、交换和有序区",
-            "title": "排序动画",
-        }, ensure_ascii=False),
+        "moduleData": json.dumps({}, ensure_ascii=False),
     }
     text_resource = {
         "id": 12,
@@ -86,6 +82,7 @@ def test_mq_animation_task_routes_to_animation_generator_and_persists_html():
     assert state["intent"] == "generate_animation"
     assert state["next_node"] == "animation_skill_generator"
     assert state["background_generation"] is True
+    assert state["learning_goal"] == ""
     assert "冒泡排序" in state["source_resource_content"]
 
     complete_generation_task.assert_called_once()
