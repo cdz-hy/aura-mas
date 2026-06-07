@@ -154,6 +154,38 @@ def test_successful_direct_html_generation(mock_record, mock_load):
 
 @patch("app.agents.animation_skill_generator.load_skill", return_value=make_skill())
 @patch("app.agents.animation_skill_generator.record_from_mimo")
+def test_structural_contract_failure_retries_with_validation_prompt(mock_record, mock_load):
+    bad_html = """<!doctype html>
+<html>
+<head>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+</head>
+<body><main><section class="beat active">缺少舞台</section></main></body>
+</html>"""
+    fixed_html = """<!doctype html>
+<html>
+<head>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+</head>
+<body><main id="stage"><section class="beat active">排序动画</section></main></body>
+</html>"""
+    first_llm = FakeStreamLLM([bad_html])
+    second_llm = FakeStreamLLM([fixed_html])
+
+    with patch("app.agents.animation_skill_generator.get_resource_type_generator_llm", side_effect=[first_llm, second_llm]):
+        result = animation_skill_generator_node(make_state())
+
+    retry_prompt = second_llm.messages[-1]["content"]
+    generated = result["generated_content"]
+    assert generated["metadata"]["fallback"] is False
+    assert generated["html"] == fixed_html
+    assert "HTML validation failed" in retry_prompt
+    assert "#stage" in retry_prompt
+    assert "JavaScript 语法错误" not in retry_prompt
+
+
+@patch("app.agents.animation_skill_generator.load_skill", return_value=make_skill())
+@patch("app.agents.animation_skill_generator.record_from_mimo")
 def test_broken_js_retries_then_uses_fallback(mock_record, mock_load):
     bad_html = "<!doctype html><html><body><script>function () {</script></body></html>"
     first_llm = FakeStreamLLM([bad_html])

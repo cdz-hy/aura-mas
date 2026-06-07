@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from html.parser import HTMLParser
 from typing import Dict, Any, Tuple
 
 from app.agents.schemas import AgentState
@@ -84,22 +85,39 @@ def _is_javascript_script(attrs: str) -> bool:
     return normalized == "module" or normalized in JS_SCRIPT_TYPES
 
 
-def _extract_class_token_sets(html_content: str) -> list[set[str]]:
-    """Extract quoted class attributes as normalized token sets."""
-    class_attrs = re.findall(
-        r"\bclass\s*=\s*(?:\"([^\"]*)\"|'([^']*)')",
-        html_content,
-        re.IGNORECASE,
-    )
-    token_sets = []
-    for double_quoted, single_quoted in class_attrs:
-        class_value = double_quoted or single_quoted
-        token_sets.append({
-            token.lower()
-            for token in re.split(r"\s+", class_value)
-            if token
-        })
-    return token_sets
+class _AnimationHtmlContractParser(HTMLParser):
+    """Collect real HTML tags and attributes for animation contract checks."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.start_tags: list[tuple[str, dict[str, str]]] = []
+        self.end_tags: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {
+            name.lower(): value or ""
+            for name, value in attrs
+            if name
+        }
+        self.start_tags.append((tag.lower(), attr_map))
+
+    def handle_endtag(self, tag: str) -> None:
+        self.end_tags.append(tag.lower())
+
+
+def _parse_animation_html(html_content: str) -> _AnimationHtmlContractParser:
+    parser = _AnimationHtmlContractParser()
+    parser.feed(html_content)
+    parser.close()
+    return parser
+
+
+def _class_tokens(class_value: str) -> set[str]:
+    return {
+        token.lower()
+        for token in re.split(r"\s+", class_value)
+        if token
+    }
 
 
 def _select_style_by_profile(user_profile: dict, override_style: str | None = None) -> str:
@@ -322,13 +340,22 @@ def _validate_animation_html_contract(html_content: str) -> Tuple[bool, str]:
     if not html_content or not html_content.strip():
         return False, "HTML is empty"
 
-    lowered = html_content.lower()
-    if "<html" not in lowered or "</html>" not in lowered:
+    parser = _parse_animation_html(html_content)
+    start_tags = parser.start_tags
+    html_start = any(tag == "html" for tag, _ in start_tags)
+    html_end = "html" in parser.end_tags
+    if not html_start or not html_end:
         return False, "HTML must include <html> and </html>"
-    if 'id="stage"' not in lowered and "id='stage'" not in lowered:
+
+    has_stage = any(attrs.get("id", "").lower() == "stage" for _, attrs in start_tags)
+    if not has_stage:
         return False, "Animation HTML must include #stage"
 
-    class_token_sets = _extract_class_token_sets(html_content)
+    class_token_sets = [
+        _class_tokens(attrs.get("class", ""))
+        for _, attrs in start_tags
+        if attrs.get("class")
+    ]
     if not any("beat" in class_tokens for class_tokens in class_token_sets):
         return False, "Animation HTML must include at least one .beat"
     if not any(
@@ -336,8 +363,16 @@ def _validate_animation_html_contract(html_content: str) -> Tuple[bool, str]:
         for class_tokens in class_token_sets
     ):
         return False, "Animation HTML must mark an initial active beat"
-    if "gsap" not in lowered:
-        return False, "Animation HTML must include GSAP or GSAP-based script references"
+
+    has_gsap_script = any(
+        tag == "script"
+        and "src" in attrs
+        and "gsap" in attrs["src"].lower()
+        and attrs["src"].lower().split("?", 1)[0].split("#", 1)[0].endswith(".js")
+        for tag, attrs in start_tags
+    )
+    if not has_gsap_script:
+        return False, "Animation HTML must include a GSAP <script src=\"...gsap...js\"> reference"
     return True, ""
 
 
@@ -764,42 +799,43 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
 
             logger.info(f"  [动画生成] 成功提取 HTML，长度: {len(html_output)} 字符")
 
-            # ── JS 语法验证 ──
-            is_valid, js_error = _validate_js_syntax(html_output)
+            # ── HTML 验证（JS 语法 + 动画结构契约） ──
+            is_valid, validation_error = _validate_js_syntax(html_output)
             if is_valid:
                 contract_valid, contract_error = _validate_animation_html_contract(html_output)
                 if contract_valid:
                     logger.info("  [动画生成] JS 语法验证与结构验证通过 ✓")
                     break
-                js_error = contract_error
+                validation_error = contract_error
                 logger.warning(f"  [动画生成] HTML 结构验证失败: {contract_error}")
 
-            # JS 语法错误 → 判断是否可重试
-            logger.warning(f"  [动画生成] JS 语法验证失败: {js_error[:200]}")
+            # HTML 验证失败 → 判断是否可重试
+            logger.warning(f"  [动画生成] HTML 验证失败: {validation_error[:200]}")
 
             if js_retry_count < ANIMATION_JS_RETRY_MAX:
                 js_retry_count += 1
-                logger.info(f"  [动画生成] 尝试第 {js_retry_count} 次 JS 修复重试...")
+                logger.info(f"  [动画生成] 尝试第 {js_retry_count} 次 HTML 修复重试...")
 
                 # 把错误信息反馈给 LLM，让它修复
                 messages.append({"role": "assistant", "content": response})
                 messages.append({
                     "role": "user",
                     "content": (
-                        f"你刚才生成的 HTML 有 JavaScript 语法错误，导致动画无法播放（黑屏）。\n\n"
-                        f"**错误信息**: {js_error}\n\n"
-                        f"请修复这个语法错误，重新输出完整 HTML。"
+                        f"HTML validation failed for the animation output.\n\n"
+                        f"**Validation error**: {validation_error}\n\n"
+                        f"请修复这个 HTML，重新输出完整单文件 HTML。\n"
                         f"特别注意：\n"
-                        f"1. 检查所有括号、花括号、方括号是否配对\n"
-                        f"2. 确保 gsap.to() / gsap.from() 的参数列表完整闭合\n"
-                        f"3. 确保 GSAP 动画的 target 选择器在 HTML 中有对应元素\n"
+                        f"1. 保留 <html>...</html>、#stage、至少一个 .beat，且初始 .beat 同时包含 active\n"
+                        f"2. 使用 <script src=\"...gsap...js\"></script> 引入 GSAP\n"
+                        f"3. 检查所有 JavaScript 括号、花括号、方括号是否配对\n"
+                        f"4. 确保 gsap.to() / gsap.from() 的 target 选择器在 HTML 中有对应元素\n"
                     ),
                 })
                 continue
             else:
-                logger.warning(f"  [动画生成] JS 修复重试已达上限({ANIMATION_JS_RETRY_MAX})，使用降级 HTML")
+                logger.warning(f"  [动画生成] HTML 修复重试已达上限({ANIMATION_JS_RETRY_MAX})，使用降级 HTML")
                 llm_failed = True
-                llm_error = f"JS 语法错误，重试 {js_retry_count} 次仍未修复: {js_error[:120]}"
+                llm_error = f"HTML 验证失败，重试 {js_retry_count} 次仍未修复: {validation_error[:120]}"
                 html_output = _build_fallback_html(
                     title=source_title,
                     description="",
