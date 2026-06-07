@@ -40,6 +40,50 @@ def _resolve_node_bin() -> str | None:
 NODE_BIN = _resolve_node_bin()
 
 
+JS_SCRIPT_TYPES = {
+    "application/ecmascript",
+    "application/javascript",
+    "application/x-ecmascript",
+    "application/x-javascript",
+    "text/ecmascript",
+    "text/javascript",
+    "text/javascript1.0",
+    "text/javascript1.1",
+    "text/javascript1.2",
+    "text/javascript1.3",
+    "text/javascript1.4",
+    "text/javascript1.5",
+    "text/jscript",
+    "text/livescript",
+    "text/x-ecmascript",
+    "text/x-javascript",
+}
+
+
+def _get_script_attr(attrs: str, attr_name: str) -> str | None:
+    match = re.search(
+        rf"\b{re.escape(attr_name)}\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s\"'=<>`]+))",
+        attrs,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return next((group for group in match.groups() if group is not None), None)
+
+
+def _is_javascript_script(attrs: str) -> bool:
+    """Return True for inline classic JavaScript and module scripts."""
+    if _get_script_attr(attrs, "src"):
+        return False
+
+    script_type = _get_script_attr(attrs, "type")
+    if not script_type:
+        return True
+
+    normalized = script_type.split(";", 1)[0].strip().lower()
+    return normalized == "module" or normalized in JS_SCRIPT_TYPES
+
+
 def _select_style_by_profile(user_profile: dict, override_style: str | None = None) -> str:
     """根据用户画像选择动画风格，支持通过 override_style 显式覆盖"""
     if override_style:
@@ -184,17 +228,19 @@ def _validate_js_syntax(html_content: str) -> Tuple[bool, str]:
     if not html_content:
         return True, ""
 
-    # 提取所有 <script> 标签中的 JS 代码
+    # 提取所有 inline JavaScript <script> 标签中的 JS 代码
     script_blocks = re.findall(
-        r"<script[^>]*>(.*?)</script>", html_content, re.DOTALL | re.IGNORECASE
+        r"<script\b([^>]*)>(.*?)</script>", html_content, re.DOTALL | re.IGNORECASE
     )
 
     if not script_blocks:
         return True, ""
 
-    # 合并所有 script 块进行检查（排除带 src= 的外部脚本标签）
+    # 合并所有 classic/module JS script 块进行检查，跳过 JSON-LD/importmap 等数据脚本
     js_code_parts = []
-    for block in script_blocks:
+    for attrs, block in script_blocks:
+        if not _is_javascript_script(attrs):
+            continue
         stripped = block.strip()
         if not stripped:
             continue

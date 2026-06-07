@@ -53,9 +53,56 @@ def test_extract_html_from_markdown_code_block():
 
 
 def test_validate_js_syntax_rejects_broken_script():
-    ok, error = _validate_js_syntax("<html><body><script>function () {</script></body></html>")
+    html = "<html><body><script>function () {</script></body></html>"
+
+    with patch("app.agents.animation_skill_generator.NODE_BIN", "node"), \
+            patch("app.agents.animation_skill_generator.subprocess.run") as mock_run:
+        mock_run.return_value = SimpleNamespace(
+            returncode=1,
+            stderr="temp.js:1\nSyntaxError: Function statements require a function name",
+        )
+        ok, error = _validate_js_syntax(html)
+
     assert ok is False
     assert "SyntaxError" in error
+    mock_run.assert_called_once()
+
+
+def test_validate_js_syntax_skips_when_node_is_unavailable():
+    html = "<html><body><script>function () {</script></body></html>"
+
+    with patch("app.agents.animation_skill_generator.NODE_BIN", None), \
+            patch("app.agents.animation_skill_generator.subprocess.run") as mock_run:
+        ok, error = _validate_js_syntax(html)
+
+    assert ok is True
+    assert error == ""
+    mock_run.assert_not_called()
+
+
+def test_validate_js_syntax_skips_non_javascript_script_types():
+    html = """<html><body>
+<script type="application/json">{"broken":}</script>
+<script type="importmap">{"imports":{"lib":"./lib.js"}}</script>
+<script>const ready = true;</script>
+</body></html>"""
+    checked = {}
+
+    def fake_run(args, capture_output, text, timeout):
+        with open(args[-1], encoding="utf-8") as script_file:
+            checked["source"] = script_file.read()
+        return SimpleNamespace(returncode=0, stderr="")
+
+    with patch("app.agents.animation_skill_generator.NODE_BIN", "node"), \
+            patch("app.agents.animation_skill_generator.subprocess.run", side_effect=fake_run) as mock_run:
+        ok, error = _validate_js_syntax(html)
+
+    assert ok is True
+    assert error == ""
+    mock_run.assert_called_once()
+    assert "const ready = true;" in checked["source"]
+    assert '"broken":' not in checked["source"]
+    assert "imports" not in checked["source"]
 
 
 def test_assemble_system_prompt_contains_current_direct_html_contract():
