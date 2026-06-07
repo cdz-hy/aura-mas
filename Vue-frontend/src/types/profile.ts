@@ -20,7 +20,7 @@ export interface ProfileDimensions {
   // 辅助维度
   knowledge_base?: string[]
   interest_tags?: string[]
-  goal_orientation?: 'exam' | 'career' | 'interest' | 'research'
+  goal_orientation?: 'exam' | 'career' | 'interest' | 'research' | 'skill'
   weak_areas?: string[]
   preferred_resource_types?: string[]
 }
@@ -42,6 +42,7 @@ export const GOAL_ORIENTATION_LABELS: Record<string, string> = {
   career: '职业发展',
   interest: '兴趣爱好',
   research: '学术研究',
+  skill: '技能提升',
 }
 
 const FELDER_AXIS_LABELS: Record<string, [string, string]> = {

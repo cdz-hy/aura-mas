@@ -29,7 +29,6 @@ async def _compute_retrieval_config(profile: Dict[str, Any], user_message: str, 
     """根据用户画像决定基线检索策略，并交由 LLM 结合上下文做最终调整"""
     import json
     behavior = profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
 
     config = {
         "total_recall": 50,
@@ -39,11 +38,11 @@ async def _compute_retrieval_config(profile: Dict[str, Any], user_message: str, 
         "min_rerank_score": RERANK_SCORE_THRESHOLD,
     }
 
-    vv = fs.get("visual_verbal", 0)
+    vv = behavior.get("visual_vs_verbal", 0)
     config["image_bias"] = max(0.2, min(0.8, 0.5 - vv * 0.3))
     config["text_bias"] = 1.0 - config["image_bias"]
 
-    si = fs.get("sensing_intuitive", 0)
+    si = behavior.get("sensing_vs_intuitive", 0)
     config["total_recall"] = int(50 + si * -10)
     config["total_recall"] = max(30, min(70, config["total_recall"]))
     config["rerank_top_n"] = max(10, min(35, int(config["total_recall"] * 0.4)))

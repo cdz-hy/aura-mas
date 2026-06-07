@@ -39,10 +39,9 @@ def _select_style_by_profile(user_profile: dict, override_style: str | None = No
         return override_style
 
     behavior = user_profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
 
-    vv = fs.get("visual_verbal", 0)
-    sg = fs.get("sequential_global", 0)
+    vv = behavior.get("visual_vs_verbal", 0)
+    sg = behavior.get("sequential_vs_global", 0)
 
     if vv < -0.3:
         return "apple-tech-gradient"
@@ -485,9 +484,8 @@ def _assemble_user_message(
 ) -> str:
     """组装 user message"""
     behavior = user_profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
-    vv = fs.get("visual_verbal", 0)
-    sg = fs.get("sequential_global", 0)
+    vv = behavior.get("visual_vs_verbal", 0)
+    sg = behavior.get("sequential_vs_global", 0)
 
     vv_text = "视觉型" if vv < -0.3 else ("言语型" if vv > 0.3 else "均衡型")
     sg_text = "序列型" if sg < -0.3 else ("全局型" if sg > 0.3 else "均衡型")

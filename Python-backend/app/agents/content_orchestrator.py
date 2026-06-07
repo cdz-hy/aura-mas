@@ -76,9 +76,8 @@ def _flush_module_usage(modules_list: list, user_id: int, scene: str, task_id=No
 def _get_personalized_preferences(user_profile: Dict[str, Any]) -> str:
     """根据用户画像中的 Felder-Silverman 学习风格计算个性化编排要求"""
     behavior = user_profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
-    vv = fs.get("visual_verbal", 0.0)
-    si = fs.get("sensing_intuitive", 0.0)
+    vv = behavior.get("visual_vs_verbal", 0.0)
+    si = behavior.get("sensing_vs_intuitive", 0.0)
 
     # 1. 详细度与文本长度偏好 (Sensing vs Intuitive)
     if si < -0.3:

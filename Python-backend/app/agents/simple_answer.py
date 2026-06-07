@@ -17,22 +17,22 @@ logger = logging.getLogger("agents.simple_answer")
 
 
 PROFILE_QUESTIONS = {
-    "sensing_intuitive": [
+    "sensing_vs_intuitive": [
         "在学习新知识时，你更倾向于通过具体的实例和实验来理解，还是更喜欢先了解抽象的理论和概念框架？",
         "如果让你学习一个新的技术概念，你会更喜欢看一个完整的实际案例演示，还是先阅读理论原理的阐述？",
         "你觉得自己在学习时是更注重细节和事实，还是更善于把握整体的概念和关联？",
     ],
-    "visual_verbal": [
+    "visual_vs_verbal": [
         "你学习时更喜欢看图表、流程图、思维导图这类视觉化的内容，还是更喜欢阅读详细的文字说明？",
         "当理解一个复杂概念时，一张好的示意图和一段详细的文字解释，哪个对你帮助更大？",
         "你平时记笔记时更习惯画图示还是写文字？",
     ],
-    "active_reflective": [
+    "active_vs_reflective": [
         "学完一个新知识点后，你更喜欢立刻动手实践尝试，还是先在脑海中反复思考消化？",
         "你更喜欢通过小组讨论来加深理解，还是独自安静地思考？",
         "面对一个新的学习任务，你的第一反应是马上开始动手做，还是先花时间规划和思考？",
     ],
-    "sequential_global": [
+    "sequential_vs_global": [
         "你学习时更喜欢按照逻辑顺序一步一步地深入，还是先了解整体框架再逐步细化？",
         "当面对一个复杂的知识体系时，你更希望先看到完整的知识地图，还是从第一个知识点开始逐步学习？",
         "你是否经常在学到后面的内容时，突然对前面的知识有了更深的理解？",
@@ -293,14 +293,13 @@ def _should_ask_profile(chat_history: List[Dict[str, str]], profile: Dict[str, A
 def _pick_profile_question(profile: Dict[str, Any]) -> tuple:
     """选择一个画像维度的问题（尽量不重复）"""
     behavior = profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
 
     candidates = []
     dimension_map = {
-        "sensing_intuitive": fs.get("sensing_intuitive") is None,
-        "visual_verbal": fs.get("visual_verbal") is None,
-        "active_reflective": fs.get("active_reflective") is None,
-        "sequential_global": fs.get("sequential_global") is None,
+        "sensing_vs_intuitive": behavior.get("sensing_vs_intuitive", 0.0) == 0.0,
+        "visual_vs_verbal": behavior.get("visual_vs_verbal", 0.0) == 0.0,
+        "active_vs_reflective": behavior.get("active_vs_reflective", 0.0) == 0.0,
+        "sequential_vs_global": behavior.get("sequential_vs_global", 0.0) == 0.0,
     }
 
     for dim, is_none in dimension_map.items():

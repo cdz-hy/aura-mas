@@ -81,10 +81,9 @@ def _generate_single_module(
 
     # 用户画像风格提示
     behavior = user_profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
-    vv = fs.get("visual_verbal", 0.0)
-    si = fs.get("sensing_intuitive", 0.0)
-    sg = fs.get("sequential_global", 0.0)
+    vv = behavior.get("visual_vs_verbal", 0.0)
+    si = behavior.get("sensing_vs_intuitive", 0.0)
+    sg = behavior.get("sequential_vs_global", 0.0)
     
     # 1. 详细度与文本长度偏好
     if si < -0.3:
