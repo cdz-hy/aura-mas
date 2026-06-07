@@ -299,6 +299,25 @@ def _validate_js_syntax(html_content: str) -> Tuple[bool, str]:
         return True, ""
 
 
+def _validate_animation_html_contract(html_content: str) -> Tuple[bool, str]:
+    """Validate structural requirements that prevent common animation black screens."""
+    if not html_content or not html_content.strip():
+        return False, "HTML is empty"
+
+    lowered = html_content.lower()
+    if "<html" not in lowered or "</html>" not in lowered:
+        return False, "HTML must include <html> and </html>"
+    if 'id="stage"' not in lowered and "id='stage'" not in lowered:
+        return False, "Animation HTML must include #stage"
+    if 'class="beat' not in lowered and "class='beat" not in lowered:
+        return False, "Animation HTML must include at least one .beat"
+    if "active" not in lowered:
+        return False, "Animation HTML must mark an initial active beat"
+    if "gsap" not in lowered:
+        return False, "Animation HTML must include GSAP or GSAP-based script references"
+    return True, ""
+
+
 def _build_fallback_html(title: str, description: str, source_content: str) -> str:
     """LLM 失败时的最小降级 HTML
 
@@ -725,8 +744,12 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
             # ── JS 语法验证 ──
             is_valid, js_error = _validate_js_syntax(html_output)
             if is_valid:
-                logger.info("  [动画生成] JS 语法验证通过 ✓")
-                break
+                contract_valid, contract_error = _validate_animation_html_contract(html_output)
+                if contract_valid:
+                    logger.info("  [动画生成] JS 语法验证与结构验证通过 ✓")
+                    break
+                js_error = contract_error
+                logger.warning(f"  [动画生成] HTML 结构验证失败: {contract_error}")
 
             # JS 语法错误 → 判断是否可重试
             logger.warning(f"  [动画生成] JS 语法验证失败: {js_error[:200]}")

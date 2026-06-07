@@ -132,7 +132,10 @@ def test_assemble_user_message_reads_current_profile_shape():
 def test_successful_direct_html_generation(mock_record, mock_load):
     html = """<!doctype html>
 <html>
-<head><script>const ready = true;</script></head>
+<head>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script>const ready = true;</script>
+</head>
 <body><main id="stage"><section class="beat active">排序动画</section></main></body>
 </html>"""
     llm = FakeStreamLLM([html])
