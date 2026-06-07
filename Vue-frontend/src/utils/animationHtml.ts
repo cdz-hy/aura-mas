@@ -1,3 +1,147 @@
+const LEGACY_CONTROL_TYPE = '__AURA_LEGACY_CONTROL__'
+const LEGACY_PROGRESS_TYPE = '__AURA_LEGACY_PROGRESS__'
+const LEGACY_READY_TYPE = '__AURA_LEGACY_READY__'
+
+function buildLegacyBridgeScript() {
+  const closeScript = '<' + '/script>'
+  return `<script>
+(() => {
+  const CONTROL = "${LEGACY_CONTROL_TYPE}";
+  const PROGRESS = "${LEGACY_PROGRESS_TYPE}";
+  const READY = "${LEGACY_READY_TYPE}";
+  const ALLOWED_ACTIONS = new Set(["pause", "prev", "next", "replay", "progress"]);
+  const nativeSetInterval = window.setInterval.bind(window);
+  window.__AURA_LEGACY_PAUSED = false;
+  window.setInterval = (fn, delay, ...args) => nativeSetInterval(() => {
+    if (!window.__AURA_LEGACY_PAUSED) fn(...args);
+  }, delay);
+
+  function isControlMessage(message) {
+    return !!message
+      && typeof message === "object"
+      && message.type === CONTROL
+      && ALLOWED_ACTIONS.has(message.action)
+      && (message.action !== "pause" || typeof message.paused === "boolean");
+  }
+
+  function beats() {
+    return [...document.querySelectorAll(".beat")];
+  }
+
+  function activeIndex() {
+    const items = beats();
+    const index = items.findIndex(beat => beat.classList.contains("active"));
+    return { beats: items, index: Math.max(0, index) };
+  }
+
+  function postProgress(type = PROGRESS) {
+    const state = activeIndex();
+    parent.postMessage({
+      type,
+      total: state.beats.length,
+      index: state.beats.length ? state.index + 1 : 0,
+    }, "*");
+  }
+
+  function replayAnimations() {
+    const active = document.querySelector(".beat.active") || document.body;
+    active?.getAnimations({ subtree: true }).forEach(animation => {
+      animation.cancel();
+      animation.play();
+    });
+  }
+
+  function showBeat(nextIndex) {
+    const state = activeIndex();
+    if (!state.beats.length) return false;
+    const normalized = ((nextIndex % state.beats.length) + state.beats.length) % state.beats.length;
+    state.beats.forEach((beat, index) => beat.classList.toggle("active", index === normalized));
+    postProgress();
+    requestAnimationFrame(replayAnimations);
+    return true;
+  }
+
+  function findButton(action) {
+    const matchers = {
+      prev: text => /上一|prev|‹|←/i.test(text),
+      next: text => /下一|next|›|→/i.test(text),
+      replay: text => /重播|replay|↻|restart/i.test(text),
+      pause: text => /暂停|播放|pause|play|Ⅱ|▶/i.test(text),
+    };
+    return [...document.querySelectorAll("button")].find(button => {
+      const text = [
+        button.getAttribute("data-action"),
+        button.getAttribute("aria-label"),
+        button.textContent,
+      ].filter(Boolean).join(" ");
+      return text.includes(action) || matchers[action](text);
+    }) || null;
+  }
+
+  function runAction(action, delta = 0) {
+    if (action === "prev" || action === "next") {
+      const state = activeIndex();
+      if (showBeat(state.index + delta)) return true;
+    }
+    if (action === "replay") {
+      replayAnimations();
+      postProgress();
+      return true;
+    }
+    const button = findButton(action);
+    if (button) {
+      button.click();
+      setTimeout(postProgress, 0);
+      return true;
+    }
+    postProgress();
+    return false;
+  }
+
+  window.__AURA_LEGACY_PAUSE = () => {
+    window.__AURA_LEGACY_PAUSED = true;
+    document.getAnimations({ subtree: true }).forEach(animation => animation.pause());
+  };
+
+  window.__AURA_LEGACY_PLAY = () => {
+    window.__AURA_LEGACY_PAUSED = false;
+    document.getAnimations({ subtree: true }).forEach(animation => animation.play());
+  };
+
+  function setPaused(nextPaused) {
+    const innerPause = findButton("pause");
+    if (nextPaused) {
+      if (innerPause && /暂停|pause|Ⅱ/i.test((innerPause.getAttribute("aria-label") || "") + innerPause.textContent)) {
+        innerPause.click();
+      }
+      window.__AURA_LEGACY_PAUSE();
+    } else {
+      if (innerPause && /播放|play|▶/i.test((innerPause.getAttribute("aria-label") || "") + innerPause.textContent)) {
+        innerPause.click();
+      }
+      window.__AURA_LEGACY_PLAY();
+    }
+    postProgress();
+  }
+
+  window.addEventListener("message", event => {
+    if (event.source!==parent) return;
+    const message = event.data;
+    if (!isControlMessage(message)) return;
+    if (message.action === "pause") setPaused(message.paused);
+    else if (message.action === "prev") runAction("prev", -1);
+    else if (message.action === "next") runAction("next", 1);
+    else if (message.action === "replay") runAction("replay");
+    else if (message.action === "progress") postProgress();
+  });
+
+  document.addEventListener("DOMContentLoaded", () => postProgress(READY));
+  window.addEventListener("load", () => postProgress(READY));
+  setTimeout(() => postProgress(READY), 0);
+})();
+${closeScript}`
+}
+
 export function escapeJsonForHtml(value: string) {
   return JSON.stringify(value)
     .replace(/</g, '\\u003C')
@@ -11,6 +155,7 @@ export function normalizeAnimationHtml(raw: string) {
 
   const payload = escapeJsonForHtml(html)
   const closeScript = '<' + '/script>'
+  const legacyBridge = buildLegacyBridgeScript()
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -51,8 +196,7 @@ export function normalizeAnimationHtml(raw: string) {
       let paused = false;
       let autoplayTimer = null;
       const raw = JSON.parse(document.getElementById('animation-html').textContent || '""');
-      const closeScriptTag = '<' + '/script>';
-      const legacyBridge = '<script>(()=>{const CONTROL="__AURA_LEGACY_CONTROL__";const PROGRESS="__AURA_LEGACY_PROGRESS__";const READY="__AURA_LEGACY_READY__";const nativeSetInterval=window.setInterval.bind(window);window.__AURA_LEGACY_PAUSED=false;window.setInterval=(fn,delay,...args)=>nativeSetInterval(()=>{if(!window.__AURA_LEGACY_PAUSED)fn(...args)},delay);function beats(){return [...document.querySelectorAll(".beat")]}function activeIndex(){const items=beats();const index=items.findIndex(beat=>beat.classList.contains("active"));return{beats:items,index:Math.max(0,index)}}function postProgress(type=PROGRESS){const state=activeIndex();parent.postMessage({type,total:state.beats.length,index:state.beats.length?state.index+1:0},"*")}function replayAnimations(){const active=document.querySelector(".beat.active")||document.body;active?.getAnimations({subtree:true}).forEach(animation=>{animation.cancel();animation.play()})}function showBeat(nextIndex){const state=activeIndex();if(!state.beats.length)return false;const normalized=((nextIndex%state.beats.length)+state.beats.length)%state.beats.length;state.beats.forEach((beat,index)=>beat.classList.toggle("active",index===normalized));postProgress();requestAnimationFrame(replayAnimations);return true}function findButton(action){const matchers={prev:text=>/上一|prev|‹|←/i.test(text),next:text=>/下一|next|›|→/i.test(text),replay:text=>/重播|replay|↻|restart/i.test(text),pause:text=>/暂停|播放|pause|play|Ⅱ|▶/i.test(text)};return[...document.querySelectorAll("button")].find(button=>{const text=[button.getAttribute("data-action"),button.getAttribute("aria-label"),button.textContent].filter(Boolean).join(" ");return text.includes(action)||matchers[action](text)})||null}function runAction(action,delta=0){if(action==="prev"||action==="next"){const state=activeIndex();if(showBeat(state.index+delta))return true}if(action==="replay"){replayAnimations();postProgress();return true}const button=findButton(action);if(button){button.click();setTimeout(postProgress,0);return true}postProgress();return false}window.__AURA_LEGACY_PAUSE=()=>{window.__AURA_LEGACY_PAUSED=true;document.getAnimations({subtree:true}).forEach(animation=>animation.pause())};window.__AURA_LEGACY_PLAY=()=>{window.__AURA_LEGACY_PAUSED=false;document.getAnimations({subtree:true}).forEach(animation=>animation.play())};function setPaused(nextPaused){const innerPause=findButton("pause");if(nextPaused){if(innerPause&&/暂停|pause|Ⅱ/i.test((innerPause.getAttribute("aria-label")||"")+innerPause.textContent))innerPause.click();window.__AURA_LEGACY_PAUSE()}else{if(innerPause&&/播放|play|▶/i.test((innerPause.getAttribute("aria-label")||"")+innerPause.textContent))innerPause.click();window.__AURA_LEGACY_PLAY()}postProgress()}window.addEventListener("message",event=>{const message=event.data||{};if(message.type!==CONTROL)return;if(message.action==="pause")setPaused(Boolean(message.paused));else if(message.action==="prev")runAction("prev",-1);else if(message.action==="next")runAction("next",1);else if(message.action==="replay")runAction("replay");else if(message.action==="progress")postProgress()});document.addEventListener("DOMContentLoaded",()=>postProgress(READY));window.addEventListener("load",()=>postProgress(READY));setTimeout(()=>postProgress(READY),0)})();' + closeScriptTag;
+      const legacyBridge = ${escapeJsonForHtml(legacyBridge)};
       const controlHideStyle = '<style>.animation-control-bar,nav[aria-label="动画控制"]{display:none!important}</style>';
       const instrumented = /<head[^>]*>/i.test(raw)
         ? raw.replace(/<head[^>]*>/i, match => match + legacyBridge + controlHideStyle)
@@ -68,7 +212,9 @@ export function normalizeAnimationHtml(raw: string) {
       }
 
       function sendInnerAction(action, extra = {}) {
-        frame.contentWindow?.postMessage({ type: '__AURA_LEGACY_CONTROL__', action, ...extra }, '*');
+        const allowedActions = new Set(['pause', 'prev', 'next', 'replay', 'progress']);
+        if (!allowedActions.has(action)) return;
+        frame.contentWindow?.postMessage({ type: '${LEGACY_CONTROL_TYPE}', action, ...extra }, '*');
       }
 
       function setPaused(nextPaused) {
@@ -101,8 +247,16 @@ export function normalizeAnimationHtml(raw: string) {
       });
 
       window.addEventListener('message', event => {
-        const message = event.data || {};
-        if (message.type !== '__AURA_LEGACY_PROGRESS__' && message.type !== '__AURA_LEGACY_READY__') return;
+        if (event.source!==frame.contentWindow) return;
+        const message = event.data;
+        const isProgressMessage = message
+          && typeof message === 'object'
+          && (message.type === '${LEGACY_PROGRESS_TYPE}' || message.type === '${LEGACY_READY_TYPE}')
+          && Number.isFinite(message.index)
+          && Number.isFinite(message.total)
+          && message.index >= 0
+          && message.total >= 0;
+        if (!isProgressMessage) return;
         progress.textContent = message.total ? message.index + ' / ' + message.total : '';
       });
       window.addEventListener('resize', fit);

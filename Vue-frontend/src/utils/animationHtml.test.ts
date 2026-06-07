@@ -14,6 +14,17 @@ describe('animationHtml utilities', () => {
     expect(wrapped).toContain('id="animation-html"')
     expect(wrapped).toContain('sandbox="allow-scripts"')
     expect(wrapped).not.toContain('allow-same-origin')
+    expect(wrapped).not.toContain('contentDocument')
     expect(wrapped).toContain('legacy-control-bar')
+  })
+
+  it('validates bridge message source and shape', () => {
+    const wrapped = normalizeAnimationHtml('<main><section class="beat active">A</section></main>')
+    expect(wrapped).toContain('event.source!==parent')
+    expect(wrapped).toContain('event.source!==frame.contentWindow')
+    expect(wrapped).toContain('isControlMessage')
+    expect(wrapped).toContain('isProgressMessage')
+    expect(wrapped).toContain('Number.isFinite(message.index)')
+    expect(wrapped).toContain('Number.isFinite(message.total)')
   })
 })

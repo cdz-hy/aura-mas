@@ -573,7 +573,7 @@ function clampPopupPos(x: number, y: number): { x: number; y: number } {
 
 function onResourceMouseUp(e: MouseEvent) {
   const selection = window.getSelection()
-  const range = selection?.rangeCount > 0 ? selection.getRangeAt(0) : null
+  const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null
   if (!range || range.collapsed) {
     if (!showNoteList.value) { clearHighlight(); selectionPopup.value.show = false }
     return
