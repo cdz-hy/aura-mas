@@ -867,7 +867,7 @@ async def generate_single_resource(
     is_quiz = (type == "quiz")
     is_video = (type == "video")
     is_animation = (type == "animation")
-    is_type_resource = type in ("mindmap", "summary", "code")
+    is_type_resource = type in ("mindmap", "summary", "code", "podcast")
 
     # 路由决策
     if is_quiz:
@@ -968,6 +968,7 @@ async def generate_single_resource(
     }
 
     async def event_stream() -> AsyncGenerator[str, None]:
+        clear_stop(session_id)
         try:
             # video 类型：直接搜索视频，不走 LangGraph
             if is_video:
@@ -1097,18 +1098,22 @@ async def generate_single_resource(
             threading.Thread(target=_run_graph, daemon=True).start()
 
             # 实时消费 queue
+            _completed_normally = False
             try:
                 while True:
                     item = await _queue.get()
                     if item is _sentinel:
+                        _completed_normally = True
                         break
                     if item is None:
                         yield f'data: {json.dumps({"type": "done", "stopped": True}, ensure_ascii=False)}\n\n'
+                        _completed_normally = True
                         break
                     yield item
             finally:
-                # 客户端断开连接或发生异常时，主动触发停止信号，通知后台线程停止大模型调用
-                request_stop(session_id)
+                # 仅在客户端断开连接或异常退出时触发停止信号，正常完成不触发
+                if not _completed_normally:
+                    request_stop(session_id)
 
         except Exception as e:
             logger.error(f"[资源生成] 异常: {e}", exc_info=True)

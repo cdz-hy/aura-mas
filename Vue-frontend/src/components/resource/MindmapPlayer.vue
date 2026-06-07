@@ -24,6 +24,35 @@
             <circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/>
           </svg>
         </button>
+        <!-- 导出下拉 -->
+        <div class="relative" ref="exportDropdownRef">
+          <button
+            class="p-1.5 rounded-lg text-navy-400 hover:text-navy-600 hover:bg-navy-50 transition-colors"
+            title="导出图片"
+            @click="showExportMenu = !showExportMenu"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </button>
+          <div
+            v-if="showExportMenu"
+            class="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-lg border border-navy-100 py-1 z-50 min-w-[100px]"
+          >
+            <button
+              class="w-full px-3 py-1.5 text-left text-sm text-navy-600 hover:bg-navy-50 transition-colors"
+              @click="exportImage('png')"
+            >
+              导出 PNG
+            </button>
+            <button
+              class="w-full px-3 py-1.5 text-left text-sm text-navy-600 hover:bg-navy-50 transition-colors"
+              @click="exportImage('svg')"
+            >
+              导出 SVG
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -53,6 +82,8 @@ const props = defineProps<{
 
 const mapContainer = ref<HTMLElement | null>(null)
 const ready = ref(false)
+const showExportMenu = ref(false)
+const exportDropdownRef = ref<HTMLElement | null>(null)
 let mind: MindElixirInstance | null = null
 
 // Navy-themed palette matching the app's design system
@@ -151,10 +182,47 @@ function centerView() {
   mind?.toCenter()
 }
 
+async function exportImage(format: 'png' | 'svg') {
+  if (!mind) return
+  showExportMenu.value = false
+
+  const filename = (props.title || '思维导图').replace(/[<>:"/\\|?*]/g, '_')
+
+  try {
+    if (format === 'png') {
+      const blob = await mind.exportPng()
+      if (blob) downloadBlob(blob, `${filename}.png`)
+    } else {
+      const blob = mind.exportSvg()
+      if (blob) downloadBlob(blob, `${filename}.svg`)
+    }
+  } catch (e) {
+    console.error('导出思维导图失败:', e)
+  }
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+function onClickOutside(e: MouseEvent) {
+  if (exportDropdownRef.value && !exportDropdownRef.value.contains(e.target as Node)) {
+    showExportMenu.value = false
+  }
+}
+
 onMounted(() => {
   if (props.data) {
     initMindMap()
   }
+  document.addEventListener('mousedown', onClickOutside)
 })
 
 onBeforeUnmount(() => {
@@ -162,6 +230,7 @@ onBeforeUnmount(() => {
     mind.destroy()
     mind = null
   }
+  document.removeEventListener('mousedown', onClickOutside)
 })
 
 watch(() => props.data, (newData) => {

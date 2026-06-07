@@ -22,7 +22,7 @@ export interface PlanModule {
   status: 'pending' | 'generating' | 'ready'
 }
 
-export type ResourceType = 'document' | 'mindmap' | 'quiz' | 'code' | 'reading'
+export type ResourceType = 'document' | 'mindmap' | 'quiz' | 'code' | 'reading' | 'summary' | 'video' | 'animation' | 'podcast'
 
 export interface LearningResource {
   id: number

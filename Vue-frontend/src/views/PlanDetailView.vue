@@ -187,7 +187,7 @@
         <!-- 内容区 -->
         <div
           class="flex-1 overflow-y-auto"
-          :class="selectedResource.moduleType === 'animation' ? 'resource-content--animation' : 'p-4'"
+          :class="selectedResource.moduleType === 'animation' ? 'resource-content--animation' : (selectedResource.moduleType === 'podcast' ? 'resource-content--podcast' : 'p-4')"
           @click="handleCitationClick($event); onResourceClick($event)"
           @mouseover="handleCitationMouseOver"
           @mouseout="handleCitationMouseOut"
@@ -295,6 +295,22 @@
             </div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>动画内容待生成</p>
+            </div>
+          </template>
+
+          <!-- 播客类型 -->
+          <template v-else-if="selectedResource.moduleType === 'podcast'">
+            <div v-if="selectedResource.moduleData?.content || selectedResource.moduleData?.html" class="podcast-stage">
+              <iframe
+                class="podcast-frame"
+                :class="{ 'pointer-events-none': isDragging }"
+                :srcdoc="selectedResource.moduleData?.content || selectedResource.moduleData?.html"
+                sandbox="allow-scripts allow-same-origin allow-downloads"
+                title="播客节目"
+              ></iframe>
+            </div>
+            <div v-else class="text-center py-8 text-navy-300 text-sm">
+              <p>播客内容待生成</p>
             </div>
           </template>
 
@@ -1079,6 +1095,7 @@ function badgeClass(type: string) {
     image: 'bg-pink-100 text-pink-700',
     diagram: 'bg-teal-100 text-teal-700',
     animation: 'bg-orange-100 text-orange-700',
+    podcast: 'bg-emerald-100 text-emerald-700',
   }
   return map[type] || 'bg-navy-100 text-navy-700'
 }
@@ -1179,7 +1196,7 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
 }
 
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画',
+  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客',
 }
 
 // ==================== 计算属性 ====================
@@ -2173,6 +2190,30 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
   height: 100%;
   border: 0;
   background: #050505;
+  display: block;
+}
+
+.resource-content--podcast {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.podcast-stage {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  border: none;
+  border-radius: 0;
+}
+
+.podcast-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
   display: block;
 }
 
