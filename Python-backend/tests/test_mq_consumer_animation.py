@@ -1,25 +1,48 @@
 """MQ 动画资源生成链路测试。"""
 import asyncio
+import importlib
 import json
 import sys
 from types import ModuleType
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-aio_pika = ModuleType("aio_pika")
-aio_pika.IncomingMessage = object
-aio_pika.RobustChannel = object
-aio_pika.RobustConnection = object
-aio_pika.DeliveryMode = type("DeliveryMode", (), {"PERSISTENT": 2})
-aio_pika.Message = lambda **kwargs: kwargs
-aio_pika.connect_robust = AsyncMock()
-sys.modules.setdefault("aio_pika", aio_pika)
+import pytest
 
-learning_graph = ModuleType("app.graph.learning_graph")
-learning_graph.get_learning_graph = lambda: None
-sys.modules.setdefault("app.graph.learning_graph", learning_graph)
 
-from app.services import mq_consumer
-from app.services.mq_consumer import MQConsumer
+@pytest.fixture
+def mq_consumer(monkeypatch):
+    module_name = "app.services.mq_consumer"
+    parent = importlib.import_module("app.services")
+    had_parent_attr = hasattr(parent, "mq_consumer")
+    original_parent_attr = getattr(parent, "mq_consumer", None)
+    had_module = module_name in sys.modules
+    original_module = sys.modules.get(module_name)
+
+    aio_pika = ModuleType("aio_pika")
+    aio_pika.IncomingMessage = object
+    aio_pika.RobustChannel = object
+    aio_pika.RobustConnection = object
+    aio_pika.DeliveryMode = type("DeliveryMode", (), {"PERSISTENT": 2})
+    aio_pika.Message = lambda **kwargs: kwargs
+    aio_pika.connect_robust = AsyncMock()
+    monkeypatch.setitem(sys.modules, "aio_pika", aio_pika)
+
+    learning_graph = ModuleType("app.graph.learning_graph")
+    learning_graph.get_learning_graph = lambda: None
+    monkeypatch.setitem(sys.modules, "app.graph.learning_graph", learning_graph)
+    sys.modules.pop(module_name, None)
+
+    imported = importlib.import_module(module_name)
+    yield imported
+
+    if had_module:
+        sys.modules[module_name] = original_module
+    else:
+        sys.modules.pop(module_name, None)
+    if had_parent_attr:
+        setattr(parent, "mq_consumer", original_parent_attr)
+    elif hasattr(parent, "mq_consumer"):
+        delattr(parent, "mq_consumer")
 
 
 class FakeGraph:
@@ -36,7 +59,7 @@ class FakeGraph:
             yield update
 
 
-def test_mq_animation_task_routes_to_animation_generator_and_persists_html():
+def test_mq_animation_task_routes_to_animation_generator_and_persists_html(mq_consumer):
     generated_html = "<!doctype html><html><body><main id='stage'><section class='beat active'>animation</section></main></body></html>"
     graph = FakeGraph([{
         "animation_skill_generator": {
@@ -75,10 +98,14 @@ def test_mq_animation_task_routes_to_animation_generator_and_persists_html():
             patch.object(mq_consumer.java_client, "get_resource_by_id", return_value=animation_resource), \
             patch.object(mq_consumer.java_client, "get_user_profile", return_value={}), \
             patch.object(mq_consumer.java_client, "get_resources_by_module", return_value=[animation_resource, text_resource]), \
+            patch.object(mq_consumer.java_client, "update_resource_content", side_effect=AssertionError("stale persistence API called")), \
+            patch.object(mq_consumer.java_client, "update_generation_task", side_effect=AssertionError("stale task API called")), \
             patch.object(mq_consumer.java_client, "complete_generation_task") as complete_generation_task:
-        asyncio.run(MQConsumer()._process_task(99, 1, 32, 7, "animation"))
+        asyncio.run(mq_consumer.MQConsumer()._process_task(99, 1, 32, 7, "animation"))
 
     state = graph.initial_state
+    assert graph.stream_mode == "updates"
+    assert graph.config["configurable"]["thread_id"] == "mq-task-99"
     assert state["intent"] == "generate_animation"
     assert state["next_node"] == "animation_skill_generator"
     assert state["background_generation"] is True
@@ -94,7 +121,7 @@ def test_mq_animation_task_routes_to_animation_generator_and_persists_html():
     assert module_data["metadata"]["renderer"] == "jacky-motion"
 
 
-def test_mq_text_task_persists_first_module_content_from_stream():
+def test_mq_text_task_persists_first_module_content_from_stream(mq_consumer):
     graph = FakeGraph([{
         "content_orchestrator": {
             "module_list": [{
@@ -124,10 +151,14 @@ def test_mq_text_task_persists_first_module_content_from_stream():
             patch.object(mq_consumer.java_client, "get_plan", return_value={"title": "新学习计划"}), \
             patch.object(mq_consumer.java_client, "get_resource_by_id", return_value=text_resource), \
             patch.object(mq_consumer.java_client, "get_user_profile", return_value={}), \
+            patch.object(mq_consumer.java_client, "update_resource_content", side_effect=AssertionError("stale persistence API called")), \
+            patch.object(mq_consumer.java_client, "update_generation_task", side_effect=AssertionError("stale task API called")), \
             patch.object(mq_consumer.java_client, "complete_generation_task") as complete_generation_task:
-        asyncio.run(MQConsumer()._process_task(34, 1, 34, 7, "text"))
+        asyncio.run(mq_consumer.MQConsumer()._process_task(34, 1, 34, 7, "text"))
 
     state = graph.initial_state
+    assert graph.stream_mode == "updates"
+    assert graph.config["configurable"]["thread_id"] == "mq-task-34"
     assert state["intent"] == "generate_resource"
     assert state["next_node"] == "rag_retriever"
     assert state["background_generation"] is True
@@ -140,7 +171,7 @@ def test_mq_text_task_persists_first_module_content_from_stream():
     assert module_data["modules"][0]["title"] == "经典序列模型与神经网络基础"
 
 
-def test_mq_task_with_empty_graph_output_raises_no_content_error():
+def test_mq_task_with_empty_graph_output_raises_no_content_error(mq_consumer):
     graph = FakeGraph([])
     text_resource = {
         "id": 35,
@@ -153,9 +184,5 @@ def test_mq_task_with_empty_graph_output_raises_no_content_error():
             patch.object(mq_consumer.java_client, "get_plan", return_value={"title": "计划"}), \
             patch.object(mq_consumer.java_client, "get_resource_by_id", return_value=text_resource), \
             patch.object(mq_consumer.java_client, "get_user_profile", return_value={}):
-        try:
-            asyncio.run(MQConsumer()._process_task(35, 1, 35, 7, "text"))
-        except Exception as exc:
-            assert str(exc) == "工作流未生成有效内容"
-        else:
-            raise AssertionError("Expected empty graph output to raise")
+        with pytest.raises(Exception, match="工作流未生成有效内容"):
+            asyncio.run(mq_consumer.MQConsumer()._process_task(35, 1, 35, 7, "text"))
