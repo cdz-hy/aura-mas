@@ -824,7 +824,7 @@ function onDocumentMouseDown(e: MouseEvent) {
 }
 
 // ==================== 面板拖拽调整 ====================
-const panelWidth = ref(window.innerWidth > 1400 ? 520 : 420)
+const panelWidth = ref(window.innerWidth > 1400 ? 760 : 560)
 const isDragging = ref(false)
 
 // 中间面板的宽度样式（包含关闭态：width=0，由 CSS transition 驱动动画）
@@ -834,14 +834,6 @@ const panelStyle = computed(() => {
   }
   if (!selectedResource.value && !showResourceStreamPreview.value) {
     return { width: '0px', minWidth: '0px', marginLeft: '0px', marginRight: '0px' }
-  }
-  if (selectedResource.value?.moduleType === 'animation') {
-    const preferredWidth = Math.max(panelWidth.value, 760)
-    return {
-      width: `min(${preferredWidth}px, calc(100vw - 620px))`,
-      minWidth: '320px',
-      flexShrink: '0',
-    }
   }
   return { width: panelWidth.value + 'px', minWidth: '240px' }
 })

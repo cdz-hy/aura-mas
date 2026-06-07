@@ -138,6 +138,12 @@
 }
 
 /* Markdown content styling */
+.markdown-body::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
 .markdown-body h1 {
   font-family: 'Playfair Display', Georgia, serif;
   font-size: 1.75rem;

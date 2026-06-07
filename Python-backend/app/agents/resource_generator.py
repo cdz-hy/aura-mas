@@ -309,7 +309,7 @@ def _generate_single_module(
 
         # 图片处理（如果生成结果没有嵌入图片，附加在结果中）
         content_text = result.get("content", "")
-        if images and "![" not in content_text:
+        if images and "![" not in content_text and "<img" not in content_text:
             result["images"] = images[:3]
 
         result["module_order"] = module_order
