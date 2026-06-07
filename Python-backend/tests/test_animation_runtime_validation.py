@@ -20,6 +20,23 @@ def test_animation_contract_accepts_stage_and_active_beat():
     assert error == ""
 
 
+def test_animation_contract_accepts_beat_when_not_first_class_token():
+    html = """<!doctype html>
+<html>
+<head>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+</head>
+<body>
+  <main id="stage">
+    <section class="scene beat active">第一屏</section>
+  </main>
+</body>
+</html>"""
+    ok, error = _validate_animation_html_contract(html)
+    assert ok is True
+    assert error == ""
+
+
 def test_animation_contract_rejects_missing_beat():
     html = "<!doctype html><html><body><main id='stage'>空白</main></body></html>"
     ok, error = _validate_animation_html_contract(html)
@@ -32,3 +49,22 @@ def test_animation_contract_rejects_missing_stage():
     ok, error = _validate_animation_html_contract(html)
     assert ok is False
     assert "#stage" in error
+
+
+def test_animation_contract_rejects_active_outside_beat_element():
+    html = """<!doctype html>
+<html>
+<head>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <script>const active = true;</script>
+</head>
+<body>
+  <main id="stage">
+    <section class="beat">内容</section>
+    <div class="active">不是 beat</div>
+  </main>
+</body>
+</html>"""
+    ok, error = _validate_animation_html_contract(html)
+    assert ok is False
+    assert "active beat" in error

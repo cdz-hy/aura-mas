@@ -84,6 +84,24 @@ def _is_javascript_script(attrs: str) -> bool:
     return normalized == "module" or normalized in JS_SCRIPT_TYPES
 
 
+def _extract_class_token_sets(html_content: str) -> list[set[str]]:
+    """Extract quoted class attributes as normalized token sets."""
+    class_attrs = re.findall(
+        r"\bclass\s*=\s*(?:\"([^\"]*)\"|'([^']*)')",
+        html_content,
+        re.IGNORECASE,
+    )
+    token_sets = []
+    for double_quoted, single_quoted in class_attrs:
+        class_value = double_quoted or single_quoted
+        token_sets.append({
+            token.lower()
+            for token in re.split(r"\s+", class_value)
+            if token
+        })
+    return token_sets
+
+
 def _select_style_by_profile(user_profile: dict, override_style: str | None = None) -> str:
     """根据用户画像选择动画风格，支持通过 override_style 显式覆盖"""
     if override_style:
@@ -309,9 +327,14 @@ def _validate_animation_html_contract(html_content: str) -> Tuple[bool, str]:
         return False, "HTML must include <html> and </html>"
     if 'id="stage"' not in lowered and "id='stage'" not in lowered:
         return False, "Animation HTML must include #stage"
-    if 'class="beat' not in lowered and "class='beat" not in lowered:
+
+    class_token_sets = _extract_class_token_sets(html_content)
+    if not any("beat" in class_tokens for class_tokens in class_token_sets):
         return False, "Animation HTML must include at least one .beat"
-    if "active" not in lowered:
+    if not any(
+        {"beat", "active"}.issubset(class_tokens)
+        for class_tokens in class_token_sets
+    ):
         return False, "Animation HTML must mark an initial active beat"
     if "gsap" not in lowered:
         return False, "Animation HTML must include GSAP or GSAP-based script references"
