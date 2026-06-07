@@ -1925,15 +1925,12 @@ def _async_profile_maintenance_sync(
 VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap"}
 
 
-def _normalize_module_type(module_type: str) -> str:
+def _normalize_module_type(module_type) -> str:
     """将 LLM 输出的 module_type 归一化为前端支持的类型"""
-    if not module_type:
+    if not isinstance(module_type, str) or not module_type:
         return "text"
     mt = module_type.strip().lower()
-    if mt in VALID_MODULE_TYPES:
-        return mt
-    # document/mixed/其他未知类型 -> text
-    return "text"
+    return mt if mt in VALID_MODULE_TYPES else "text"
 
 
 def _soft_delete_breakdown_dialogue(user_id: int, session_id: str, plan_id: int):
