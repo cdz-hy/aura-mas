@@ -43,7 +43,7 @@ async def _compute_retrieval_config(profile: Dict[str, Any], user_message: str, 
     config["text_bias"] = 1.0 - config["image_bias"]
 
     si = behavior.get("sensing_vs_intuitive", 0)
-   config["total_recall"] = int(50 + si * -10)
+    config["total_recall"] = int(50 + si * -10)
     config["total_recall"] = max(30, min(70, config["total_recall"]))
     config["rerank_top_n"] = max(10, min(35, int(config["total_recall"] * 0.4)))
 
