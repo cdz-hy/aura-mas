@@ -477,13 +477,13 @@ const quickQuestions = [
 ]
 
 const resourceOptions = [
-  { type: 'quiz', label: '生成测验' },
-  { type: 'mindmap', label: '生成思维导图' },
-  { type: 'code', label: '生成代码示例' },
-  { type: 'summary', label: '生成总结' },
-  { type: 'video', label: '生成教学视频' },
-  { type: 'animation', label: '生成动画' },
-  { type: 'podcast', label: '生成播客' },
+  { type: 'quiz', label: '测验' },
+  { type: 'mindmap', label: '思维导图' },
+  { type: 'code', label: '代码示例' },
+  { type: 'summary', label: '总结' },
+  { type: 'video', label: '教学视频' },
+  { type: 'animation', label: '动画' },
+  { type: 'podcast', label: '播客' },
 ]
 
 const typeLabels: Record<string, string> = {

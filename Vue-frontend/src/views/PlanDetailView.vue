@@ -249,33 +249,12 @@
 
           <!-- 视频类型 -->
           <template v-else-if="selectedResource.moduleType === 'video'">
-            <div v-if="selectedResource.moduleData?.videos?.length" class="space-y-3">
-              <a
-                v-for="(v, vi) in selectedResource.moduleData.videos"
-                :key="vi"
-                :href="v.url"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="block p-4 rounded-xl border border-navy-100/50 hover:border-red-200 hover:bg-red-50/30 transition-colors group"
-              >
-                <div class="flex items-start gap-3">
-                  <div class="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center flex-shrink-0 group-hover:bg-red-100 transition-colors">
-                    <svg class="w-5 h-5 text-red-500" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M8 5v14l11-7z"/>
-                    </svg>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-navy-800 group-hover:text-red-600 transition-colors line-clamp-2">{{ v.title }}</p>
-                    <div class="flex items-center gap-2 mt-1.5">
-                      <span v-if="v.platform" class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-500">{{ v.platform }}</span>
-                      <span v-if="v.snippet" class="text-xs text-navy-400 line-clamp-1">{{ v.snippet }}</span>
-                    </div>
-                  </div>
-                  <svg class="w-4 h-4 text-navy-300 group-hover:text-red-400 flex-shrink-0 mt-1 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                  </svg>
-                </div>
-              </a>
+            <div v-if="selectedResource.moduleData?.videos?.length" class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <VideoPlayer 
+                v-for="(v, vi) in selectedResource.moduleData.videos" 
+                :key="vi" 
+                :video="v" 
+              />
             </div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>暂无视频资源</p>
@@ -519,6 +498,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useHeartbeat } from '@/composables/useHeartbeat'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
+import VideoPlayer from '@/components/resource/VideoPlayer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
 import type { LearningPlan, LearningResource } from '@/types/plan'
 import type { Note } from '@/types/note'
@@ -1179,8 +1159,9 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
 
   const moduleOrder = resources.value.length > 0
     ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1
+
   const newResource: LearningResource = {
-    id: resource.id || Date.now(),
+    id: resource.id || -Date.now(),
     planId: planId.value,
     parentId: null,
     moduleOrder,
@@ -1851,6 +1832,13 @@ watch(() => chatStore.lastGeneratedResources, async (resList) => {
       if (fullRes) {
         // 解析 moduleData（API 返回 JSON 字符串，需转为对象）
         parseModuleData([fullRes])
+
+        // 清理由于提前接收到内联内容而创建的临时资源
+        const tempIndex = resources.value.findIndex(res => res.id < 0 && res.moduleType === fullRes.moduleType)
+        if (tempIndex >= 0) {
+          resources.value.splice(tempIndex, 1)
+        }
+
         const existingIndex = resources.value.findIndex(resource => resource.id === fullRes.id)
         if (existingIndex >= 0) {
           // 生成前通常已经插入 status=1 的占位资源；生成完成后必须用完整资源覆盖，

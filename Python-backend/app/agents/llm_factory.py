@@ -653,11 +653,16 @@ def get_profile_maintainer_llm() -> MIMOClient:
 
 def get_compressor_llm() -> MIMOClient:
     """会话压缩智能体 - pro 模型，关闭思维链，快速压缩"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=1024,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=2048,
                       thinking=THINKING_DISABLED)
 
 
 def get_tutor_llm() -> MIMOClient:
     """智能辅导智能体 - pro 模型，关闭思维链，中等温度"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=2048,
+                      thinking=THINKING_DISABLED)
+
+def get_video_search_llm() -> MIMOClient:
+    """视频搜索智能体 - pro 模型，关闭思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=8192,
                       thinking=THINKING_DISABLED)

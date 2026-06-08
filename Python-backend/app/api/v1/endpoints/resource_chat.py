@@ -971,10 +971,44 @@ async def generate_single_resource(
     async def event_stream() -> AsyncGenerator[str, None]:
         clear_stop(session_id)
         try:
-            # video 类型：直接搜索视频，不走 LangGraph
+            # video 类型：使用自主视频搜索智能体，不走主流程 LangGraph
             if is_video:
-                yield f'data: {json.dumps({"type": "progress", "content": f"正在搜索「{title}」相关教学视频..."}, ensure_ascii=False)}\n\n'
-                videos = _search_videos(title)
+                from app.agents.video_search_agent import search_videos_with_agent
+                
+                yield f'data: {json.dumps({"type": "progress", "content": f"正在启动智能体搜索「{title}」相关教学视频..."}, ensure_ascii=False)}\n\n'
+                
+                _v_sentinel = object()
+                _v_queue: asyncio.Queue = asyncio.Queue()
+                v_loop = asyncio.get_event_loop()
+                
+                def _v_sse_push(msg):
+                    v_loop.call_soon_threadsafe(_v_queue.put_nowait, msg)
+                    
+                def _run_video_agent():
+                    try:
+                        videos = search_videos_with_agent(title, source_resource_content, _v_sse_push)
+                        _v_sse_push({"type": "result", "videos": videos})
+                    except Exception as e:
+                        logger.error(f"[视频生成] 智能体异常: {e}")
+                        _v_sse_push({"type": "error", "error": str(e)})
+                    finally:
+                        _v_sse_push(_v_sentinel)
+                        
+                threading.Thread(target=_run_video_agent, daemon=True).start()
+                
+                videos = []
+                while True:
+                    item = await _v_queue.get()
+                    if item is _v_sentinel:
+                        break
+                    if isinstance(item, str):
+                        # 进度消息
+                        yield item
+                    elif isinstance(item, dict):
+                        if item.get("type") == "result":
+                            videos = item.get("videos", [])
+                        elif item.get("type") == "error":
+                            yield f'data: {json.dumps({"type": "error", "content": item.get("error")}, ensure_ascii=False)}\n\n'
 
                 if videos:
                     res_id = _save_video_resource(plan_id_int, videos, current_module_order)
@@ -983,6 +1017,7 @@ async def generate_single_resource(
                 else:
                     yield f'data: {json.dumps({"type": "progress", "content": "未找到相关教学视频，建议直接在视频平台搜索"}, ensure_ascii=False)}\n\n'
                 yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
+                
                 if generation_task_id:
                     try:
                         java_client.update_generation_task(generation_task_id, 2, update_resource_status=False)
@@ -1678,9 +1713,19 @@ def _build_resource_summary(module_list: list, quiz_questions: list = None, orch
     parts = []
     if module_list:
         titles = [m.get("title", "") for m in module_list if m.get("title")]
-        types = list({_normalize_module_type(m.get("module_type", "text")) for m in module_list})
-        type_label = "/".join(types)
-        parts.append(f"已生成 {len(module_list)} 个{type_label}类型学习模块：{'、'.join(titles)}")
+        raw_types = list({_normalize_module_type(m.get("module_type", "text")) for m in module_list})
+        type_map = {
+            "text": "图文",
+            "video": "视频",
+            "animation": "动画",
+            "podcast": "播客",
+            "code": "代码交互",
+            "mindmap": "思维导图",
+            "quiz": "测试练习"
+        }
+        translated_types = [type_map.get(t, t) for t in raw_types]
+        type_label = "/".join(translated_types)
+        parts.append(f"已生成 {len(module_list)} 个「{type_label}」学习模块：{'、'.join(titles)}")
     if quiz_questions:
         parts.append(f"已生成 {len(quiz_questions)} 道练习题")
     if orchestrated_content and orchestrated_content.get("summary"):
