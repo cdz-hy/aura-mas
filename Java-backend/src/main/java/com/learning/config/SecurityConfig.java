@@ -39,6 +39,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/resource/internal/**").hasAnyRole("admin", "service")
                 .requestMatchers("/api/quiz/internal/**").hasAnyRole("admin", "service")
                 .requestMatchers("/api/task/internal/**").hasAnyRole("admin", "service")
+                .requestMatchers("/api/knowledge-tree/internal/**").hasAnyRole("admin", "service")
                 .requestMatchers("/api/admin/kb/internal/**").hasAnyRole("admin", "service")
                 .requestMatchers("/api/note/internal/**").hasAnyRole("admin", "service")
                 .requestMatchers("/api/flashcard/internal/**").hasAnyRole("admin", "service")
