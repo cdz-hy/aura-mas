@@ -50,17 +50,44 @@ function buildLegacyBridgeScript() {
       animation.cancel();
       animation.play();
     });
-    // GSAP: kill running tweens on all beats, then re-animate the active one
+    // GSAP: find and restart timelines/tweens targeting the active beat, or fallback to generic entrance tween
     if (typeof gsap !== "undefined") {
       try {
-        gsap.killTweensOf(active?.querySelectorAll("*"));
-        const children = active?.querySelectorAll("[class]");
-        if (children && children.length) {
-          gsap.fromTo(
-            [...children],
-            { opacity: 0, y: 30 },
-            { opacity: 1, y: 0, duration: 0.6, stagger: 0.08, ease: "power2.out", overwrite: true }
-          );
+        const activeElements = new Set(active?.querySelectorAll("*") || []);
+        if (active) activeElements.add(active);
+        let foundCustomAnimation = false;
+
+        // Get top-level animations from global timeline
+        const allAnimations = gsap.globalTimeline.getChildren(false, true, true);
+        allAnimations.forEach(anim => {
+          let targets = [];
+          if (typeof anim.targets === "function") {
+            targets = anim.targets();
+          } else if (anim.getChildren) {
+            const childTweens = anim.getChildren(true, true, false);
+            childTweens.forEach(t => {
+              if (typeof t.targets === "function") {
+                targets.push(...t.targets());
+              }
+            });
+          }
+          const hasTargetInActive = targets.some(target => activeElements.has(target));
+          if (hasTargetInActive) {
+            anim.restart();
+            foundCustomAnimation = true;
+          }
+        });
+
+        if (!foundCustomAnimation) {
+          gsap.killTweensOf(active?.querySelectorAll("*"));
+          const children = active?.querySelectorAll("[class]");
+          if (children && children.length) {
+            gsap.fromTo(
+              [...children],
+              { opacity: 0, y: 30 },
+              { opacity: 1, y: 0, duration: 0.6, stagger: 0.08, ease: "power2.out", overwrite: true }
+            );
+          }
         }
       } catch(e) {}
     }
@@ -78,6 +105,11 @@ function buildLegacyBridgeScript() {
         beat.style.opacity = '1';
         beat.style.visibility = 'visible';
         beat.style.removeProperty('display');
+      } else {
+        // 强制隐藏非活动 beat，防止因为 LLM CSS 逻辑遗漏或 class desync 导致多页面重叠
+        beat.style.display = 'none';
+        beat.style.removeProperty('opacity');
+        beat.style.removeProperty('visibility');
       }
     });
     postProgress();
@@ -125,11 +157,21 @@ function buildLegacyBridgeScript() {
   window.__AURA_LEGACY_PAUSE = () => {
     window.__AURA_LEGACY_PAUSED = true;
     document.getAnimations({ subtree: true }).forEach(animation => animation.pause());
+    if (typeof gsap !== "undefined") {
+      try {
+        gsap.globalTimeline.pause();
+      } catch(e) {}
+    }
   };
 
   window.__AURA_LEGACY_PLAY = () => {
     window.__AURA_LEGACY_PAUSED = false;
     document.getAnimations({ subtree: true }).forEach(animation => animation.play());
+    if (typeof gsap !== "undefined") {
+      try {
+        gsap.globalTimeline.play();
+      } catch(e) {}
+    }
   };
 
   function setPaused(nextPaused) {
@@ -158,6 +200,14 @@ function buildLegacyBridgeScript() {
     else if (message.action === "replay") runAction("replay");
     else if (message.action === "progress") postProgress();
   });
+
+  // 监听内部 DOM 变化（如由内部点击事件触发的 active 类变更），自动同步最新进度和状态给父容器
+  try {
+    const observer = new MutationObserver(() => postProgress());
+    beats().forEach(beat => {
+      observer.observe(beat, { attributes: true, attributeFilter: ["class"] });
+    });
+  } catch (e) {}
 
   document.addEventListener("DOMContentLoaded", () => postProgress(READY));
   window.addEventListener("load", () => postProgress(READY));
