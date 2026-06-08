@@ -72,4 +72,18 @@ public class StatsController {
         Long userId = AuthUtils.getCurrentUserId(authentication);
         return Result.success(statsService.getAnalyticsData(userId));
     }
+
+    @Operation(summary = "获取学习效率时段分析")
+    @GetMapping("/study-efficiency")
+    public Result<Map<String, Object>> getStudyEfficiency(Authentication authentication) {
+        Long userId = AuthUtils.getCurrentUserId(authentication);
+        return Result.success(statsService.getStudyEfficiency(userId));
+    }
+
+    @Operation(summary = "获取周对比数据")
+    @GetMapping("/week-comparison")
+    public Result<Map<String, Object>> getWeekComparison(Authentication authentication) {
+        Long userId = AuthUtils.getCurrentUserId(authentication);
+        return Result.success(statsService.getWeekComparison(userId));
+    }
 }

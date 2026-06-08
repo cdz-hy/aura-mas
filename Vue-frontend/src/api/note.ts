@@ -9,7 +9,7 @@ export function getNoteById(noteId: number) {
   return request.get<any, { data: Note }>(`/note/${noteId}`)
 }
 
-export function getNotes(params: { planId?: number; page?: number; size?: number }) {
+export function getNotes(params: { planId?: number; page?: number; size?: number; keyword?: string }) {
   return request.get<any, { data: { records: Note[]; total: number } }>('/note/list', { params })
 }
 

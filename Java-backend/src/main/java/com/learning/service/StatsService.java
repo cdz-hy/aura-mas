@@ -556,6 +556,11 @@ public class StatsService {
         List<String> weakAreas = new ArrayList<>();
         List<String> interests = new ArrayList<>();
         Map<String, Object> performance = new HashMap<>();
+        Map<String, Object> learningStyle = new HashMap<>();
+        learningStyle.put("visual_vs_verbal", 0.0);
+        learningStyle.put("active_vs_reflective", 0.0);
+        learningStyle.put("sensing_vs_intuitive", 0.0);
+        learningStyle.put("sequential_vs_global", 0.0);
 
         if (profile != null && profile.getLearningBehavior() != null) {
             try {
@@ -578,6 +583,12 @@ public class StatsService {
                 performance.put("engagement", extractJsonDouble(json, "engagement_level", 0.5));
                 performance.put("quizAccuracy", extractJsonDouble(json, "quiz_accuracy", 0.0));
                 performance.put("completionRate", extractJsonDouble(json, "completion_rate", 0.0));
+
+                // 学习风格维度
+                learningStyle.put("visual_vs_verbal", extractJsonDouble(json, "visual_vs_verbal", 0.0));
+                learningStyle.put("active_vs_reflective", extractJsonDouble(json, "active_vs_reflective", 0.0));
+                learningStyle.put("sensing_vs_intuitive", extractJsonDouble(json, "sensing_vs_intuitive", 0.0));
+                learningStyle.put("sequential_vs_global", extractJsonDouble(json, "sequential_vs_global", 0.0));
             } catch (Exception e) {
                 log.error("解析用户画像失败", e);
             }
@@ -587,6 +598,159 @@ public class StatsService {
         result.put("weakAreas", weakAreas);
         result.put("interests", interests);
         result.put("performance", performance);
+        result.put("learningStyle", learningStyle);
+
+        return result;
+    }
+
+    // ======================== 学习效率时段分析 ========================
+    public Map<String, Object> getStudyEfficiency(Long userId) {
+        Map<String, Object> result = new HashMap<>();
+
+        // 按小时统计学习时长和会话次数（从 learning_duration 的 start_time 提取小时）
+        List<LearningDuration> allDurations = durationMapper.selectList(
+                new LambdaQueryWrapper<LearningDuration>()
+                        .eq(LearningDuration::getUserId, userId)
+                        .isNotNull(LearningDuration::getStartTime));
+
+        // 按小时统计学习时长
+        int[] studyMinutesByHour = new int[24];
+        int[] sessionCountByHour = new int[24];
+        for (LearningDuration d : allDurations) {
+            int hour = d.getStartTime().getHour();
+            sessionCountByHour[hour]++;
+            studyMinutesByHour[hour] += (d.getDurationSeconds() != null ? d.getDurationSeconds() : 0) / 60;
+        }
+
+        // 按小时统计答题正确率
+        List<QuizRecord> allQuizzes = quizRecordMapper.selectList(
+                new LambdaQueryWrapper<QuizRecord>()
+                        .eq(QuizRecord::getUserId, userId)
+                        .isNotNull(QuizRecord::getAnswerTime));
+
+        int[] quizTotalByHour = new int[24];
+        int[] quizCorrectByHour = new int[24];
+        for (QuizRecord q : allQuizzes) {
+            int hour = q.getAnswerTime().getHour();
+            quizTotalByHour[hour]++;
+            if (q.getIsCorrect() != null && q.getIsCorrect() == 1) {
+                quizCorrectByHour[hour]++;
+            }
+        }
+
+        // 组装 24 小时数据
+        List<Map<String, Object>> hourlyData = new ArrayList<>();
+        int bestStudyHour = 0;
+        int bestQuizHour = 0;
+        int maxStudyMin = 0;
+        double maxQuizAcc = 0;
+
+        for (int h = 0; h < 24; h++) {
+            double accuracy = quizTotalByHour[h] > 0
+                    ? Math.round((double) quizCorrectByHour[h] / quizTotalByHour[h] * 1000) / 10.0
+                    : 0;
+
+            Map<String, Object> hour = new HashMap<>();
+            hour.put("hour", h);
+            hour.put("studyMinutes", studyMinutesByHour[h]);
+            hour.put("sessionCount", sessionCountByHour[h]);
+            hour.put("quizTotal", quizTotalByHour[h]);
+            hour.put("quizCorrect", quizCorrectByHour[h]);
+            hour.put("accuracy", accuracy);
+            hourlyData.add(hour);
+
+            if (studyMinutesByHour[h] > maxStudyMin) {
+                maxStudyMin = studyMinutesByHour[h];
+                bestStudyHour = h;
+            }
+            if (quizTotalByHour[h] >= 5 && accuracy > maxQuizAcc) {
+                maxQuizAcc = accuracy;
+                bestQuizHour = h;
+            }
+        }
+
+        result.put("hourlyData", hourlyData);
+        result.put("bestStudyHour", bestStudyHour);
+        result.put("bestQuizHour", bestQuizHour);
+        result.put("bestQuizAccuracy", maxQuizAcc);
+
+        return result;
+    }
+
+    // ======================== 周对比 ========================
+    public Map<String, Object> getWeekComparison(Long userId) {
+        Map<String, Object> result = new HashMap<>();
+
+        LocalDate today = LocalDate.now();
+        LocalDate thisMonday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        LocalDate lastMonday = thisMonday.minusDays(7);
+
+        // 学习时长对比
+        List<DailyStudyTime> thisWeekData = dailyStudyTimeMapper.selectList(
+                new LambdaQueryWrapper<DailyStudyTime>()
+                        .eq(DailyStudyTime::getUserId, userId)
+                        .ge(DailyStudyTime::getStudyDate, thisMonday));
+        List<DailyStudyTime> lastWeekData = dailyStudyTimeMapper.selectList(
+                new LambdaQueryWrapper<DailyStudyTime>()
+                        .eq(DailyStudyTime::getUserId, userId)
+                        .ge(DailyStudyTime::getStudyDate, lastMonday)
+                        .lt(DailyStudyTime::getStudyDate, thisMonday));
+
+        int thisWeekMinutes = thisWeekData.stream()
+                .mapToInt(d -> (d.getDurationSeconds() != null ? d.getDurationSeconds() : 0) / 60).sum();
+        int lastWeekMinutes = lastWeekData.stream()
+                .mapToInt(d -> (d.getDurationSeconds() != null ? d.getDurationSeconds() : 0) / 60).sum();
+
+        int thisActiveDays = (int) thisWeekData.stream()
+                .filter(d -> d.getDurationSeconds() != null && d.getDurationSeconds() > 0).count();
+        int lastActiveDays = (int) lastWeekData.stream()
+                .filter(d -> d.getDurationSeconds() != null && d.getDurationSeconds() > 0).count();
+
+        // 答题正确率对比
+        List<QuizRecord> thisWeekQuizzes = quizRecordMapper.selectList(
+                new LambdaQueryWrapper<QuizRecord>()
+                        .eq(QuizRecord::getUserId, userId)
+                        .isNotNull(QuizRecord::getAnswerTime)
+                        .ge(QuizRecord::getAnswerTime, thisMonday.atStartOfDay()));
+        List<QuizRecord> lastWeekQuizzes = quizRecordMapper.selectList(
+                new LambdaQueryWrapper<QuizRecord>()
+                        .eq(QuizRecord::getUserId, userId)
+                        .isNotNull(QuizRecord::getAnswerTime)
+                        .ge(QuizRecord::getAnswerTime, lastMonday.atStartOfDay())
+                        .lt(QuizRecord::getAnswerTime, thisMonday.atStartOfDay()));
+
+        double thisWeekAcc = thisWeekQuizzes.size() > 0
+                ? Math.round((double) thisWeekQuizzes.stream()
+                .filter(q -> q.getIsCorrect() != null && q.getIsCorrect() == 1).count()
+                / thisWeekQuizzes.size() * 1000) / 10.0 : 0;
+        double lastWeekAcc = lastWeekQuizzes.size() > 0
+                ? Math.round((double) lastWeekQuizzes.stream()
+                .filter(q -> q.getIsCorrect() != null && q.getIsCorrect() == 1).count()
+                / lastWeekQuizzes.size() * 1000) / 10.0 : 0;
+
+        // 变化百分比
+        int studyChange = lastWeekMinutes > 0
+                ? (int) Math.round((double) (thisWeekMinutes - lastWeekMinutes) / lastWeekMinutes * 100) : 0;
+        double accChange = lastWeekAcc > 0
+                ? Math.round((thisWeekAcc - lastWeekAcc) / lastWeekAcc * 1000) / 10.0 : 0;
+
+        Map<String, Object> studyMinutes = new HashMap<>();
+        studyMinutes.put("thisWeek", thisWeekMinutes);
+        studyMinutes.put("lastWeek", lastWeekMinutes);
+        studyMinutes.put("change", studyChange);
+
+        Map<String, Object> quizAccuracy = new HashMap<>();
+        quizAccuracy.put("thisWeek", thisWeekAcc);
+        quizAccuracy.put("lastWeek", lastWeekAcc);
+        quizAccuracy.put("change", accChange);
+
+        Map<String, Object> activeDays = new HashMap<>();
+        activeDays.put("thisWeek", thisActiveDays);
+        activeDays.put("lastWeek", lastActiveDays);
+
+        result.put("studyMinutes", studyMinutes);
+        result.put("quizAccuracy", quizAccuracy);
+        result.put("activeDays", activeDays);
 
         return result;
     }
@@ -635,6 +799,20 @@ public class StatsService {
         } catch (Exception e) {
             log.error("获取knowledgeMastery失败", e);
             result.put("knowledgeMastery", new HashMap<>());
+        }
+
+        try {
+            result.put("studyEfficiency", getStudyEfficiency(userId));
+        } catch (Exception e) {
+            log.error("获取studyEfficiency失败", e);
+            result.put("studyEfficiency", new HashMap<>());
+        }
+
+        try {
+            result.put("weekComparison", getWeekComparison(userId));
+        } catch (Exception e) {
+            log.error("获取weekComparison失败", e);
+            result.put("weekComparison", new HashMap<>());
         }
 
         return result;

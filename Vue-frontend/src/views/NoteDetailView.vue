@@ -11,13 +11,31 @@
             <polyline points="15 18 9 12 15 6" />
           </svg>
         </button>
-        <div>
+        <div class="flex-1 min-w-0">
           <input
             v-model="noteName"
             class="text-xl font-display font-semibold text-navy-800 bg-transparent border-none outline-none w-full placeholder:text-navy-300"
             placeholder="笔记标题"
             @blur="autoSave"
           />
+          <!-- Tags -->
+          <div class="flex items-center flex-wrap gap-1.5 mt-1">
+            <span
+              v-for="tag in noteTags"
+              :key="tag"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-navy-50 text-navy-500"
+            >
+              {{ tag }}
+              <button class="text-navy-300 hover:text-navy-600 ml-0.5" @click="removeTag(tag)">&times;</button>
+            </span>
+            <input
+              v-model="tagInput"
+              class="text-xs bg-transparent border-none outline-none w-20 placeholder:text-navy-300 text-navy-400"
+              placeholder="+ 标签"
+              @keydown.enter.prevent="addTag"
+              @keydown.,.prevent="addTag"
+            />
+          </div>
           <p class="text-xs text-navy-300 mt-0.5">
             {{ note ? `最后编辑于 ${formatDate(note.updatedAt)}` : '新建笔记' }}
             <span v-if="saving" class="ml-2 text-sage-500">保存中...</span>
@@ -27,7 +45,7 @@
       </div>
       <div class="flex items-center gap-2">
         <button
-          v-if="previewMode && note?.id"
+          v-if="viewMode === 'preview' && note?.id"
           class="px-3 py-1.5 rounded-lg text-sm text-amber-600 bg-amber-50 hover:bg-amber-100 transition-colors"
           @click="openFlashcardPanel"
         >
@@ -36,15 +54,55 @@
           </svg>
           {{ dueCount > 0 ? `复习闪卡 (${dueCount})` : '闪卡' }}
         </button>
+        <!-- View mode switch: edit / split / preview -->
+        <div class="flex items-center bg-navy-50 rounded-lg p-0.5">
+          <button
+            class="px-2.5 py-1 rounded-md text-xs transition-all duration-200"
+            :class="viewMode === 'edit' ? 'bg-white text-navy-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
+            @click="viewMode = 'edit'"
+          >
+            <svg class="w-3.5 h-3.5 inline mr-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            编辑
+          </button>
+          <button
+            class="px-2.5 py-1 rounded-md text-xs transition-all duration-200"
+            :class="viewMode === 'split' ? 'bg-white text-navy-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
+            @click="viewMode = 'split'"
+          >
+            <svg class="w-3.5 h-3.5 inline mr-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/>
+            </svg>
+            分屏
+          </button>
+          <button
+            class="px-2.5 py-1 rounded-md text-xs transition-all duration-200"
+            :class="viewMode === 'preview' ? 'bg-white text-navy-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
+            @click="viewMode = 'preview'"
+          >
+            <svg class="w-3.5 h-3.5 inline mr-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+            </svg>
+            预览
+          </button>
+        </div>
         <button
-          class="px-3 py-1.5 rounded-lg text-sm transition-all duration-200"
-          :class="previewMode ? 'bg-navy-100 text-navy-700' : 'text-navy-400 hover:bg-navy-50 hover:text-navy-600'"
-          @click="previewMode = !previewMode"
+          v-if="viewMode !== 'preview' && content.trim().length > 0"
+          class="px-3 py-1.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-1.5"
+          :class="formatting
+            ? 'bg-indigo-50 text-indigo-600 cursor-wait'
+            : 'text-indigo-600 hover:bg-indigo-50 border border-indigo-200'"
+          :disabled="formatting"
+          @click="handleFormat"
         >
-          <svg class="w-4 h-4 inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+          <svg v-if="formatting" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12a9 9 0 11-6.219-8.56" />
           </svg>
-          {{ previewMode ? '编辑' : '预览' }}
+          <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+          {{ formatting ? formatStatus || '整理中...' : '整理笔记' }}
         </button>
         <button
           class="px-4 py-1.5 rounded-lg text-sm text-white bg-navy-600 hover:bg-navy-700 transition-colors"
@@ -72,12 +130,20 @@
     </div>
 
     <!-- Editor / Preview area -->
-    <div class="card overflow-hidden" style="height: calc(100vh - 220px)">
+    <div class="card overflow-hidden flex flex-col" style="height: calc(100vh - 220px)">
+      <!-- Toolbar (edit & split modes) -->
+      <div v-if="viewMode !== 'preview'" class="flex items-center gap-0.5 px-4 py-2 border-b border-navy-100/50 bg-navy-50/30 shrink-0 flex-wrap">
+        <button v-for="btn in toolbarButtons" :key="btn.label" class="toolbar-btn" :title="btn.label" @click="insertMarkdown(btn.prefix, btn.suffix, btn.placeholder)">
+          <span class="text-xs font-medium">{{ btn.display }}</span>
+        </button>
+      </div>
+
       <!-- Edit mode -->
-      <div v-if="!previewMode" class="flex h-full">
+      <div v-if="viewMode === 'edit'" class="flex-1 min-h-0">
         <textarea
+          ref="textareaRef"
           v-model="content"
-          class="flex-1 p-8 text-navy-700 leading-relaxed resize-none outline-none font-body text-base"
+          class="w-full h-full p-8 text-navy-700 leading-relaxed resize-none outline-none font-body text-base"
           placeholder="开始书写你的笔记...&#10;&#10;支持 Markdown 语法：&#10;# 标题&#10;**粗体** *斜体*&#10;- 列表&#10;> 引用&#10;`代码`"
           @input="onInput"
           @keydown.ctrl.s.prevent="saveNote"
@@ -85,11 +151,63 @@
         ></textarea>
       </div>
 
+      <!-- Split mode -->
+      <div v-else-if="viewMode === 'split'" class="flex-1 min-h-0 flex">
+        <textarea
+          ref="textareaRef"
+          v-model="content"
+          class="flex-1 p-6 text-navy-700 leading-relaxed resize-none outline-none font-body text-base border-r border-navy-100/50"
+          placeholder="开始书写你的笔记..."
+          @input="onInput"
+          @keydown.ctrl.s.prevent="saveNote"
+          @keydown.meta.s.prevent="saveNote"
+        ></textarea>
+        <div class="flex-1 overflow-y-auto p-6" @mouseup="onPreviewMouseUp">
+          <div class="markdown-body" v-html="renderedContent" @click="onPreviewClick"></div>
+        </div>
+      </div>
+
       <!-- Preview mode -->
-      <div v-else class="h-full overflow-y-auto p-8" @mouseup="onPreviewMouseUp">
+      <div v-else class="flex-1 min-h-0 overflow-y-auto p-8" @mouseup="onPreviewMouseUp">
         <div class="markdown-body max-w-3xl mx-auto" v-html="renderedContent" @click="onPreviewClick"></div>
       </div>
     </div>
+
+    <!-- Mindmap section -->
+    <div v-if="viewMode === 'preview' && mindmapData" class="mt-4 card overflow-hidden" style="height: 450px">
+      <MindmapPlayer :data="mindmapData" :title="noteName || '思维导图'" />
+    </div>
+
+    <!-- Format complete - flashcard prompt -->
+    <transition name="fade">
+      <div v-if="showFormatFlashcardPrompt" class="mt-4 p-4 rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center">
+            <svg class="w-5 h-5 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <div>
+            <p class="text-sm font-medium text-emerald-800">笔记整理完成</p>
+            <p class="text-xs text-emerald-600">是否从整理后的笔记中生成闪卡？</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            class="px-3 py-1.5 text-xs text-emerald-600 hover:bg-emerald-100 rounded-lg transition-colors"
+            @click="showFormatFlashcardPrompt = false"
+          >
+            稍后再说
+          </button>
+          <button
+            class="px-4 py-1.5 text-xs text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors"
+            @click="generateFlashcardsAfterFormat"
+          >
+            生成闪卡
+          </button>
+        </div>
+      </div>
+    </transition>
 
     <!-- Selection popup -->
     <Teleport to="body">
@@ -152,15 +270,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import { getNoteById, createNote, updateNote, getNoteResources } from '@/api/note'
 import { getFlashcardsByNote, generateFlashcardsSSE } from '@/api/flashcard'
 import { issueTicket } from '@/api/auth'
+import { formatNoteSSE } from '@/api/noteAgent'
 import type { Note, NoteResourceRel } from '@/types/note'
 import type { Flashcard } from '@/types/flashcard'
 import FlashcardPlayer from '@/components/flashcard/FlashcardPlayer.vue'
+import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -168,9 +288,30 @@ const router = useRouter()
 const note = ref<Note | null>(null)
 const noteName = ref('')
 const content = ref('')
-const previewMode = ref(false)
+const viewMode = ref<'edit' | 'split' | 'preview'>(route.query.mode === 'preview' ? 'preview' : 'edit')
 const saving = ref(false)
 const saved = ref(false)
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+
+// Tags
+const noteTags = ref<string[]>([])
+const tagInput = ref('')
+
+// Toolbar
+const toolbarButtons = [
+  { label: '一级标题', display: 'H1', prefix: '# ', suffix: '', placeholder: '标题' },
+  { label: '二级标题', display: 'H2', prefix: '## ', suffix: '', placeholder: '标题' },
+  { label: '三级标题', display: 'H3', prefix: '### ', suffix: '', placeholder: '标题' },
+  { label: '粗体', display: 'B', prefix: '**', suffix: '**', placeholder: '粗体文本' },
+  { label: '斜体', display: 'I', prefix: '*', suffix: '*', placeholder: '斜体文本' },
+  { label: '删除线', display: 'S', prefix: '~~', suffix: '~~', placeholder: '删除文本' },
+  { label: '无序列表', display: '•', prefix: '- ', suffix: '', placeholder: '列表项' },
+  { label: '有序列表', display: '1.', prefix: '1. ', suffix: '', placeholder: '列表项' },
+  { label: '代码块', display: '<>', prefix: '```\n', suffix: '\n```', placeholder: '代码' },
+  { label: '引用', display: '❝', prefix: '> ', suffix: '', placeholder: '引用内容' },
+  { label: '链接', display: '🔗', prefix: '[', suffix: '](url)', placeholder: '链接文本' },
+  { label: '分割线', display: '—', prefix: '\n---\n', suffix: '', placeholder: '' },
+]
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let savedTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -188,13 +329,54 @@ const noteResources = ref<NoteResourceRel[]>([])
 // Selection popup state
 const selectionPopup = ref({ show: false, x: 0, y: 0, text: '' })
 
+// Note formatting state
+const formatting = ref(false)
+const formatStatus = ref('')
+const showFormatFlashcardPrompt = ref(false)
+
 marked.setOptions({
   breaks: true,
   gfm: true,
 } as any)
 
+const CALLOUT_MAP: Record<string, string> = {
+  '💡': 'tip',
+  '⚠️': 'warning',
+  '📌': 'important',
+  '🌰': 'example',
+  '🔑': 'key',
+  '✅': 'summary',
+  '📖': 'definition',
+}
+
+function classifyCallouts(html: string): string {
+  return html.replace(/<blockquote>([\s\S]*?)<\/blockquote>/g, (match, inner) => {
+    const text = inner.replace(/<[^>]+>/g, '').trim()
+    for (const [emoji, cls] of Object.entries(CALLOUT_MAP)) {
+      if (text.startsWith(emoji)) {
+        return `<blockquote class="${cls}">${inner}</blockquote>`
+      }
+    }
+    return match
+  })
+}
+
 const renderedContent = computed(() => {
-  return marked(content.value || '') as string
+  const raw = content.value || ''
+  // Strip ```mindmap code block before rendering markdown
+  const stripped = raw.replace(/```mindmap\s*\n[\s\S]*?```/g, '').trim()
+  return classifyCallouts(marked(stripped) as string)
+})
+
+const mindmapData = computed(() => {
+  const raw = content.value || ''
+  const match = raw.match(/```mindmap\s*\n([\s\S]*?)```/)
+  if (!match) return null
+  try {
+    return JSON.parse(match[1].trim())
+  } catch {
+    return null
+  }
 })
 
 const isFlashcardStale = computed(() => {
@@ -218,6 +400,40 @@ function onInput() {
   saveTimer = setTimeout(autoSave, 3000)
 }
 
+function insertMarkdown(prefix: string, suffix: string, placeholder: string) {
+  const ta = textareaRef.value
+  if (!ta) return
+  const start = ta.selectionStart
+  const end = ta.selectionEnd
+  const scrollTop = ta.scrollTop
+  const selected = content.value.substring(start, end) || placeholder
+  const before = content.value.substring(0, start)
+  const after = content.value.substring(end)
+  content.value = before + prefix + selected + suffix + after
+  nextTick(() => {
+    ta.focus()
+    ta.scrollTop = scrollTop
+    const cursorPos = start + prefix.length
+    ta.setSelectionRange(cursorPos, cursorPos + selected.length)
+  })
+}
+
+function addTag() {
+  const tag = tagInput.value.trim().replace(/,/g, '')
+  if (!tag || noteTags.value.includes(tag)) {
+    tagInput.value = ''
+    return
+  }
+  noteTags.value.push(tag)
+  tagInput.value = ''
+  autoSave()
+}
+
+function removeTag(tag: string) {
+  noteTags.value = noteTags.value.filter(t => t !== tag)
+  autoSave()
+}
+
 async function autoSave() {
   if (!noteName.value.trim() && !content.value.trim()) return
   await saveNote()
@@ -229,10 +445,11 @@ async function saveNote() {
   try {
     const name = noteName.value.trim() || '无标题笔记'
     const body = content.value.trim() || ' '
+    const tags = noteTags.value.length > 0 ? noteTags.value : undefined
     if (note.value?.id) {
-      await updateNote(note.value.id, { noteName: name, content: body })
+      await updateNote(note.value.id, { noteName: name, content: body, tags })
     } else {
-      const res = await createNote({ noteName: name, content: body })
+      const res = await createNote({ noteName: name, content: body, tags })
       const id = (res as any)?.data?.id
       if (id) {
         router.replace(`/notes/${id}`)
@@ -255,6 +472,7 @@ async function loadNote() {
     note.value = null
     noteName.value = ''
     content.value = ''
+    noteTags.value = []
     noteResources.value = []
     return
   }
@@ -265,12 +483,23 @@ async function loadNote() {
       note.value = found
       noteName.value = found.noteName
       content.value = found.content
+      noteTags.value = parseTags(found.tags)
       loadNoteResources(found.id)
     } else {
       router.push('/notes')
     }
   } catch {
     router.push('/notes')
+  }
+}
+
+function parseTags(tags: Note['tags']): string[] {
+  if (!tags) return []
+  if (Array.isArray(tags)) return tags
+  try {
+    return JSON.parse(tags as string)
+  } catch {
+    return []
   }
 }
 
@@ -374,6 +603,56 @@ async function startGenerate() {
     generating.value = false
     console.error('Failed to start flashcard generation:', e)
   }
+}
+
+// === Note formatting ===
+
+async function handleFormat() {
+  if (!content.value.trim()) return
+  formatting.value = true
+  formatStatus.value = ''
+  showFormatFlashcardPrompt.value = false
+  const originalContent = content.value
+
+  try {
+    const ticketRes = await issueTicket()
+    const ticket = ticketRes.data.ticket
+
+    formatStatus.value = '正在整理笔记...'
+    content.value = ''
+
+    formatNoteSSE(ticket, originalContent, {
+      onProgress(message) {
+        formatStatus.value = message
+      },
+      onChunk(chunk) {
+        content.value += chunk
+      },
+      onDone(formatted) {
+        content.value = formatted
+        formatting.value = false
+        formatStatus.value = ''
+        saveNote()
+        showFormatFlashcardPrompt.value = true
+      },
+      onError(error) {
+        content.value = originalContent
+        formatting.value = false
+        formatStatus.value = ''
+        console.error('Note format error:', error)
+      },
+    })
+  } catch (e) {
+    content.value = originalContent
+    formatting.value = false
+    formatStatus.value = ''
+    console.error('Failed to start note formatting:', e)
+  }
+}
+
+function generateFlashcardsAfterFormat() {
+  showFormatFlashcardPrompt.value = false
+  startGenerate()
 }
 
 // === Preview link navigation ===
@@ -571,5 +850,34 @@ watch(() => route.params.id, (newId) => {
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  border-radius: 6px;
+  color: #6b7a99;
+  transition: all 0.15s;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+.toolbar-btn:hover {
+  background: rgba(26, 40, 71, 0.08);
+  color: #1a2847;
 }
 </style>

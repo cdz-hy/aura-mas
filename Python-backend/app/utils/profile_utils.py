@@ -25,7 +25,8 @@ def get_default_learning_behavior() -> Dict[str, Any]:
         
         # 学习偏好
         "preferred_resource_types": [],    # 偏好的资源类型
-        "goal_orientation": "career",      # 目标导向: career/exam/interest/skill
+        "preferred_quiz_types": [],        # 偏好的题目类型
+        "goal_orientation": "exam",        # 目标导向: career/exam/interest/skill
         
         # 扩展字段（可选，根据用户行为自动分析）
         "learning_speed": 0.5,             # 学习速度评分 (0-1)
@@ -67,7 +68,7 @@ def ensure_learning_behavior_fields(learning_behavior: Dict[str, Any]) -> Dict[s
                 learning_behavior[dimension] = 0.0
     
     # 确保列表字段是列表类型
-    for list_field in ["knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types"]:
+    for list_field in ["knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types", "preferred_quiz_types"]:
         if list_field in learning_behavior:
             if not isinstance(learning_behavior[list_field], list):
                 learning_behavior[list_field] = []
@@ -100,7 +101,7 @@ def map_dimension_name(dimension: str) -> str:
         "sequential_global": "sequential_vs_global",
         "knowledge_base": "knowledge_base",
         "content_preference": "preferred_resource_types",
-        "quiz_preference": "preferred_resource_types",
+        "quiz_preference": "preferred_quiz_types",
     }
     return mapping.get(dimension, dimension)
 
@@ -117,7 +118,7 @@ def update_learning_behavior(
         current: 当前的 learning_behavior
         updates: 需要更新的字段和值
             - 学习风格维度: 增量调整（累加到当前值）
-            - 列表字段: 期望的最终状态（直接替换）
+            - 列表字段: 仅输出需要新增的项，系统自动合并到现有列表（只增不删）
         confidence: 更新的置信度 (0-1)，用于调整学习风格维度的变化幅度
 
     Returns:
@@ -126,31 +127,58 @@ def update_learning_behavior(
     # 确保当前画像字段完整 (会触发首次同步)
     current = ensure_learning_behavior_fields(current)
     
+    # 增量调整字段：LLM输出增量值，系统累加到当前值
+    INCREMENTAL_FIELDS = {
+        # 学习风格维度：范围 [-1, 1]
+        "visual_vs_verbal": (-1.0, 1.0),
+        "active_vs_reflective": (-1.0, 1.0),
+        "sensing_vs_intuitive": (-1.0, 1.0),
+        "sequential_vs_global": (-1.0, 1.0),
+        # 标量性能字段：范围 [0, 1]
+        "learning_speed": (0.0, 1.0),
+        "engagement_level": (0.0, 1.0),
+        "quiz_accuracy": (0.0, 1.0),
+        "completion_rate": (0.0, 1.0),
+        # 偏好难度：范围 [1, 5]
+        "preferred_difficulty": (1.0, 5.0),
+    }
+
     for key, value in updates.items():
         if value is None:
             continue
-        
+
         # 映射字段名
         key = map_dimension_name(key)
-        
-        # 学习风格维度：渐进式调整
-        if key in ["visual_vs_verbal", "active_vs_reflective", "sensing_vs_intuitive", "sequential_vs_global"]:
+
+        # 增量调整字段：当前值 + 调整值 × 置信度
+        if key in INCREMENTAL_FIELDS:
             if isinstance(value, (int, float)):
                 current_value = current.get(key, 0.0)
-                # 渐进式调整：新值 = 当前值 + (调整值 × 置信度)
                 adjustment = value * confidence
                 new_value = current_value + adjustment
-                # 限制在 [-1, 1] 范围内
-                current[key] = max(-1.0, min(1.0, new_value))
-        
-        # 列表字段：直接替换为 LLM 输出的期望最终状态
-        elif key in ["knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types"]:
+                lo, hi = INCREMENTAL_FIELDS[key]
+                current[key] = round(max(lo, min(hi, new_value)), 4)
+
+        # 列表字段：只增不删，合并新项到现有列表
+        elif key in ["knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types", "preferred_quiz_types"]:
             if isinstance(value, list):
-                current[key] = value
+                existing = current.get(key, [])
+                if not isinstance(existing, list):
+                    existing = []
+                merged = list(existing)
+                for item in value:
+                    if item not in merged:
+                        merged.append(item)
+                current[key] = merged
             elif isinstance(value, str):
-                current[key] = [value]
-        
-        # 其他字段：直接更新
+                existing = current.get(key, [])
+                if not isinstance(existing, list):
+                    existing = []
+                if value not in existing:
+                    existing.append(value)
+                current[key] = existing
+
+        # 分类字段：直接替换（如 goal_orientation）
         else:
             current[key] = value
             
@@ -165,51 +193,52 @@ def analyze_user_behavior(
     session_data: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     """
-    根据用户行为数据自动分析并生成画像更新
-    
+    根据用户行为数据自动分析并生成画像增量更新
+
+    所有输出均为增量值（小正/负数），由 update_learning_behavior 累加到当前值。
+
     Args:
         quiz_stats: 答题统计数据
         session_data: 会话数据（学习时长、交互频率等）
-        
+
     Returns:
-        建议的画像更新字典
+        建议的画像增量更新字典
     """
     updates = {}
-    
+
     # 分析答题数据
     if quiz_stats:
         total = quiz_stats.get("total_questions", 0)
         correct = quiz_stats.get("correct_count", 0)
-        
+
         if total > 0:
             accuracy = correct / total
-            updates["quiz_accuracy"] = accuracy
-            
-            # 根据准确率调整学习速度评分
-            if total >= 10:  # 至少10题才有参考价值
+            # quiz_accuracy 增量：向观测值方向小幅调整
+            updates["quiz_accuracy"] = (accuracy - 0.5) * 0.1
+
+            # 根据准确率微调学习速度
+            if total >= 10:
                 if accuracy >= 0.8:
-                    updates["learning_speed"] = 0.8
+                    updates["learning_speed"] = 0.05
                 elif accuracy >= 0.6:
-                    updates["learning_speed"] = 0.6
+                    updates["learning_speed"] = 0.02
                 else:
-                    updates["learning_speed"] = 0.4
-    
+                    updates["learning_speed"] = -0.05
+
     # 分析会话数据
     if session_data:
         interaction_count = session_data.get("interaction_count", 0)
         session_duration = session_data.get("duration_minutes", 0)
-        
-        # 参与度评分
+
         if interaction_count > 0 and session_duration > 0:
-            # 每分钟交互次数
             interactions_per_minute = interaction_count / session_duration
             if interactions_per_minute >= 2:
-                updates["engagement_level"] = 0.9
+                updates["engagement_level"] = 0.05
             elif interactions_per_minute >= 1:
-                updates["engagement_level"] = 0.7
+                updates["engagement_level"] = 0.02
             else:
-                updates["engagement_level"] = 0.5
-    
+                updates["engagement_level"] = -0.03
+
     return updates
 
 

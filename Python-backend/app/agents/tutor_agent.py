@@ -107,18 +107,24 @@ TUTOR_PROFILE_PROMPT = """你是一个用户画像分析助手。根据辅导对
     "active_vs_reflective": 增量值或null,
     "sensing_vs_intuitive": 增量值或null,
     "sequential_vs_global": 增量值或null,
-    "knowledge_base": [...完整列表...] 或 null,
-    "weak_areas": [...完整列表...] 或 null,
-    "interest_tags": [...完整列表...] 或 null,
-    "preferred_resource_types": [...] 或 null,
+    "learning_speed": 增量值或null,
+    "engagement_level": 增量值或null,
+    "preferred_difficulty": 增量值或null,
+    "quiz_accuracy": 增量值或null,
+    "completion_rate": 增量值或null,
+    "knowledge_base": [...仅新增项...] 或 null,
+    "weak_areas": [...仅新增项...] 或 null,
+    "interest_tags": [...仅新增项...] 或 null,
+    "preferred_resource_types": [...仅新增项...] 或 null,
     "goal_orientation": "..." 或 null
   },
   "analysis": "简要分析依据"
 }
 
 ## 注意
-- 学习风格维度只输出增量（如 +0.1 或 -0.1），不要输出绝对值
-- 列表字段输出期望的最终完整列表，不是增量
+- 所有数值字段都输出增量值（如 +0.1 或 -0.1），不要输出绝对值，系统会自动累加到当前值
+- 列表字段只输出需要新增的项，系统会自动合并（只增不删）
+- goal_orientation 直接输出目标值（如 "exam"），不是增量
 - 如果没有足够信息判断，should_update 设为 false"""
 
 
@@ -485,7 +491,7 @@ async def tutor_chat(
 - 感官-直觉: {current_behavior.get('sensing_vs_intuitive', 0.0)}
 - 序列-全局: {current_behavior.get('sequential_vs_global', 0.0)}
 - 偏好资源类型: {current_behavior.get('preferred_resource_types', [])}
-- 目标导向: {current_behavior.get('goal_orientation', 'career')}
+- 目标导向: {current_behavior.get('goal_orientation', 'exam')}
 
 ## 辅导对话
 用户: {user_message}

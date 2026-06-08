@@ -345,7 +345,7 @@ def _format_profile(profile: Dict[str, Any]) -> str:
     behavior = ensure_learning_behavior_fields(behavior)
 
     if behavior:
-        goal_orientation = behavior.get("goal_orientation", "career")
+        goal_orientation = behavior.get("goal_orientation", "exam")
         goal_map = {
             "career": "职业发展 (career)",
             "exam": "考试提分 (exam)",
