@@ -81,7 +81,11 @@ public class NoteController {
         Long resourceId = Long.valueOf(resourceObj.toString());
         String selectedText = body.get("selectedText") != null ? body.get("selectedText").toString() : null;
         String positionInfo = body.get("positionInfo") != null ? body.get("positionInfo").toString() : null;
-        noteService.linkResource(noteId, resourceId, selectedText, positionInfo);
+        Object planObj = body.get("planId");
+        Long planId = planObj != null ? Long.valueOf(planObj.toString()) : null;
+        String moduleName = body.get("moduleName") != null ? body.get("moduleName").toString() : null;
+        String resourceTitle = body.get("resourceTitle") != null ? body.get("resourceTitle").toString() : null;
+        noteService.linkResource(noteId, resourceId, selectedText, positionInfo, planId, moduleName, resourceTitle);
         return Result.success();
     }
 

@@ -41,11 +41,11 @@ PROFILE_QUESTIONS = {
         "在当前学习的领域中，你之前已经学过哪些相关的课程或知识？",
         "你对这个领域的基础概念了解程度如何？有没有特别熟悉或特别陌生的部分？",
     ],
-    "quiz_preference": [
+    "preferred_quiz_types": [
         "你平时做练习题时，更喜欢选择题、填空题还是简答题？",
         "你觉得自己在哪类题型上表现更好？哪类题型需要加强练习？",
     ],
-    "content_preference": [
+    "preferred_resource_types": [
         "在学习资源方面，你更偏好视频讲解、图文教程、流程图，还是代码示例？",
         "你学习时更喜欢看实际案例分析，还是理论知识的系统梳理？",
     ],
@@ -296,10 +296,10 @@ def _pick_profile_question(profile: Dict[str, Any]) -> tuple:
 
     candidates = []
     dimension_map = {
-        "sensing_vs_intuitive": behavior.get("sensing_vs_intuitive", 0.0) == 0.0,
-        "visual_vs_verbal": behavior.get("visual_vs_verbal", 0.0) == 0.0,
-        "active_vs_reflective": behavior.get("active_vs_reflective", 0.0) == 0.0,
-        "sequential_vs_global": behavior.get("sequential_vs_global", 0.0) == 0.0,
+        "sensing_vs_intuitive": abs(behavior.get("sensing_vs_intuitive", 0)) < 0.01,
+        "visual_vs_verbal": abs(behavior.get("visual_vs_verbal", 0)) < 0.01,
+        "active_vs_reflective": abs(behavior.get("active_vs_reflective", 0)) < 0.01,
+        "sequential_vs_global": abs(behavior.get("sequential_vs_global", 0)) < 0.01,
     }
 
     for dim, is_none in dimension_map.items():
@@ -309,7 +309,7 @@ def _pick_profile_question(profile: Dict[str, Any]) -> tuple:
     if not candidates:
         candidates = list(dimension_map.keys())
 
-    for dim in ["knowledge_base", "quiz_preference", "content_preference"]:
+    for dim in ["knowledge_base", "preferred_quiz_types", "preferred_resource_types"]:
         candidates.append(dim)
 
     chosen = random.choice(candidates)

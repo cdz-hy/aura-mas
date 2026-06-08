@@ -17,4 +17,10 @@ public class NoteResourceRel {
     private String selectedText;
 
     private String positionInfo;
+
+    private Long planId;
+
+    private String moduleName;
+
+    private String resourceTitle;
 }

@@ -55,6 +55,22 @@
       </div>
     </div>
 
+    <!-- Source tags -->
+    <div v-if="noteResources.length > 0" class="flex flex-wrap gap-2 mb-4">
+      <button
+        v-for="res in noteResources"
+        :key="res.id"
+        class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-navy-50 text-navy-600 hover:bg-navy-100 transition-colors cursor-pointer"
+        @click="res.planId && router.push(`/plan/${res.planId}?resource=${res.resourceId}`)"
+      >
+        <svg class="w-3.5 h-3.5 text-navy-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+        </svg>
+        <span v-if="res.moduleName" class="text-navy-400">{{ res.moduleName }} ·</span>
+        {{ res.resourceTitle || `资源 #${res.resourceId}` }}
+      </button>
+    </div>
+
     <!-- Editor / Preview area -->
     <div class="card overflow-hidden" style="height: calc(100vh - 220px)">
       <!-- Edit mode -->
@@ -139,10 +155,10 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
-import { getNoteById, createNote, updateNote } from '@/api/note'
+import { getNoteById, createNote, updateNote, getNoteResources } from '@/api/note'
 import { getFlashcardsByNote, generateFlashcardsSSE } from '@/api/flashcard'
 import { issueTicket } from '@/api/auth'
-import type { Note } from '@/types/note'
+import type { Note, NoteResourceRel } from '@/types/note'
 import type { Flashcard } from '@/types/flashcard'
 import FlashcardPlayer from '@/components/flashcard/FlashcardPlayer.vue'
 
@@ -165,6 +181,9 @@ const generateStatus = ref('')
 const reviewCards = ref<Flashcard[]>([])
 const dueCount = ref(0)
 const latestFlashcardAt = ref<string | null>(null)
+
+// Note resources (source links)
+const noteResources = ref<NoteResourceRel[]>([])
 
 // Selection popup state
 const selectionPopup = ref({ show: false, x: 0, y: 0, text: '' })
@@ -236,6 +255,7 @@ async function loadNote() {
     note.value = null
     noteName.value = ''
     content.value = ''
+    noteResources.value = []
     return
   }
   try {
@@ -245,11 +265,21 @@ async function loadNote() {
       note.value = found
       noteName.value = found.noteName
       content.value = found.content
+      loadNoteResources(found.id)
     } else {
       router.push('/notes')
     }
   } catch {
     router.push('/notes')
+  }
+}
+
+async function loadNoteResources(noteId: number) {
+  try {
+    const res = await getNoteResources(noteId)
+    noteResources.value = res.data ?? []
+  } catch {
+    noteResources.value = []
   }
 }
 

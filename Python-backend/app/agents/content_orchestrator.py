@@ -179,6 +179,7 @@ def _generate_single_module(
     # 用户偏好
     user_pref_text = _get_personalized_preferences(user_profile)
     logger.info(f"  [模块{module_order}] 编排个性化偏好约束:\n{user_pref_text}")
+
     
     # 构造对话历史上下文
     history_text = ""
@@ -693,6 +694,7 @@ def _batch_orchestration(
 
     user_pref_text = _get_personalized_preferences(user_profile)
     logger.info(f"  [内容编排] 批量编排启动，用户画像偏好要求:\n{user_pref_text}")
+
 
     # 构造对话历史上下文
     history_text = ""

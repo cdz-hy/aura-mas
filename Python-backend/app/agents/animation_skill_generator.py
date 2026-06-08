@@ -39,7 +39,6 @@ def _select_style_by_profile(user_profile: dict, override_style: str | None = No
         return override_style
 
     behavior = user_profile.get("learning_behavior", {})
-
     vv = behavior.get("visual_vs_verbal", 0)
     sg = behavior.get("sequential_vs_global", 0)
 

@@ -141,6 +141,9 @@ CREATE TABLE IF NOT EXISTS `note_resource_rel` (
 -- 如果表已存在，执行以下 ALTER 语句：
 -- ALTER TABLE note_resource_rel ADD COLUMN selected_text TEXT DEFAULT NULL COMMENT '选中的原文';
 -- ALTER TABLE note_resource_rel ADD COLUMN position_info VARCHAR(255) DEFAULT NULL COMMENT '选区位置信息';
+-- ALTER TABLE note_resource_rel ADD COLUMN plan_id BIGINT UNSIGNED DEFAULT NULL COMMENT '学习计划ID';
+-- ALTER TABLE note_resource_rel ADD COLUMN module_name VARCHAR(255) DEFAULT NULL COMMENT '模块名称';
+-- ALTER TABLE note_resource_rel ADD COLUMN resource_title VARCHAR(255) DEFAULT NULL COMMENT '资源标题';
 
 CREATE TABLE IF NOT EXISTS `flashcard` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
