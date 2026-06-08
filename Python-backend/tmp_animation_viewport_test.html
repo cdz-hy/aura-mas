@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>动画视口测试</title>
+  <style>
+    :root {
+      --bg:#050505; --fg:#f5f5f7; --soft:rgba(245,245,247,.72);
+      --muted:rgba(245,245,247,.48); --accent:#e85d36;
+      --line:rgba(255,255,255,.12); --panel:rgba(255,255,255,.055);
+      --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",sans-serif;
+    }
+    *{box-sizing:border-box} html,body{margin:0;width:100vw;height:100vh;overflow:hidden;background:var(--bg);color:var(--fg);font-family:var(--sans)}
+    body{width:100vw;height:100vh;display:grid;place-items:stretch}
+    #stage{--stage-scale:1;position:relative;width:100vw;height:100vh;min-width:0;min-height:0;overflow:hidden;background:
+      radial-gradient(circle at 72% 28%,rgba(232,93,54,.22),transparent 28%),
+      radial-gradient(circle at 22% 78%,rgba(255,255,255,.09),transparent 26%),
+      linear-gradient(135deg,#050505,#121212 52%,#030303);}
+    .beat{position:absolute;inset:0;display:none;padding:clamp(20px,4.5vw,74px) clamp(18px,5vw,92px) clamp(92px,12vh,132px);grid-template-columns:minmax(0,1.05fr) minmax(220px,.95fr);grid-template-rows:1fr auto;gap:clamp(18px,4vw,56px);align-items:center}
+    .beat.active{display:grid}
+    .kicker{margin:0 0 clamp(12px,2.2vh,24px);color:var(--accent);font-size:clamp(12px,1.8vw,20px);font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+    h1{position:absolute;left:clamp(18px,5vw,92px);top:clamp(14px,3vh,36px);margin:0;color:var(--muted);font-size:clamp(13px,1.8vw,22px);font-weight:650;max-width:70vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:4}
+    h2{margin:0;font-size:clamp(28px,7vw,86px);line-height:1.05;font-weight:760;letter-spacing:0;max-width:100%;overflow-wrap:anywhere}
+    .idea{margin:clamp(14px,3vh,28px) 0 0;max-width:100%;color:var(--soft);font-size:clamp(15px,2.8vw,28px);line-height:1.42;overflow-wrap:anywhere}
+    .motion-field{position:relative;height:min(58vh,620px);min-height:240px;border:1px solid var(--line);border-radius:clamp(18px,3vw,28px);background:var(--panel);overflow:hidden;box-shadow:inset 0 0 80px rgba(255,255,255,.03)}
+    .pulse{position:absolute;border-radius:999px;filter:blur(2px);opacity:.7;animation:float 6s ease-in-out infinite}
+    .pulse-a{width:48%;aspect-ratio:1;left:8%;top:10%;background:rgba(232,93,54,.16)}
+    .pulse-b{width:36%;aspect-ratio:1;right:8%;bottom:12%;background:rgba(255,255,255,.08);animation-delay:-2s}
+    .node{position:absolute;display:grid;place-items:center;border:1px solid rgba(255,255,255,.16);background:rgba(10,10,10,.62);backdrop-filter:blur(18px);box-shadow:0 20px 80px rgba(0,0,0,.35)}
+    .node-main{width:34%;max-width:240px;min-width:128px;aspect-ratio:1;border-radius:clamp(24px,5vw,42px);left:50%;top:50%;transform:translate(-50%,-50%);font-size:clamp(18px,3.2vw,34px);font-weight:760;color:var(--fg);animation:pop .8s cubic-bezier(.2,.8,.2,1) both}
+    .node-side{width:18%;min-width:74px;max-width:118px;aspect-ratio:1;border-radius:clamp(18px,4vw,30px);font-size:clamp(16px,3vw,28px);font-weight:750;color:var(--accent);animation:slideIn .9s cubic-bezier(.2,.8,.2,1) both}
+    .node-side.one{left:12%;top:26%} .node-side.two{right:13%;bottom:25%;animation-delay:.12s}
+    .flow-line{position:absolute;left:22%;right:22%;top:50%;height:2px;background:linear-gradient(90deg,transparent,var(--accent),transparent);transform-origin:left center;animation:draw 1.15s ease both}
+    .steps{grid-column:1 / 3;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:clamp(10px,2vw,18px);margin:0;padding:0;list-style:none}
+    .steps li{min-height:76px;padding:clamp(12px,2vw,20px);border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.045);display:flex;gap:12px;align-items:flex-start}
+    .steps span{color:var(--accent);font-size:clamp(12px,1.6vw,16px);font-weight:780} .steps p{margin:0;color:var(--soft);font-size:clamp(13px,2.2vw,20px);line-height:1.36;overflow-wrap:anywhere}
+    .animation-control-bar{position:absolute;left:50%;bottom:clamp(14px,3vh,28px);transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:16px;background:rgba(0,0,0,.62);backdrop-filter:blur(18px);z-index:20;box-shadow:0 18px 60px rgba(0,0,0,.34)}
+    button{width:42px;height:38px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--fg);font-size:17px;cursor:pointer}
+    button:hover{background:rgba(255,255,255,.14)} .progress{min-width:54px;text-align:center;color:var(--muted);font-size:14px;font-variant-numeric:tabular-nums}
+    @media (max-width:720px), (max-height:520px){.beat{grid-template-columns:1fr;grid-template-rows:auto 1fr auto;padding:54px 22px 94px;gap:16px}.motion-field{height:32vh;min-height:180px}.steps{grid-column:1}h1{left:22px;right:22px;max-width:none}h2{font-size:clamp(26px,9vw,52px)}.idea{font-size:clamp(14px,4vw,22px)}}
+    @keyframes draw{from{transform:scaleX(0);opacity:.2}to{transform:scaleX(1);opacity:1}}
+    @keyframes pop{from{opacity:0;transform:translate(-50%,-50%) scale(.82)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+    @keyframes slideIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes float{0%,100%{transform:translate3d(0,0,0)}50%{transform:translate3d(24px,-20px,0)}}
+    @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+  </style>
+</head>
+<body>
+  <main id="stage" aria-label="教学动画">
+    <h1>动画视口测试</h1>
+    
+      <section class="beat active" data-beat="0">
+        <div class="beat-copy">
+          <p class="kicker">Beat 01 / 02 · 展开</p>
+          <h2>完整显示</h2>
+          <p class="idea">验证内容完整显示并带控制条</p>
+        </div>
+        <div class="motion-field" aria-hidden="true">
+          <div class="pulse pulse-a"></div>
+          <div class="pulse pulse-b"></div>
+          <div class="node node-main">概念</div>
+          <div class="node node-side one">连接</div>
+          <div class="node node-side two">1</div>
+          <div class="flow-line"></div>
+        </div>
+        <ol class="steps"><li><span>01</span><p>第一步</p></li>
+<li><span>02</span><p>第二步</p></li></ol>
+      </section>
+      <section class="beat" data-beat="1">
+        <div class="beat-copy">
+          <p class="kicker">Beat 02 / 02 · 展开</p>
+          <h2>自动播放</h2>
+          <p class="idea">验证自动播放和前进后退暂停重播</p>
+        </div>
+        <div class="motion-field" aria-hidden="true">
+          <div class="pulse pulse-a"></div>
+          <div class="pulse pulse-b"></div>
+          <div class="node node-main">概念</div>
+          <div class="node node-side one">连接</div>
+          <div class="node node-side two">2</div>
+          <div class="flow-line"></div>
+        </div>
+        <ol class="steps"><li><span>01</span><p>播放</p></li>
+<li><span>02</span><p>暂停</p></li>
+<li><span>03</span><p>重播</p></li></ol>
+      </section>
+    <div class="progress" aria-live="polite"></div>
+    <nav class="animation-control-bar" aria-label="动画控制">
+      <button type="button" data-action="prev" aria-label="上一页">‹</button>
+      <button type="button" data-action="pause" aria-label="暂停">Ⅱ</button>
+      <button type="button" data-action="replay" aria-label="重播">↻</button>
+      <button type="button" data-action="next" aria-label="下一页">›</button>
+      <div class="progress" aria-live="polite"></div>
+    </nav>
+  </main>
+  <script>
+    (() => {
+      const stage = document.getElementById('stage');
+      const beats = [...document.querySelectorAll('.beat')];
+      const progress = document.querySelector('.progress');
+      let index = 0;
+      let playing = true;
+      let timer = null;
+      const pauseButton = document.querySelector('[data-action="pause"]');
+      function scaleStage() {
+        const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+        stage.style.setProperty('--stage-scale', String(scale));
+      }
+      function stopAutoplay() {
+        if (timer) window.clearInterval(timer);
+        timer = null;
+      }
+      function updatePlayButton() {
+        pauseButton.textContent = playing ? 'Ⅱ' : '▶';
+        pauseButton.setAttribute('aria-label', playing ? '暂停' : '播放');
+      }
+      function startAutoplay() {
+        stopAutoplay();
+        if (!playing || beats.length <= 1) return;
+        timer = window.setInterval(() => showBeat((index + 1) % beats.length, false), 4200);
+      }
+      function replayBeat() {
+        const beat = beats[index];
+        beat.getAnimations({ subtree: true }).forEach(animation => {
+          animation.cancel();
+          animation.play();
+        });
+      }
+      function showBeat(next, restartTimer = true) {
+        index = Math.max(0, Math.min(next, beats.length - 1));
+        beats.forEach((beat, i) => beat.classList.toggle('active', i === index));
+        progress.textContent = `${index + 1} / ${beats.length}`;
+        requestAnimationFrame(replayBeat);
+        if (restartTimer) startAutoplay();
+      }
+      document.querySelector('[data-action="prev"]').addEventListener('click', () => showBeat(index - 1));
+      document.querySelector('[data-action="next"]').addEventListener('click', () => showBeat(index + 1));
+      document.querySelector('[data-action="replay"]').addEventListener('click', () => { replayBeat(); startAutoplay(); });
+      pauseButton.addEventListener('click', () => {
+        playing = !playing;
+        updatePlayButton();
+        if (playing) startAutoplay(); else stopAutoplay();
+      });
+      window.addEventListener('keydown', event => {
+        if (event.key === ' ' || event.key === 'ArrowRight') { event.preventDefault(); showBeat(index + 1); }
+        if (event.key === 'ArrowLeft') { event.preventDefault(); showBeat(index - 1); }
+      });
+      window.addEventListener('resize', scaleStage);
+      scaleStage();
+      updatePlayButton();
+      showBeat(0);
+      startAutoplay();
+      window.AURA_ANIMATION_READY = true;
+    })();
+  </script>
+</body>
+</html>
