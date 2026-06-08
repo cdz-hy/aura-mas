@@ -19,3 +19,15 @@
 15. 所有内容是否在 stage 边界内（无溢出裁切）
 16. 每个 beat 是否有视觉重心（图文 beat：截图 ≥ 40% 面积或标题 ≥ 正文 3 倍；纯文字 beat：主标题 ≥ 120px / 4:3 ≥ 88px）——禁止所有元素同等大小平铺
 17. 信息截图是否完整显示（无 object-fit:cover 裁切），容器是否无多余 background-color（无灰色背景框）
+18. GSAP API 正确性检查：
+    - `tl.labels` 是**属性**（对象），不是函数，禁止写 `tl.labels()`
+    - `tl.add()` 接受 label 和 position，不是 `tl.addLabel()`
+    - `gsap.set()` 用 `opacity`/`visibility`，不是 `autoAlpha`（避免与其他代码冲突）
+    - 所有 `gsap.to()` / `gsap.from()` 的 target 选择器必须在 HTML 中实际存在
+    - 禁止用 `gsap.set('.beat', {autoAlpha: 0})` 隐藏所有 beat——改用 CSS `.beat { display: none }` + `.beat.active { display: block }` 配合 class 切换
+    - Timeline 播放必须显式调用 `tl.play()` 或设置 `paused: false`
+    - 翻页导航不要自己实现——依赖外部注入的 beat 切换逻辑，只负责定义 `.beat` 和 `.beat.active` 的 CSS
+19. JavaScript 作用域规则：
+    - **禁止内联事件处理器**（`onclick="goTo(3)"`、`onmouseover="..."`）——函数定义在闭包/IIFE 里，内联 handler 在全局作用域执行，会报 ReferenceError
+    - 所有事件绑定必须用 `element.addEventListener()` 或 `element.onclick = fn`，在 JS 代码内部完成
+    - 导航按钮不要自己做——外部 bridge 已经注入了完整的翻页控制

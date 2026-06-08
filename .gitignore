@@ -35,5 +35,6 @@ animation_ratio_current.png
 llm-animation.html
 
 # ==================== Docs ====================
+docs/
 docs/superpowers/
 Python-backend/tests/

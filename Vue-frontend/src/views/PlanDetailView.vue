@@ -289,7 +289,7 @@
                 class="animation-frame"
                 :class="{ 'pointer-events-none': isDragging }"
                 :srcdoc="animationHtml"
-                sandbox="allow-scripts allow-same-origin"
+                sandbox="allow-scripts"
                 title="教学动画"
               ></iframe>
             </div>
@@ -339,7 +339,7 @@
                   <polyline points="6 9 12 15 18 9"/>
                 </svg>
               </button>
-              
+
               <div class="grid transition-all duration-300 ease-in-out" :class="showCitations ? 'grid-rows-[1fr] opacity-100 mt-3.5' : 'grid-rows-[0fr] opacity-0 mt-0'">
                 <div class="overflow-hidden pl-6">
                   <div class="space-y-3 pt-0.5 pb-1">
@@ -510,6 +510,7 @@ import { useRoute } from 'vue-router'
 import { getPlan, updatePlan } from '@/api/plan'
 import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi } from '@/api/resource'
 import { parseMarkdown, extractCitations } from '@/utils/markdown'
+import { normalizeAnimationHtml } from '@/utils/animationHtml'
 import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
 import { issueTicket } from '@/api/auth'
@@ -588,7 +589,7 @@ function clampPopupPos(x: number, y: number): { x: number; y: number } {
 
 function onResourceMouseUp(e: MouseEvent) {
   const selection = window.getSelection()
-  const range = selection?.rangeCount > 0 ? selection.getRangeAt(0) : null
+  const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null
   if (!range || range.collapsed) {
     if (!showNoteList.value) { clearHighlight(); selectionPopup.value.show = false }
     return
@@ -1260,14 +1261,14 @@ const popoverStyle = computed(() => {
 const currentResourceCitations = computed(() => {
   const md = selectedResource.value?.moduleData?.content || ''
   const dbRefs = selectedResource.value?.moduleData?.references || []
-  
+
   // 1. 从 Markdown 内容中提取引用
   const extracted = extractCitations(md)
-  
+
   // 2. 合并提取到的和数据库保存的引用列表（以 ID 去重）
   const refsMap = new Map<string, { id: string; title: string; url: string }>()
   extracted.forEach(c => refsMap.set(c.id, c))
-  
+
   dbRefs.forEach((refStr: string) => {
     if (typeof refStr !== 'string') return
     const match = refStr.match(/^\[(\d+|page\d+)\]\s*(.*?)\s*(?:-|:|来源:)\s*(https?:\/\/[^\s\)]+)/i)
@@ -1290,7 +1291,7 @@ const currentResourceCitations = computed(() => {
       }
     }
   })
-  
+
   // 3. 排序：数字引用在前，page 引用在后，按 ID 数字升序排列
   return Array.from(refsMap.values()).sort((a, b) => {
     const aIsPage = a.id.startsWith('page')
@@ -1323,7 +1324,7 @@ function handleCitationMouseOver(e: MouseEvent) {
 
   const rect = target.getBoundingClientRect()
   popoverX.value = rect.left + rect.width / 2
-  
+
   // 边缘检测：如果元素距离顶部太近，气泡向下展示，否则向上
   if (rect.top < 150) {
     popoverPlacement.value = 'bottom'
@@ -1349,7 +1350,7 @@ function handleCitationMouseOut(e: MouseEvent) {
   if (target && related && target.contains(related)) {
     return
   }
-  
+
   popoverTimeout = setTimeout(() => {
     hoveredCitation.value = null
   }, 250)
@@ -1362,7 +1363,7 @@ function clearPopoverTimeout() {
 function handleCitationClick(e: MouseEvent) {
   const target = (e.target as HTMLElement).closest('.citation-ref') as HTMLElement
   if (!target) return
-  
+
   const url = target.getAttribute('data-url')
   if (url) {
     window.open(url, '_blank')
@@ -1374,209 +1375,6 @@ const animationHtml = computed(() => {
   if (!md) return ''
   return normalizeAnimationHtml(md.html || md.content || '')
 })
-
-function escapeJsonForHtml(value: string) {
-  return JSON.stringify(value)
-    .replace(/</g, '\\u003C')
-    .replace(/>/g, '\\u003E')
-    .replace(/&/g, '\\u0026')
-}
-
-function normalizeAnimationHtml(raw: string) {
-  if (!raw) return ''
-  const html = String(raw)
-
-  const payload = escapeJsonForHtml(html)
-  const closeScript = '<' + '/script>'
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    * { box-sizing: border-box; }
-    html, body { margin: 0; width: 100vw; height: 100vh; overflow: hidden; background: #050505; }
-    .viewport { position: relative; width: 100vw; height: 100vh; display: grid; place-items: center; overflow: hidden; background: #050505; }
-    .stage { position: relative; width: min(100vw, calc(100vh * 16 / 9)); height: min(100vh, calc(100vw * 9 / 16)); aspect-ratio: 16 / 9; overflow: hidden; background: #050505; }
-    iframe { position: absolute; width: 1920px; height: 1080px; border: 0; transform-origin: top left; background: #050505; }
-    .legacy-control-bar { position: absolute; left: 50%; bottom: 10px; z-index: 20; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid rgba(255,255,255,.16); border-radius: 14px; background: rgba(0,0,0,.68); backdrop-filter: blur(16px); }
-    .legacy-control-bar button { width: 38px; height: 34px; border: 1px solid rgba(255,255,255,.16); border-radius: 10px; background: rgba(255,255,255,.08); color: #f5f5f7; cursor: pointer; font-size: 16px; }
-    .legacy-control-bar button:hover { background: rgba(255,255,255,.16); }
-    .legacy-progress { min-width: 46px; text-align: center; color: rgba(245,245,247,.68); font: 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-variant-numeric: tabular-nums; }
-  </style>
-</head>
-<body>
-  <div class="viewport">
-    <div class="stage">
-      <iframe title="教学动画内容" allow="autoplay"></iframe>
-      <nav class="legacy-control-bar" aria-label="动画控制">
-        <button type="button" data-action="prev" aria-label="上一页">‹</button>
-        <button type="button" data-action="pause" aria-label="暂停">Ⅱ</button>
-        <button type="button" data-action="replay" aria-label="重播">↻</button>
-        <button type="button" data-action="next" aria-label="下一页">›</button>
-        <span class="legacy-progress" aria-live="polite"></span>
-      </nav>
-    </div>
-  </div>
-  <script type="application/json" id="animation-html">${payload}${closeScript}
-  <script>
-    (() => {
-      const stage = document.querySelector('.stage');
-      const frame = document.querySelector('iframe');
-      const pauseButton = document.querySelector('[data-action="pause"]');
-      const progress = document.querySelector('.legacy-progress');
-      let paused = false;
-      let autoplayTimer = null;
-      const raw = JSON.parse(document.getElementById('animation-html').textContent || '""');
-      const closeScriptTag = '<' + '/script>';
-      const intervalShim = '<script>(()=>{const nativeSetInterval=window.setInterval.bind(window);window.__AURA_LEGACY_PAUSED=false;window.setInterval=(fn,delay,...args)=>nativeSetInterval(()=>{if(!window.__AURA_LEGACY_PAUSED)fn(...args)},delay);window.__AURA_LEGACY_PAUSE=()=>{window.__AURA_LEGACY_PAUSED=true;document.getAnimations({subtree:true}).forEach(animation=>animation.pause())};window.__AURA_LEGACY_PLAY=()=>{window.__AURA_LEGACY_PAUSED=false;document.getAnimations({subtree:true}).forEach(animation=>animation.play())}})();' + closeScriptTag;
-      const controlHideStyle = '<style>.animation-control-bar,nav[aria-label="动画控制"]{display:none!important}</style>';
-      const instrumented = /<head[^>]*>/i.test(raw)
-        ? raw.replace(/<head[^>]*>/i, match => match + intervalShim + controlHideStyle)
-        : intervalShim + controlHideStyle + raw;
-      frame.srcdoc = instrumented;
-
-      function fit() {
-        const rect = stage.getBoundingClientRect();
-        const scale = Math.min(rect.width / 1920, rect.height / 1080);
-        frame.style.transform = 'scale(' + scale + ')';
-        frame.style.left = Math.max(0, (rect.width - 1920 * scale) / 2) + 'px';
-        frame.style.top = Math.max(0, (rect.height - 1080 * scale) / 2) + 'px';
-      }
-
-      function innerDocument() {
-        return frame.contentDocument;
-      }
-
-      function innerBeats() {
-        const doc = innerDocument();
-        return doc ? [...doc.querySelectorAll('.beat')] : [];
-      }
-
-      function innerActiveIndex() {
-        const beats = innerBeats();
-        const index = beats.findIndex(beat => beat.classList.contains('active'));
-        return { beats, index: Math.max(0, index) };
-      }
-
-      function syncProgress() {
-        const { beats, index } = innerActiveIndex();
-        progress.textContent = beats.length ? (index + 1) + ' / ' + beats.length : '';
-      }
-
-      function replayInnerAnimations() {
-        const doc = innerDocument();
-        const active = doc?.querySelector('.beat.active') || doc?.body;
-        active?.getAnimations({ subtree: true }).forEach(animation => {
-          animation.cancel();
-          animation.play();
-        });
-      }
-
-      function showInnerBeat(nextIndex) {
-        const { beats } = innerActiveIndex();
-        if (!beats.length) return false;
-        const normalized = ((nextIndex % beats.length) + beats.length) % beats.length;
-        beats.forEach((beat, index) => beat.classList.toggle('active', index === normalized));
-        syncProgress();
-        requestAnimationFrame(replayInnerAnimations);
-        return true;
-      }
-
-      function findInnerButton(action) {
-        const doc = innerDocument();
-        if (!doc) return null;
-        const matchers = {
-          prev: text => /上一|prev|‹|←/i.test(text),
-          next: text => /下一|next|›|→/i.test(text),
-          replay: text => /重播|replay|↻|restart/i.test(text),
-          pause: text => /暂停|播放|pause|play|Ⅱ|▶/i.test(text),
-        };
-        return [...doc.querySelectorAll('button')].find(button => {
-          const text = [
-            button.getAttribute('data-action'),
-            button.getAttribute('aria-label'),
-            button.textContent,
-          ].filter(Boolean).join(' ');
-          return text.includes(action) || matchers[action](text);
-        }) || null;
-      }
-
-      function runInnerAction(action, delta = 0) {
-        if (action === 'prev' || action === 'next') {
-          const { index } = innerActiveIndex();
-          if (showInnerBeat(index + delta)) return true;
-        }
-        if (action === 'replay') {
-          replayInnerAnimations();
-          return true;
-        }
-        const button = findInnerButton(action);
-        if (button) {
-          button.click();
-          setTimeout(syncProgress, 0);
-          return true;
-        }
-        return false;
-      }
-
-      function setPaused(nextPaused) {
-        paused = nextPaused;
-        pauseButton.textContent = paused ? '▶' : 'Ⅱ';
-        pauseButton.setAttribute('aria-label', paused ? '播放' : '暂停');
-        const inner = frame.contentWindow;
-        if (paused) {
-          const innerPause = findInnerButton('pause');
-          if (innerPause && /暂停|pause|Ⅱ/i.test((innerPause.getAttribute('aria-label') || '') + innerPause.textContent)) {
-            innerPause.click();
-          }
-          inner?.__AURA_LEGACY_PAUSE?.();
-        } else {
-          const innerPause = findInnerButton('pause');
-          if (innerPause && /播放|play|▶/i.test((innerPause.getAttribute('aria-label') || '') + innerPause.textContent)) {
-            innerPause.click();
-          }
-          inner?.__AURA_LEGACY_PLAY?.();
-        }
-      }
-
-      function startAutoplay() {
-        if (autoplayTimer) clearInterval(autoplayTimer);
-        autoplayTimer = setInterval(() => {
-          if (paused) return;
-          runInnerAction('next', 1);
-        }, 4200);
-      }
-
-      document.querySelector('.legacy-control-bar').addEventListener('click', event => {
-        const button = event.target.closest('button');
-        if (!button) return;
-        const action = button.getAttribute('data-action');
-        if (action === 'pause') {
-          setPaused(!paused);
-          return;
-        }
-        if (action === 'prev') runInnerAction('prev', -1);
-        else if (action === 'next') runInnerAction('next', 1);
-        else if (action === 'replay' && !runInnerAction('replay')) {
-          frame.srcdoc = instrumented;
-          requestAnimationFrame(fit);
-        }
-        startAutoplay();
-      });
-
-      window.addEventListener('resize', fit);
-      frame.addEventListener('load', () => {
-        fit();
-        syncProgress();
-        startAutoplay();
-      });
-      requestAnimationFrame(fit);
-    })();
-  ${closeScript}
-</body>
-</html>`
-}
 
 // ==================== 资源详情 ====================
 
