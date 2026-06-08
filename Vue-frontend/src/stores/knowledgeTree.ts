@@ -18,6 +18,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
   const nodes = ref<KnowledgeNode[]>([])
   const messagesByNode = ref<Record<string, TreeMessage[]>>({})
   const currentNodeId = ref<string | null>(null)
+  const streamingNodeId = ref<string | null>(null)
   const streamingText = ref('')
   const loading = ref(false)
   const error = ref('')
@@ -25,13 +26,19 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
   const panY = ref(0)
   const zoom = ref(1)
   const activeSource = shallowRef<EventSource | null>(null)
+  let loadToken = 0
+  let selectionToken = 0
   let streamToken = 0
 
   async function loadByPlan(planId: number) {
+    const token = nextLoadToken()
+    stopStream()
     loading.value = true
     error.value = ''
+    clearTreeState()
     try {
       const res = await ensureKnowledgeTree(planId)
+      if (!isCurrentLoad(token)) return
       tree.value = res.data.tree
       nodes.value = res.data.nodes || []
       const candidateNodeId = tree.value.currentNodeId
@@ -40,27 +47,53 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
         : nodes.value[0]?.id || null
       currentNodeId.value = nextNodeId
       if (nextNodeId) {
-        await selectNode(nextNodeId)
+        await selectNodeForLoad(nextNodeId, token)
       }
     } catch (e) {
+      if (!isCurrentLoad(token)) return
+      clearTreeState()
       error.value = getErrorMessage(e)
     } finally {
-      loading.value = false
+      if (isCurrentLoad(token)) {
+        loading.value = false
+      }
     }
   }
 
   async function selectNode(nodeId: string) {
-    if (!hasNode(nodeId)) return
+    if (!hasNode(nodeId)) return false
 
+    const token = nextSelectionToken()
     const previousNodeId = currentNodeId.value
     currentNodeId.value = nodeId
     error.value = ''
     try {
       const res = await getKnowledgeNodeMessages(nodeId)
+      if (!isCurrentSelection(token) || currentNodeId.value !== nodeId) return false
       messagesByNode.value[nodeId] = res.data || []
+      return true
     } catch (e) {
+      if (!isCurrentSelection(token)) return false
       currentNodeId.value = previousNodeId
       error.value = getErrorMessage(e)
+      return false
+    }
+  }
+
+  async function selectNodeForLoad(nodeId: string, token: number) {
+    if (!hasNode(nodeId)) return false
+
+    currentNodeId.value = nodeId
+    try {
+      const res = await getKnowledgeNodeMessages(nodeId)
+      if (!isCurrentLoad(token)) return false
+      messagesByNode.value[nodeId] = res.data || []
+      return true
+    } catch (e) {
+      if (!isCurrentLoad(token)) return false
+      clearTreeState()
+      error.value = getErrorMessage(e)
+      return false
     }
   }
 
@@ -87,7 +120,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     const treeId = tree.value.id
     const nodeId = currentNodeId.value
 
-    await startStream((ticket, handlers) => streamTreeExplain(
+    await startStream(nodeId, (ticket, handlers) => streamTreeExplain(
       ticket,
       treeId,
       nodeId,
@@ -101,7 +134,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     const treeId = tree.value.id
     const nodeId = currentNodeId.value
 
-    await startStream((ticket, handlers) => streamTreeSubdivide(
+    await startStream(nodeId, (ticket, handlers) => streamTreeSubdivide(
       ticket,
       treeId,
       nodeId,
@@ -115,7 +148,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     const treeId = tree.value.id
     const nodeId = currentNodeId.value
 
-    await startStream((ticket, handlers) => streamTreeFirstPrinciples(
+    await startStream(nodeId, (ticket, handlers) => streamTreeFirstPrinciples(
       ticket,
       treeId,
       nodeId,
@@ -130,14 +163,44 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
       activeSource.value = null
     }
     loading.value = false
+    streamingNodeId.value = null
     streamingText.value = ''
   }
 
-  async function startStream(start: StreamStarter) {
+  function clearTreeState() {
+    nextSelectionToken()
+    tree.value = null
+    nodes.value = []
+    currentNodeId.value = null
+    messagesByNode.value = {}
+    streamingNodeId.value = null
+    streamingText.value = ''
+  }
+
+  function nextLoadToken() {
+    loadToken += 1
+    return loadToken
+  }
+
+  function isCurrentLoad(token: number) {
+    return token === loadToken
+  }
+
+  function nextSelectionToken() {
+    selectionToken += 1
+    return selectionToken
+  }
+
+  function isCurrentSelection(token: number) {
+    return token === selectionToken
+  }
+
+  async function startStream(nodeId: string, start: StreamStarter) {
     stopStream()
     const token = streamToken
     loading.value = true
     error.value = ''
+    streamingNodeId.value = nodeId
     streamingText.value = ''
 
     try {
@@ -170,6 +233,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
           if (!isActiveStream(token, source)) return
           activeSource.value = null
           loading.value = false
+          streamingNodeId.value = null
           streamingText.value = ''
         },
         onError: message => {
@@ -177,6 +241,8 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
           error.value = message
           activeSource.value = null
           loading.value = false
+          streamingNodeId.value = null
+          streamingText.value = ''
         },
       })
       if (!isCurrentToken(token)) {
@@ -189,6 +255,8 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
       error.value = getErrorMessage(e)
       loading.value = false
       activeSource.value = null
+      streamingNodeId.value = null
+      streamingText.value = ''
     }
   }
 
@@ -221,6 +289,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     nodes,
     messagesByNode,
     currentNodeId,
+    streamingNodeId,
     streamingText,
     loading,
     error,

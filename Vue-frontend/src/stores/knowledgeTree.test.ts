@@ -99,6 +99,97 @@ describe('useKnowledgeTreeStore', () => {
     expect(store.messagesByNode.node_root).toEqual(messages)
   })
 
+  it('keeps the newest plan load when an older load finishes later', async () => {
+    const olderLoad = deferred<{ data: { tree: KnowledgeTree, nodes: KnowledgeNode[] } }>()
+    const newerLoad = deferred<{ data: { tree: KnowledgeTree, nodes: KnowledgeNode[] } }>()
+    const olderMessages = deferred<{ data: TreeMessage[] }>()
+    const newerMessages = deferred<{ data: TreeMessage[] }>()
+    const newerTree: KnowledgeTree = {
+      id: 'tree_2',
+      planId: 43,
+      title: 'Newer Tree',
+      currentNodeId: 'node_new',
+    }
+    const newerNodes: KnowledgeNode[] = [
+      {
+        id: 'node_new',
+        treeId: 'tree_2',
+        parentId: null,
+        title: 'New Root',
+        collapsed: false,
+      },
+    ]
+    const newerMessage: TreeMessage = {
+      id: 2,
+      treeId: 'tree_2',
+      nodeId: 'node_new',
+      role: 'assistant',
+      content: 'newer',
+    }
+    const olderMessage: TreeMessage = {
+      id: 3,
+      treeId: 'tree_1',
+      nodeId: 'node_root',
+      role: 'assistant',
+      content: 'older',
+    }
+
+    vi.mocked(ensureKnowledgeTree)
+      .mockReturnValueOnce(olderLoad.promise)
+      .mockReturnValueOnce(newerLoad.promise)
+    vi.mocked(getKnowledgeNodeMessages).mockImplementation(nodeId => {
+      if (nodeId === 'node_root') return olderMessages.promise
+      return newerMessages.promise
+    })
+
+    const store = useKnowledgeTreeStore()
+    const olderPromise = store.loadByPlan(42)
+    const newerPromise = store.loadByPlan(43)
+
+    olderLoad.resolve({ data: { tree, nodes } })
+    await Promise.resolve()
+    newerLoad.resolve({ data: { tree: newerTree, nodes: newerNodes } })
+    await Promise.resolve()
+    newerMessages.resolve({ data: [newerMessage] })
+    await newerPromise
+    olderMessages.resolve({ data: [olderMessage] })
+    await olderPromise
+
+    expect(store.tree?.id).toBe('tree_2')
+    expect(store.nodes).toEqual(newerNodes)
+    expect(store.currentNodeId).toBe('node_new')
+    expect(store.messagesByNode).toEqual({ node_new: [newerMessage] })
+    expect(store.loading).toBe(false)
+  })
+
+  it('clears previous plan state while a new plan is loading and when it fails', async () => {
+    const store = useKnowledgeTreeStore()
+    await store.loadByPlan(42)
+    store.streamingNodeId = 'node_root'
+    store.streamingText = 'partial'
+
+    const pendingLoad = deferred<{ data: { tree: KnowledgeTree, nodes: KnowledgeNode[] } }>()
+    vi.mocked(ensureKnowledgeTree).mockReturnValueOnce(pendingLoad.promise)
+    const loadPromise = store.loadByPlan(43)
+
+    expect(store.tree).toBeNull()
+    expect(store.nodes).toEqual([])
+    expect(store.currentNodeId).toBeNull()
+    expect(store.messagesByNode).toEqual({})
+    expect(store.streamingNodeId).toBeNull()
+    expect(store.streamingText).toBe('')
+
+    pendingLoad.reject(new Error('plan failed'))
+    await loadPromise
+
+    expect(store.error).toBe('plan failed')
+    expect(store.tree).toBeNull()
+    expect(store.nodes).toEqual([])
+    expect(store.currentNodeId).toBeNull()
+    expect(store.messagesByNode).toEqual({})
+    expect(store.loading).toBe(false)
+  })
+
   it('toggles collapsed state locally and persists it', async () => {
     const store = useKnowledgeTreeStore()
     await store.loadByPlan(42)
@@ -132,10 +223,12 @@ describe('useKnowledgeTreeStore', () => {
 
     handlers?.onChunk?.('partial')
     expect(store.streamingText).toBe('partial')
+    expect(store.streamingNodeId).toBe('node_root')
 
     handlers?.onDone?.()
     expect(store.activeSource).toBeNull()
     expect(store.loading).toBe(false)
+    expect(store.streamingNodeId).toBeNull()
   })
 
   it('starts a message stream with the originally selected node when ticket issuance is pending', async () => {
@@ -234,6 +327,7 @@ describe('useKnowledgeTreeStore', () => {
     handlers[0].onDone?.()
 
     expect(store.streamingText).toBe('new')
+    expect(store.streamingNodeId).toBe('node_root')
     expect(store.messagesByNode.node_root).toEqual(messages)
     expect(store.nodes.some(node => node.id === 'node_stale')).toBe(false)
     expect(store.activeSource).toBe(source2)
@@ -274,6 +368,7 @@ describe('useKnowledgeTreeStore', () => {
     expect(store.activeSource).toBeNull()
     expect(store.loading).toBe(false)
     expect(store.streamingText).toBe('')
+    expect(store.streamingNodeId).toBeNull()
     expect(store.messagesByNode.node_root).toEqual(messages)
     expect(store.nodes.some(node => node.id === 'node_late')).toBe(false)
   })
@@ -282,8 +377,9 @@ describe('useKnowledgeTreeStore', () => {
     const store = useKnowledgeTreeStore()
     await store.loadByPlan(42)
 
-    await store.selectNode('missing_node')
+    const selected = await store.selectNode('missing_node')
 
+    expect(selected).toBe(false)
     expect(store.currentNodeId).toBe('node_root')
     expect(getKnowledgeNodeMessages).not.toHaveBeenCalledWith('missing_node')
   })
@@ -293,10 +389,50 @@ describe('useKnowledgeTreeStore', () => {
     await store.loadByPlan(42)
     vi.mocked(getKnowledgeNodeMessages).mockRejectedValueOnce(new Error('load failed'))
 
-    await store.selectNode('node_child')
+    const selected = await store.selectNode('node_child')
 
+    expect(selected).toBe(false)
     expect(store.currentNodeId).toBe('node_root')
     expect(store.error).toBe('load failed')
+  })
+
+  it('ignores stale selection failure after a newer selection succeeds', async () => {
+    const siblingNode: KnowledgeNode = {
+      id: 'node_sibling',
+      treeId: 'tree_1',
+      parentId: 'node_root',
+      title: 'Sibling',
+      collapsed: false,
+    }
+    const staleSelection = deferred<{ data: TreeMessage[] }>()
+    const newerSelection = deferred<{ data: TreeMessage[] }>()
+    const siblingMessage: TreeMessage = {
+      id: 4,
+      treeId: 'tree_1',
+      nodeId: 'node_sibling',
+      role: 'assistant',
+      content: 'sibling',
+    }
+    vi.mocked(getKnowledgeNodeMessages).mockImplementation(nodeId => {
+      if (nodeId === 'node_child') return staleSelection.promise
+      if (nodeId === 'node_sibling') return newerSelection.promise
+      return Promise.resolve({ data: messages })
+    })
+    vi.mocked(ensureKnowledgeTree).mockResolvedValueOnce({ data: { tree, nodes: [...nodes, siblingNode] } })
+
+    const store = useKnowledgeTreeStore()
+    await store.loadByPlan(42)
+
+    const stalePromise = store.selectNode('node_child')
+    const newerPromise = store.selectNode('node_sibling')
+    newerSelection.resolve({ data: [siblingMessage] })
+    await newerPromise
+    staleSelection.reject(new Error('stale failed'))
+    await stalePromise
+
+    expect(store.currentNodeId).toBe('node_sibling')
+    expect(store.messagesByNode.node_sibling).toEqual([siblingMessage])
+    expect(store.error).toBe('')
   })
 
   it('falls back to the first loaded node when tree current node is absent', async () => {
@@ -357,5 +493,6 @@ describe('useKnowledgeTreeStore', () => {
     expect(source.close).toHaveBeenCalled()
     expect(store.activeSource).toBeNull()
     expect(store.loading).toBe(false)
+    expect(store.streamingNodeId).toBeNull()
   })
 })
