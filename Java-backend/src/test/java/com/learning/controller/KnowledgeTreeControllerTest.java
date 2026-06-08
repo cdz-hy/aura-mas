@@ -92,4 +92,11 @@ class KnowledgeTreeControllerTest {
         verify(service).addMessageInternal("node_a", "USER", "解释一下", List.of(), List.of());
         verify(service).toMessageResponse(message);
     }
+
+    @Test
+    void internalVerifyNodeDelegatesOwnershipGuard() {
+        controller.verifyNodeInternal("tree_a", "node_a", 7L);
+
+        verify(service).assertNodeBelongsToUserAndTree("tree_a", "node_a", 7L);
+    }
 }

@@ -185,6 +185,33 @@ class JavaBackendClient:
         """获取学习计划"""
         return self._request("GET", f"/api/plan/internal/{plan_id}")
 
+    # ==================== 知识树 ====================
+
+    def get_or_create_tree(self, plan_id: int, user_id: int) -> dict:
+        return self._request("POST", f"/api/knowledge-tree/internal/plan/{plan_id}", params={"userId": user_id})
+
+    def get_tree_by_plan(self, plan_id: int, user_id: int) -> dict:
+        return self._request("GET", f"/api/knowledge-tree/internal/plan/{plan_id}", params={"userId": user_id})
+
+    def create_tree_node(self, payload: dict) -> dict:
+        return self._request("POST", "/api/knowledge-tree/internal/nodes", json=payload)
+
+    def update_tree_node(self, node_id: str, payload: dict) -> dict:
+        return self._request("PATCH", f"/api/knowledge-tree/internal/nodes/{node_id}", json=payload)
+
+    def verify_tree_node_access(self, tree_id: str, node_id: str, user_id: int) -> dict:
+        return self._request(
+            "GET",
+            f"/api/knowledge-tree/internal/trees/{tree_id}/nodes/{node_id}/verify",
+            params={"userId": user_id},
+        )
+
+    def add_tree_message(self, node_id: str, payload: dict) -> dict:
+        return self._request("POST", f"/api/knowledge-tree/internal/nodes/{node_id}/messages", json=payload)
+
+    def get_tree_messages(self, node_id: str) -> list:
+        return self._request("GET", f"/api/knowledge-tree/internal/nodes/{node_id}/messages")
+
     def update_plan_status(self, plan_id: int, status: int):
         """更新计划状态"""
         self._request("PUT", f"/api/plan/{plan_id}/status", params={"status": status})

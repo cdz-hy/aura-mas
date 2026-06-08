@@ -95,6 +95,26 @@ class KnowledgeTreeServiceTest {
     }
 
     @Test
+    void assertNodeBelongsToUserAndTreeRejectsWrongOwnerOrTree() {
+        KnowledgeNode node = new KnowledgeNode();
+        node.setId("node_a");
+        node.setTreeId("tree_a");
+        when(nodeMapper.selectById("node_a")).thenReturn(node);
+
+        KnowledgeTree tree = new KnowledgeTree();
+        tree.setId("tree_a");
+        tree.setUserId(7L);
+        when(treeMapper.selectById("tree_a")).thenReturn(tree);
+
+        service.assertNodeBelongsToUserAndTree("tree_a", "node_a", 7L);
+
+        assertThrows(BusinessException.class,
+                () -> service.assertNodeBelongsToUserAndTree("tree_a", "node_a", 8L));
+        assertThrows(BusinessException.class,
+                () -> service.assertNodeBelongsToUserAndTree("tree_b", "node_a", 7L));
+    }
+
+    @Test
     void createNodeInternalRejectsParentFromDifferentTree() {
         KnowledgeNode parent = new KnowledgeNode();
         parent.setId("parent_a");

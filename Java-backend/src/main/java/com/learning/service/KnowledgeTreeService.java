@@ -233,6 +233,13 @@ public class KnowledgeTreeService {
                 .collect(Collectors.toList());
     }
 
+    public void assertNodeBelongsToUserAndTree(String treeId, String nodeId, Long userId) {
+        KnowledgeNode node = requireOwnedNode(nodeId, userId);
+        if (!Objects.equals(node.getTreeId(), treeId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND);
+        }
+    }
+
     public KnowledgeTreeDtos.MessageResponse toMessageResponse(TreeMessage message) {
         KnowledgeTreeDtos.MessageResponse response = new KnowledgeTreeDtos.MessageResponse();
         response.setId(message.getId());

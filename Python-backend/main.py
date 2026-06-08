@@ -9,6 +9,7 @@ from app.api.v1.endpoints import upload, query
 from app.api.v1.endpoints import profile_builder, plan_generator, resource_chat
 from app.api.v1.endpoints import kb
 from app.api.v1.endpoints import flashcard
+from app.api.v1.endpoints import knowledge_tree
 from app.core.config import settings
 from app.core.reload import get_reload_dirs
 from app.services.mq_consumer import mq_consumer
@@ -83,6 +84,7 @@ app.include_router(query.router, prefix="/api/v1/query", tags=["检索对话"])
 app.include_router(profile_builder.router, prefix="/api/ai/profile", tags=["画像构建"])
 app.include_router(plan_generator.router, prefix="/api/ai/plan", tags=["计划生成"])
 app.include_router(resource_chat.router, prefix="/api/ai", tags=["资源对话"])
+app.include_router(knowledge_tree.router, prefix="/api/ai", tags=["知识树 AI"])
 
 # 路由注册 - 知识库管理接口
 app.include_router(kb.router, prefix="/api/v1/kb", tags=["知识库管理"])

@@ -89,6 +89,15 @@ public class KnowledgeTreeController {
         return Result.success(treeService.updateNodeInternal(nodeId, request));
     }
 
+    @Operation(summary = "内部接口：校验节点归属")
+    @GetMapping("/internal/trees/{treeId}/nodes/{nodeId}/verify")
+    public Result<Boolean> verifyNodeInternal(@PathVariable String treeId,
+                                              @PathVariable String nodeId,
+                                              @RequestParam Long userId) {
+        treeService.assertNodeBelongsToUserAndTree(treeId, nodeId, userId);
+        return Result.success(true);
+    }
+
     @Operation(summary = "内部接口：添加节点消息")
     @PostMapping("/internal/nodes/{nodeId}/messages")
     public Result<KnowledgeTreeDtos.MessageResponse> addMessageInternal(
