@@ -16,6 +16,13 @@ describe('animationHtml utilities', () => {
     expect(wrapped).not.toContain('allow-same-origin')
     expect(wrapped).not.toContain('contentDocument')
     expect(wrapped).toContain('legacy-control-bar')
+    expect(wrapped).toContain('Content-Security-Policy')
+    expect(wrapped).toContain('default-src')
+    expect(wrapped).toContain("script-src")
+    expect(wrapped).toContain("unsafe-inline")
+    expect(wrapped).toContain("fonts.googleapis.com")
+    expect(wrapped).toContain("fonts.gstatic.com")
+    expect(wrapped).toContain("cdnjs.cloudflare.com")
   })
 
   it('validates bridge message source and shape', () => {

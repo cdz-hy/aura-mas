@@ -1,0 +1,69 @@
+server:
+  port: 8080
+
+spring:
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  datasource:
+    url: jdbc:mysql://localhost:3306/learning_system?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: root
+    password: ${DB_PASSWORD:changeme}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+      data-locations: classpath:data.sql
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: non_null
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 100MB
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: isDeleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+jwt:
+  secret: ${JWT_SECRET:change-this-jwt-secret}
+  expiration: 86400000
+  ticket-expiration: 300000
+
+internal:
+  secret: ${INTERNAL_SECRET:change-this-internal-secret}
+
+file:
+  upload-dir: ${FILE_UPLOAD_DIR:./uploads}
+
+minio:
+  endpoint: http://localhost:9000
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  bucket-name: learning-resources
+
+qiniu:
+  access-key: ${QINIU_ACCESS_KEY:your-qiniu-access-key}
+  secret-key: ${QINIU_SECRET_KEY:your-qiniu-secret-key}
+  bucket-name: ${QINIU_BUCKET_NAME:your-bucket-name}
+  domain: ${QINIU_DOMAIN:http://your-qiniu-domain}
+
+logging:
+  level:
+    com.learning: debug

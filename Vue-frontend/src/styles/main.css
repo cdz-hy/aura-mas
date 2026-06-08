@@ -1,0 +1,106 @@
+@import './variables.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-navy-600 text-white px-5 py-2.5 rounded-lg font-medium transition-all duration-200
+           hover:bg-navy-700 hover:shadow-paper-hover active:scale-[0.98]
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-none;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-navy-700 px-5 py-2.5 rounded-lg font-medium border border-navy-200
+           transition-all duration-200 hover:bg-navy-50 hover:border-navy-300 hover:shadow-paper
+           active:scale-[0.98];
+  }
+
+  .btn-ghost {
+    @apply text-navy-600 px-4 py-2 rounded-lg font-medium transition-all duration-200
+           hover:bg-navy-50 active:scale-[0.98];
+  }
+
+  .btn-danger {
+    @apply bg-red-500 text-white px-5 py-2.5 rounded-lg font-medium transition-all duration-200
+           hover:bg-red-600 active:scale-[0.98];
+  }
+
+  .btn-accent {
+    @apply bg-gradient-to-r from-accent to-accent-light text-white px-5 py-2.5 rounded-lg
+           font-medium transition-all duration-200 hover:shadow-glow active:scale-[0.98];
+  }
+
+  .card {
+    @apply bg-white rounded-xl border border-navy-100/50 shadow-paper transition-all duration-300;
+  }
+
+  .card-hover {
+    @apply card hover:shadow-paper-hover hover:-translate-y-0.5;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 bg-white border border-navy-200 rounded-lg text-navy-900
+           placeholder:text-navy-300 transition-all duration-200
+           focus:outline-none focus:border-navy-400 focus:ring-2 focus:ring-navy-100;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-doc {
+    @apply badge bg-blue-50 text-blue-700 border border-blue-200;
+  }
+
+  .badge-quiz {
+    @apply badge bg-amber-50 text-amber-700 border border-amber-200;
+  }
+
+  .badge-code {
+    @apply badge bg-emerald-50 text-emerald-700 border border-emerald-200;
+  }
+
+  .badge-mindmap {
+    @apply badge bg-purple-50 text-purple-700 border border-purple-200;
+  }
+
+  .badge-reading {
+    @apply badge bg-rose-50 text-rose-700 border border-rose-200;
+  }
+
+  .sidebar-link {
+    @apply flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium
+           text-navy-500 transition-all duration-200 hover:bg-navy-50 hover:text-navy-700;
+  }
+
+  .sidebar-link-active {
+    @apply sidebar-link bg-navy-100/70 text-navy-800 shadow-sm;
+  }
+
+  .section-title {
+    @apply font-display text-2xl font-bold text-navy-800 tracking-tight;
+  }
+
+  .stat-card {
+    @apply card p-5 flex flex-col gap-1;
+  }
+
+  .stat-value {
+    @apply text-3xl font-display font-bold text-navy-800;
+  }
+
+  .stat-label {
+    @apply text-sm text-navy-400 font-medium;
+  }
+}

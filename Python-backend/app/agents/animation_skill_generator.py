@@ -376,6 +376,23 @@ def _validate_animation_html_contract(html_content: str) -> Tuple[bool, str]:
     return True, ""
 
 
+GSAP_HALLUCINATION_PATTERNS = [
+    (r'\btl\.labels\s*\(', "tl.labels is a property (object), not a function — use Object.keys(tl.labels) or tl.labels['name']"),
+    (r'\.labels\s*\(\s*\)', ".labels() is invalid — labels is a property, not a method"),
+    (r'\bgsap\.timeline\s*\.\s*to\b', "gsap.timeline.to is invalid — create instance first: const tl = gsap.timeline(); tl.to(...)"),
+    (r'\bgsap\.set\s*\(\s*["\']\.beat["\'].*autoAlpha\s*:\s*0', "gsap.set('.beat', {autoAlpha:0}) hides all beats permanently if timeline fails — use CSS visibility instead"),
+    (r'\bon(?:click|mouseover|mouseout|mousedown|mouseup|touchstart|touchend)\s*=\s*["\']', "Inline event handlers (onclick=...) execute in global scope and cannot access functions inside IIFE/module closures — use addEventListener instead"),
+]
+
+
+def _validate_gsap_api_usage(html_content: str) -> Tuple[bool, str]:
+    """Catch common LLM hallucinations about GSAP API."""
+    for pattern, message in GSAP_HALLUCINATION_PATTERNS:
+        if re.search(pattern, html_content):
+            return False, message
+    return True, ""
+
+
 def _build_fallback_html(title: str, description: str, source_content: str) -> str:
     """LLM 失败时的最小降级 HTML
 
@@ -672,7 +689,12 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
     if not source_resource_content:
         module_description = modules[0].get("description", "") if modules else ""
         source_resource_content = f"{source_title}\n\n{module_description}".strip()
-        logger.warning("  [动画生成] 源资源正文为空，使用标题/描述作为最小上下文")
+        logger.warning(
+            "  [动画生成] 源资源正文为空，使用标题/描述作为最小上下文 | "
+            "plan_id=%s session_id=%s title=%s 内容长度=%d",
+            state.get("plan_id"), state.get("session_id"),
+            source_title, len(source_resource_content),
+        )
     logger.info(f"  源资源内容长度: {len(source_resource_content)} 字符")
 
     # ── 阶段 1：加载动画技能包 ──
@@ -799,15 +821,22 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
 
             logger.info(f"  [动画生成] 成功提取 HTML，长度: {len(html_output)} 字符")
 
-            # ── HTML 验证（JS 语法 + 动画结构契约） ──
+            # ── HTML 验证（JS 语法 + GSAP API 正确性 + 动画结构契约） ──
             is_valid, validation_error = _validate_js_syntax(html_output)
             if is_valid:
-                contract_valid, contract_error = _validate_animation_html_contract(html_output)
-                if contract_valid:
-                    logger.info("  [动画生成] JS 语法验证与结构验证通过 ✓")
-                    break
-                validation_error = contract_error
-                logger.warning(f"  [动画生成] HTML 结构验证失败: {contract_error}")
+                gsap_valid, gsap_error = _validate_gsap_api_usage(html_output)
+                if not gsap_valid:
+                    validation_error = gsap_error
+                    logger.warning(f"  [动画生成] GSAP API 幻觉检测: {gsap_error}")
+                else:
+                    contract_valid, contract_error = _validate_animation_html_contract(html_output)
+                    if contract_valid:
+                        logger.info("  [动画生成] JS 语法 + GSAP API + 结构契约验证通过 ✓")
+                        break
+                    validation_error = contract_error
+                    logger.warning(f"  [动画生成] HTML 结构验证失败: {contract_error}")
+            else:
+                logger.warning(f"  [动画生成] JS 语法验证失败: {validation_error}")
 
             # HTML 验证失败 → 判断是否可重试
             logger.warning(f"  [动画生成] HTML 验证失败: {validation_error[:200]}")
@@ -829,6 +858,9 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
                         f"2. 使用 <script src=\"...gsap...js\"></script> 引入 GSAP\n"
                         f"3. 检查所有 JavaScript 括号、花括号、方括号是否配对\n"
                         f"4. 确保 gsap.to() / gsap.from() 的 target 选择器在 HTML 中有对应元素\n"
+                        f"5. tl.labels 是属性（对象），不是函数，不要写 tl.labels()\n"
+                        f"6. gsap.timeline() 没有 .add(labelName) 签名，用 tl.addLabel(name, position)\n"
+                        f"7. gsap.effects 需要先注册才能用，不要调用未注册的 effect\n"
                     ),
                 })
                 continue

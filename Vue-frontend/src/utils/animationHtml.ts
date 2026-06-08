@@ -45,17 +45,41 @@ function buildLegacyBridgeScript() {
 
   function replayAnimations() {
     const active = document.querySelector(".beat.active") || document.body;
+    // Web Animations API (CSS animations / @keyframes)
     active?.getAnimations({ subtree: true }).forEach(animation => {
       animation.cancel();
       animation.play();
     });
+    // GSAP: kill running tweens on all beats, then re-animate the active one
+    if (typeof gsap !== "undefined") {
+      try {
+        gsap.killTweensOf(active?.querySelectorAll("*"));
+        const children = active?.querySelectorAll("[class]");
+        if (children && children.length) {
+          gsap.fromTo(
+            [...children],
+            { opacity: 0, y: 30 },
+            { opacity: 1, y: 0, duration: 0.6, stagger: 0.08, ease: "power2.out", overwrite: true }
+          );
+        }
+      } catch(e) {}
+    }
   }
 
   function showBeat(nextIndex) {
     const state = activeIndex();
     if (!state.beats.length) return false;
     const normalized = ((nextIndex % state.beats.length) + state.beats.length) % state.beats.length;
-    state.beats.forEach((beat, index) => beat.classList.toggle("active", index === normalized));
+    state.beats.forEach((beat, index) => {
+      const isActive = index === normalized;
+      beat.classList.toggle("active", isActive);
+      if (isActive) {
+        // 强制可见，覆盖 LLM 代码可能遗留的 GSAP autoAlpha:0 等内联样式
+        beat.style.opacity = '1';
+        beat.style.visibility = 'visible';
+        beat.style.removeProperty('display');
+      }
+    });
     postProgress();
     requestAnimationFrame(replayAnimations);
     return true;
@@ -153,7 +177,22 @@ export function normalizeAnimationHtml(raw: string) {
   if (!raw) return ''
   const html = String(raw)
 
-  const payload = escapeJsonForHtml(html)
+  const cspMeta = '<meta http-equiv="Content-Security-Policy" content="' +
+    "default-src 'none'; " +
+    "script-src 'unsafe-inline' https://cdnjs.cloudflare.com/ajax/libs/gsap/ https://cdn.jsdelivr.net/npm/gsap@ https://unpkg.com/gsap@; " +
+    "style-src 'unsafe-inline' https://fonts.googleapis.com; " +
+    "img-src data: https:; " +
+    "font-src 'self' data: https://fonts.gstatic.com; " +
+    "connect-src 'none'; " +
+    "frame-src 'none'" +
+    '">'
+
+  // 在 LLM HTML 中注入 CSP，限制外部资源加载
+  const cspInjected = /<head[^>]*>/i.test(html)
+    ? html.replace(/<head[^>]*>/i, match => match + cspMeta)
+    : cspMeta + html
+
+  const payload = escapeJsonForHtml(cspInjected)
   const closeScript = '<' + '/script>'
   const legacyBridge = buildLegacyBridgeScript()
   return `<!doctype html>

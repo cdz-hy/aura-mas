@@ -1,0 +1,40 @@
+# ==================== IDE ====================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ==================== OS ====================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==================== Claude ====================
+.claude/
+CLAUDE.md
+CONTEXT.md
+
+# ==================== Logs ====================
+*.log
+logs/
+
+# ==================== Secrets ====================
+.env
+.env.local
+.env.*.local
+
+# ==================== WorkBuddy ====================
+.workbuddy/
+
+# ==================== Debug ====================
+.chrome-devtools-profile/
+nul
+animation_ratio_after_fix.png
+animation_ratio_current.png
+llm-animation.html
+
+# ==================== Docs ====================
+docs/
+docs/superpowers/
+Python-backend/tests/
