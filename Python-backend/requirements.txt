@@ -15,3 +15,4 @@ langgraph
 langchain-core
 aio-pika
 tavily-python
+playwright

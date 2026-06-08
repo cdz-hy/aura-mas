@@ -69,20 +69,64 @@ class BailianEmbeddingService:
         else:
             raise Exception(f"Embedding API 调用失败 ({resp.status_code}): {resp.text}")
 
-from fastembed import SparseTextEmbedding
+import logging
+
+logger = logging.getLogger("services.embedding")
+
+# fastembed 延迟导入，避免 HuggingFace 下载在模块 import 阶段卡死 FastAPI 启动
+SparseTextEmbedding = None  # type: ignore
+
+
+def _get_sparse_embedding_model():
+    """懒加载 BM25 稀疏向量模型，失败时返回 None 并降级"""
+    global SparseTextEmbedding
+    if SparseTextEmbedding is not None:
+        return SparseTextEmbedding
+
+    try:
+        from fastembed import SparseTextEmbedding as _SparseTextEmbedding
+        SparseTextEmbedding = _SparseTextEmbedding
+        return SparseTextEmbedding
+    except Exception as e:
+        logger.error(f"fastembed 模型加载失败 (非致命): {e}")
+        return None
+
 
 class SparseEmbeddingService:
     def __init__(self):
-        # 使用 Qdrant 提供的 BM25 预训练模型
-        # fastembed 会自动使用 FASTEMBED_CACHE_PATH 环境变量指定的缓存目录
-        self.model = SparseTextEmbedding(model_name="Qdrant/bm25")
+        # 模型延迟到首次调用时加载，不在 import 阶段触发 HuggingFace 下载
+        self._model = None
+        self._model_load_failed = False
+
+    @property
+    def model(self):
+        if self._model is not None:
+            return self._model
+        if self._model_load_failed:
+            return None
+
+        _SparseTextEmbedding = _get_sparse_embedding_model()
+        if _SparseTextEmbedding is None:
+            self._model_load_failed = True
+            return None
+
+        try:
+            self._model = _SparseTextEmbedding(model_name="Qdrant/bm25")
+            logger.info("BM25 稀疏向量模型已加载")
+            return self._model
+        except Exception as e:
+            self._model_load_failed = True
+            logger.error(f"BM25 模型初始化失败 (非致命，将降级为仅稠密检索): {e}")
+            return None
 
     def embed_text(self, text: str) -> Dict[str, Any]:
-        """生成文本的稀疏向量 (BM25)"""
-        # fastembed 返回的是生成器，取第一个结果
-        embeddings = list(self.model.embed([text]))
+        """生成文本的稀疏向量 (BM25)，加载失败时返回空向量"""
+        m = self.model
+        if m is None:
+            logger.warning("BM25 模型不可用，返回空稀疏向量")
+            return {"indices": [], "values": []}
+        embeddings = list(m.embed([text]))
         embedding = embeddings[0]
-        # 转换为 Qdrant 要求的字典格式
         return {
             "indices": embedding.indices.tolist(),
             "values": embedding.values.tolist()

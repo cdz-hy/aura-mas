@@ -853,6 +853,7 @@ async def generate_single_resource(
             current_resource,
             fallback_title=title,
             fallback_description=description,
+            plan_id=plan_id_int,
         )
         logger.info(f"[资源生成] 当前资源 moduleOrder={current_module_order}, 内容长度={len(source_resource_content)}")
     except Exception as e:
@@ -1582,13 +1583,19 @@ def _extract_source_resource_context(
     resource: dict,
     fallback_title: str = "",
     fallback_description: str = "",
+    plan_id: int = 0,
 ) -> tuple[int, str]:
-    """提取补充资源生成所需的源资源内容，确保动画至少能用标题/描述生成。"""
+    """提取补充资源生成所需的源资源内容。
+
+    优先级：当前资源正文 → 同模块兄弟资源正文 → 标题+描述兜底。
+    """
     current_module_order = 0
     source_resource_content = ""
+    current_resource_id = 0
 
     if isinstance(resource, dict):
         current_module_order = resource.get("moduleOrder", 0) or 0
+        current_resource_id = resource.get("id", 0) or 0
         md = resource.get("moduleData")
         if isinstance(md, str):
             try:
@@ -1599,19 +1606,64 @@ def _extract_source_resource_context(
             source_resource_content = (
                 md.get("content")
                 or md.get("html")
-                or "\n\n".join(
-                    part for part in [
-                        md.get("module_title") or md.get("title") or fallback_title,
-                        md.get("module_description") or md.get("description") or fallback_description,
-                    ]
-                    if part
-                )
             )
 
+    # 正文为空时，尝试从同模块兄弟资源获取正文
+    if not source_resource_content and plan_id and current_module_order:
+        try:
+            siblings = java_client.get_resources_by_module(plan_id, current_module_order)
+            preferred_types = ("text", "document", "reading", "summary", "code")
+            for preferred in preferred_types:
+                for sibling in (siblings or []):
+                    if sibling.get("id") == current_resource_id:
+                        continue
+                    if sibling.get("status") != 2 or sibling.get("moduleType") != preferred:
+                        continue
+                    smd = sibling.get("moduleData")
+                    if isinstance(smd, str):
+                        try:
+                            smd = json.loads(smd)
+                        except Exception:
+                            smd = {}
+                    if isinstance(smd, dict):
+                        content = smd.get("content") or smd.get("summary") or ""
+                        if content:
+                            source_resource_content = content
+                            logger.info(
+                                "[资源生成] 动画源内容来自同模块 %s 资源: id=%s, 长度=%d",
+                                preferred, sibling.get("id"), len(content),
+                            )
+                            break
+                if source_resource_content:
+                    break
+        except Exception as e:
+            logger.warning("[资源生成] 查找同模块兄弟资源失败: %s", e)
+
+    # 最终兜底：标题+描述
     if not source_resource_content:
-        source_resource_content = "\n\n".join(
-            part for part in [fallback_title, fallback_description] if part
-        )
+        md = resource.get("moduleData") if isinstance(resource, dict) else {}
+        if isinstance(md, str):
+            try:
+                md = json.loads(md)
+            except Exception:
+                md = {}
+        if isinstance(md, dict):
+            source_resource_content = "\n\n".join(
+                part for part in [
+                    md.get("module_title") or md.get("title") or fallback_title,
+                    md.get("module_description") or md.get("description") or fallback_description,
+                ]
+                if part
+            )
+        if not source_resource_content:
+            source_resource_content = "\n\n".join(
+                part for part in [fallback_title, fallback_description] if part
+            )
+        if source_resource_content:
+            logger.warning(
+                "[资源生成] 未找到正文资源，使用标题/描述兜底 (plan=%s, module=%s, 长度=%d)",
+                plan_id, current_module_order, len(source_resource_content),
+            )
 
     return current_module_order, source_resource_content
 
@@ -1922,18 +1974,15 @@ def _async_profile_maintenance_sync(
         logger.error(f"[画像维护] 更新失败: {str(e)}", exc_info=True)
 
 
-VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap"}
+VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap", "animation"}
 
 
-def _normalize_module_type(module_type: str) -> str:
+def _normalize_module_type(module_type) -> str:
     """将 LLM 输出的 module_type 归一化为前端支持的类型"""
-    if not module_type:
+    if not isinstance(module_type, str) or not module_type:
         return "text"
     mt = module_type.strip().lower()
-    if mt in VALID_MODULE_TYPES:
-        return mt
-    # document/mixed/其他未知类型 -> text
-    return "text"
+    return mt if mt in VALID_MODULE_TYPES else "text"
 
 
 def _soft_delete_breakdown_dialogue(user_id: int, session_id: str, plan_id: int):
@@ -2076,19 +2125,19 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
     try:
         if not module_list:
             return []
-        
+
         # 确保模块列表按 module_order 排序
         sorted_modules = sorted(module_list, key=lambda x: x.get("module_order", 0))
-        
+
         # 查询当前计划已有的最大 moduleOrder，避免编号重复
         existing = java_client.get_plan_resources(plan_id)
         max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
-        
+
         resources = []
         for mod in sorted_modules:
-            # 使用模块自身的 module_order，而不是 enumerate 的索引
             module_order_in_list = mod.get("module_order", 0)
-            
+            module_type = _normalize_module_type(mod.get("module_type", "text"))
+
             module_data = {
                 "title": mod.get("title", f"模块 {module_order_in_list}"),
                 "content": mod.get("content", ""),
@@ -2098,7 +2147,6 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
                 "estimated_hours": mod.get("estimated_hours", 2),
                 "references": mod.get("references", []),
             }
-            # 传递图片数据
             images = mod.get("images", [])
             if images:
                 module_data["images"] = images
@@ -2106,11 +2154,11 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
                 "planId": plan_id,
                 "moduleType": module_type,
                 "moduleData": json.dumps(module_data, ensure_ascii=False),
-                "moduleOrder": max_order + module_order_in_list,  # 使用模块自身的顺序
+                "moduleOrder": max_order + module_order_in_list,
                 "status": 2,
                 "generatedByAgent": "content_orchestrator",
             })
-        
+
         if resources:
             result = java_client.create_resources_bulk(resources)
             resource_ids = [r.get("id") for r in (result or []) if r.get("id")]
