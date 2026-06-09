@@ -114,7 +114,11 @@ const permissionStore = usePermissionStore()
 const roleLabel = computed(() => authStore.user?.role === 'admin' ? '管理员' : '学生')
 
 function isActive(path: string) {
-  if (path === '/knowledge-tree') return route.name === 'PlanKnowledgeTree' || route.path === path
+  if (path === '/knowledge-tree') {
+    return route.name === 'PlanKnowledgeTree'
+      || route.path === path
+      || (route.name === 'PlanDetail' && route.query.view === 'tree')
+  }
   return route.path === path
 }
 

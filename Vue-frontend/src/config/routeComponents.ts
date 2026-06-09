@@ -52,8 +52,11 @@ function buildImplicitRoutes(menuCodes: Set<string>): RouteRecordRaw[] {
     routes.push({
       path: 'plan/:planId/tree',
       name: 'PlanKnowledgeTree',
-      component: componentMap['knowledge-tree'],
-      props: true,
+      redirect: to => ({
+        name: 'PlanDetail',
+        params: { id: to.params.planId },
+        query: { ...to.query, view: 'tree' },
+      }),
       meta: { fullWidth: true },
     })
   }

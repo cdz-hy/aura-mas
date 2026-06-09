@@ -1,7 +1,7 @@
 <template>
   <div
     ref="viewportRef"
-    class="relative h-full w-full overflow-hidden rounded-lg border border-navy-100 bg-white"
+    class="tree-canvas relative h-full w-full overflow-hidden rounded-lg border border-navy-100 bg-white"
     @wheel.prevent="onWheel"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
@@ -9,7 +9,7 @@
     @pointercancel="endPan"
     @pointerleave="endPan"
   >
-    <div class="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-lg border border-navy-100 bg-white/90 px-2 py-1 shadow-paper">
+    <div class="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-navy-100 bg-white/90 px-2 py-1 shadow-paper backdrop-blur">
       <button class="toolbar-button" title="缩小" @click="adjustZoom(-0.1)">
         <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14" /></svg>
       </button>
@@ -37,7 +37,7 @@
           :key="`${edge.fromNodeId}-${edge.toNodeId}`"
           :d="edge.d"
           fill="none"
-          :stroke="edge.kind === 'main' ? '#334155' : '#94a3b8'"
+          :stroke="edge.kind === 'main' ? '#4164b2' : '#9aa9bd'"
           :stroke-width="edge.kind === 'main' ? 2 : 1.5"
           stroke-linecap="round"
         />
@@ -53,8 +53,7 @@
         :has-children="childrenByParent.has(item.node.id)"
         @select="$emit('select', $event)"
         @toggle-collapse="$emit('toggle-collapse', $event)"
-        @subdivide="$emit('subdivide', $event)"
-        @first-principles="$emit('first-principles', $event)"
+        @open-subdivide="$emit('open-subdivide', $event)"
       />
     </div>
   </div>
@@ -67,7 +66,7 @@ import { buildTreeLayout, type TreeLayoutItem } from './useTreeLayout'
 import type { KnowledgeNode } from '@/types/knowledgeTree'
 
 const NODE_WIDTH = 236
-const NODE_HEIGHT = 188
+const NODE_HEIGHT = 172
 const MIN_ZOOM = 0.35
 const MAX_ZOOM = 1.6
 
@@ -83,8 +82,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [nodeId: string]
   'toggle-collapse': [nodeId: string]
-  subdivide: [nodeId: string]
-  'first-principles': [nodeId: string]
+  'open-subdivide': [nodeId: string]
   'update:panX': [value: number]
   'update:panY': [value: number]
   'update:zoom': [value: number]
@@ -234,6 +232,13 @@ function clampZoom(value: number) {
 </script>
 
 <style scoped>
+.tree-canvas {
+  background-image:
+    linear-gradient(rgba(26, 40, 71, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(26, 40, 71, 0.045) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
 .toolbar-button {
   display: inline-flex;
   align-items: center;

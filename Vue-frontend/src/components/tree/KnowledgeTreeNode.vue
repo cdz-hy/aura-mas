@@ -52,25 +52,16 @@
       </div>
     </div>
 
-    <div class="mt-3 grid grid-cols-2 gap-2">
-      <button class="node-action" title="解释当前节点" @click.stop="emit('select', node.id)">
-        <svg class="h-3.5 w-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
-        </svg>
-        <span class="truncate">解释</span>
-      </button>
-      <button class="node-action" title="按学习顺序拆分" @click.stop="emit('subdivide', node.id)">
-        <svg class="h-3.5 w-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M8 6h13" /><path d="M8 12h13" /><path d="M8 18h13" /><path d="M3 6h.01" /><path d="M3 12h.01" /><path d="M3 18h.01" />
-        </svg>
-        <span class="truncate">拆分</span>
-      </button>
-    </div>
-    <button class="node-action mt-2 w-full" title="第一性原理分析" @click.stop="emit('first-principles', node.id)">
+    <button class="node-action mt-3 w-full" title="拆分当前节点" @click.stop="emit('open-subdivide', node.id)">
       <svg class="h-3.5 w-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="3" /><path d="M12 2v4" /><path d="M12 18v4" /><path d="m4.93 4.93 2.83 2.83" /><path d="m16.24 16.24 2.83 2.83" /><path d="M2 12h4" /><path d="M18 12h4" /><path d="m4.93 19.07 2.83-2.83" /><path d="m16.24 7.76 2.83-2.83" />
+        <path d="M8 6h13" />
+        <path d="M8 12h13" />
+        <path d="M8 18h13" />
+        <path d="M3 6h.01" />
+        <path d="M3 12h.01" />
+        <path d="M3 18h.01" />
       </svg>
-      <span class="truncate">第一性原理</span>
+      <span class="truncate">拆分</span>
     </button>
   </div>
 </template>
@@ -88,8 +79,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [nodeId: string]
   'toggle-collapse': [nodeId: string]
-  subdivide: [nodeId: string]
-  'first-principles': [nodeId: string]
+  'open-subdivide': [nodeId: string]
 }>()
 
 const hasPrerequisites = computed(() => Boolean(props.node.prerequisiteIds?.length))
@@ -145,7 +135,7 @@ const MetricDots = defineComponent({
 <style scoped>
 .tree-node {
   width: 236px;
-  height: 188px;
+  height: 172px;
   border-width: 1px;
   border-radius: 8px;
   padding: 12px;
@@ -188,7 +178,7 @@ const MetricDots = defineComponent({
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 28px;
+  height: 30px;
   min-width: 0;
   border-radius: 7px;
   background: rgb(248 250 252);

@@ -30,9 +30,10 @@
             <h2 v-else class="font-display text-base font-semibold text-navy-800 truncate flex-1">{{ plan.title }}</h2>
             <button
               v-if="!editingTitle"
-              class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
-              title="进入知识树"
-              @click="$router.push(`/plan/${planId}/tree`)"
+              class="p-1 rounded transition-colors"
+              :class="isTreeMode ? 'text-navy-600 bg-navy-50' : 'text-navy-300 hover:text-navy-600 hover:bg-navy-50'"
+              :title="isTreeMode ? '返回学习模式' : '进入知识树'"
+              @click="toggleTreeMode"
             >
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 3v6" />
@@ -86,54 +87,66 @@
           </div>
         </div>
 
-        <!-- Module list -->
-        <div class="flex-1 overflow-y-auto p-3 space-y-2">
-          <div v-if="modules.length === 0" class="text-center py-8 text-navy-300 text-sm">
-            <p>暂无学习模块</p>
-            <p class="text-xs mt-1">在右侧对话中描述学习目标，AI 会自动规划</p>
-          </div>
-          <div
-            v-for="(mod, i) in modules"
-            :key="i"
-            class="rounded-lg cursor-pointer transition-all duration-200 border"
-            :class="selectedModuleIndex === i ? 'border-navy-300 bg-navy-50 shadow-sm' : 'border-transparent hover:bg-navy-50/50'"
-            @click="selectModule(i)"
-          >
-            <div class="p-3">
-              <div class="flex items-center gap-2.5">
-                <span class="w-6 h-6 rounded-full text-xs flex items-center justify-center font-bold flex-shrink-0"
-                  :class="selectedModuleIndex === i ? 'bg-navy-600 text-white' : 'bg-navy-100 text-navy-500'">
-                  {{ i + 1 }}
-                </span>
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium text-navy-800 truncate">{{ mod.title }}</p>
-                  <p class="text-xs text-navy-400 mt-0.5">{{ mod.estimatedHours || 2 }}学时</p>
+        <div class="flex-1 min-h-0">
+          <KnowledgeTreeOutline
+            v-if="isTreeMode"
+            :items="treePlanOutline"
+            :selected-node-id="knowledgeTreeStore.currentNodeId"
+            :type-labels="typeLabels"
+            @select-node="selectTreeNode"
+            @open-resource="openOutlineResource"
+            @toggle-collapse="toggleTreeNodeCollapse"
+          />
+
+          <!-- Module list -->
+          <div v-else class="h-full overflow-y-auto p-3 space-y-2">
+            <div v-if="modules.length === 0" class="text-center py-8 text-navy-300 text-sm">
+              <p>暂无学习模块</p>
+              <p class="text-xs mt-1">在右侧对话中描述学习目标，AI 会自动规划</p>
+            </div>
+            <div
+              v-for="(mod, i) in modules"
+              :key="i"
+              class="rounded-lg cursor-pointer transition-all duration-200 border"
+              :class="selectedModuleIndex === i ? 'border-navy-300 bg-navy-50 shadow-sm' : 'border-transparent hover:bg-navy-50/50'"
+              @click="selectModule(i)"
+            >
+              <div class="p-3">
+                <div class="flex items-center gap-2.5">
+                  <span class="w-6 h-6 rounded-full text-xs flex items-center justify-center font-bold flex-shrink-0"
+                    :class="selectedModuleIndex === i ? 'bg-navy-600 text-white' : 'bg-navy-100 text-navy-500'">
+                    {{ i + 1 }}
+                  </span>
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-navy-800 truncate">{{ mod.title }}</p>
+                    <p class="text-xs text-navy-400 mt-0.5">{{ mod.estimatedHours || 2 }}学时</p>
+                  </div>
+                </div>
+                <div class="flex flex-wrap gap-1 mt-2 ml-8">
+                  <span v-for="type in mod.resourceTypes" :key="type"
+                    class="text-[10px] px-1.5 py-0.5 rounded-full"
+                    :class="badgeClass(type)">
+                    {{ typeLabels[type] || type }}
+                  </span>
                 </div>
               </div>
-              <div class="flex flex-wrap gap-1 mt-2 ml-8">
-                <span v-for="type in mod.resourceTypes" :key="type"
-                  class="text-[10px] px-1.5 py-0.5 rounded-full"
-                  :class="badgeClass(type)">
-                  {{ typeLabels[type] || type }}
-                </span>
-              </div>
-            </div>
 
-            <!-- 模块资源列表 -->
-            <div v-if="selectedModuleIndex === i && mod.resources.length > 0" class="border-t border-navy-100/50 px-3 py-2 space-y-1.5">
-              <div
-                v-for="res in mod.resources"
-                :key="res.id"
-                class="flex items-center gap-2 p-1.5 rounded-md text-xs transition-colors cursor-pointer"
-                :class="selectedResourceId === res.id ? 'bg-navy-100' : 'hover:bg-white'"
-                @click.stop="toggleResource(res)"
-              >
-                <span class="w-2 h-2 rounded-full flex-shrink-0" :class="res.status === 2 ? 'bg-emerald-400' : res.status === 1 ? 'bg-blue-400' : res.status === 3 ? 'bg-red-400' : 'bg-navy-200'"></span>
-                <span class="text-navy-600 truncate flex-1">{{ res.moduleData?.title || typeLabels[res.moduleType] || res.moduleType }}</span>
-                <span v-if="res.status === 2" class="text-emerald-500 text-[10px]">已生成</span>
-                <span v-else-if="res.status === 1 && !stuckResources.has(res.id)" class="text-blue-500 text-[10px]">生成中</span>
-                <span v-else-if="res.status === 1 || res.status === 3" class="text-red-500 text-[10px] cursor-pointer hover:underline" @click.stop="handleRetry(res)">重试</span>
-                <span v-else class="text-navy-300 text-[10px]">待生成</span>
+              <!-- 模块资源列表 -->
+              <div v-if="selectedModuleIndex === i && mod.resources.length > 0" class="border-t border-navy-100/50 px-3 py-2 space-y-1.5">
+                <div
+                  v-for="res in mod.resources"
+                  :key="res.id"
+                  class="flex items-center gap-2 p-1.5 rounded-md text-xs transition-colors cursor-pointer"
+                  :class="selectedResourceId === res.id ? 'bg-navy-100' : 'hover:bg-white'"
+                  @click.stop="toggleResource(res)"
+                >
+                  <span class="w-2 h-2 rounded-full flex-shrink-0" :class="res.status === 2 ? 'bg-emerald-400' : res.status === 1 ? 'bg-blue-400' : res.status === 3 ? 'bg-red-400' : 'bg-navy-200'"></span>
+                  <span class="text-navy-600 truncate flex-1">{{ res.moduleData?.title || typeLabels[res.moduleType] || res.moduleType }}</span>
+                  <span v-if="res.status === 2" class="text-emerald-500 text-[10px]">已生成</span>
+                  <span v-else-if="res.status === 1 && !stuckResources.has(res.id)" class="text-blue-500 text-[10px]">生成中</span>
+                  <span v-else-if="res.status === 1 || res.status === 3" class="text-red-500 text-[10px] cursor-pointer hover:underline" @click.stop="handleRetry(res)">重试</span>
+                  <span v-else class="text-navy-300 text-[10px]">待生成</span>
+                </div>
               </div>
             </div>
           </div>
@@ -153,6 +166,70 @@
       </svg>
     </button>
 
+    <template v-if="isTreeMode">
+      <section class="mx-2 flex min-w-[720px] flex-1 flex-col overflow-hidden rounded-lg border border-navy-100 bg-white shadow-paper">
+        <header class="flex flex-shrink-0 items-center justify-between gap-3 border-b border-navy-100 px-4 py-3">
+          <div class="min-w-0">
+            <h3 class="truncate font-display text-sm font-semibold text-navy-800">
+              {{ knowledgeTreeStore.tree?.title || plan.title }}
+            </h3>
+            <p class="mt-0.5 truncate text-xs text-navy-400">
+              {{ selectedTreeNode?.title || '选择节点后开始拆分' }}
+            </p>
+          </div>
+          <div class="flex flex-shrink-0 items-center gap-2">
+            <button
+              v-if="knowledgeTreeStore.activeSource"
+              class="h-8 rounded-lg bg-red-50 px-3 text-xs font-semibold text-red-600 hover:bg-red-100"
+              @click="knowledgeTreeStore.stopStream"
+            >
+              停止
+            </button>
+          </div>
+        </header>
+
+        <div v-if="knowledgeTreeStore.error" class="mx-4 mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
+          {{ knowledgeTreeStore.error }}
+        </div>
+
+        <div class="relative min-h-0 flex-1 p-3">
+          <KnowledgeTreeCanvas
+            :nodes="knowledgeTreeStore.nodes"
+            :root-node-id="rootTreeNodeId"
+            :selected-node-id="knowledgeTreeStore.currentNodeId"
+            v-model:pan-x="knowledgeTreeStore.panX"
+            v-model:pan-y="knowledgeTreeStore.panY"
+            v-model:zoom="knowledgeTreeStore.zoom"
+            @select="selectTreeNode"
+            @toggle-collapse="toggleTreeNodeCollapse"
+            @open-subdivide="openTreeSubdivide"
+          />
+          <div
+            v-if="knowledgeTreeStore.loading && !knowledgeTreeStore.activeSource"
+            class="absolute inset-3 flex items-center justify-center rounded-lg bg-white/60"
+          >
+            <svg class="h-8 w-8 animate-spin text-navy-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10" class="opacity-25" />
+              <path d="M4 12a8 8 0 0 1 8-8" class="opacity-75" stroke-linecap="round" />
+            </svg>
+          </div>
+        </div>
+      </section>
+
+      <TreeSubdividePopover
+        :node="treePopoverNode"
+        :options="treeSubdivisionOptions"
+        :loading="knowledgeTreeStore.subdivisionOptionsLoading"
+        :error="knowledgeTreeStore.subdivisionOptionsError"
+        @close="closeTreeSubdivide"
+        @load-options="loadTreeSubdivideOptions"
+        @single-angle="runSingleAngleSplit"
+        @multi-angle="runMultiAngleSplit"
+        @first-principles="runFirstPrinciplesSplit"
+      />
+    </template>
+
+    <template v-else>
     <!-- ==================== 中间栏：资源详情（始终在 DOM 中，width 过渡动画） ==================== -->
     <div
       class="resource-panel flex flex-col card overflow-hidden"
@@ -407,6 +484,7 @@
       @generate-resource="generateResource"
       @open-resource="openResourceById"
     />
+    </template>
   </div>
 
   <!-- 引用悬浮预览卡片 -->
@@ -506,7 +584,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { getPlan, updatePlan } from '@/api/plan'
 import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi } from '@/api/resource'
 import { parseMarkdown, extractCitations } from '@/utils/markdown'
@@ -520,17 +598,28 @@ import { useHeartbeat } from '@/composables/useHeartbeat'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
+import KnowledgeTreeCanvas from '@/components/tree/KnowledgeTreeCanvas.vue'
+import KnowledgeTreeOutline from '@/components/tree/KnowledgeTreeOutline.vue'
+import TreeSubdividePopover from '@/components/tree/TreeSubdividePopover.vue'
+import { buildTreePlanOutline } from '@/components/tree/useTreePlanOutline'
+import { useKnowledgeTreeStore } from '@/stores/knowledgeTree'
 import type { LearningPlan, LearningResource } from '@/types/plan'
 import type { Note } from '@/types/note'
 import type { GeneratedResourceRef } from '@/utils/sse'
 import type { QuizData, QuizQuestion } from '@/types/quiz'
+import type { TreeSubdivisionOption } from '@/types/knowledgeTree'
 import type { MindElixirData } from 'mind-elixir'
 
 const route = useRoute()
+const router = useRouter()
 const planId = computed(() => Number(route.params.id))
 const planIdStr = computed(() => String(planId.value))
+const isTreeMode = computed(() => route.query.view === 'tree')
 const chatStore = useChatStore()
 const authStore = useAuthStore()
+const knowledgeTreeStore = useKnowledgeTreeStore()
+const treePopoverNodeId = ref<string | null>(null)
+const treeSubdivisionOptions = ref<TreeSubdivisionOption[]>([])
 const chatPanelMode = ref<'assistant' | 'tutor'>(
   (localStorage.getItem('chatPanelMode') as 'assistant' | 'tutor') || 'assistant'
 )
@@ -984,6 +1073,17 @@ const questionResults = computed(() => {
 const quizSubmitting = ref(false)
 const sidebarCollapsed = ref(false)
 
+function clearSelectedResource() {
+  selectedResourceId.value = null
+  selectedResource.value = null
+  quizData.value = null
+  mindmapData.value = null
+  gradingResult.value = null
+  quizSubmittedAnswers.value = null
+  showExplanations.value = false
+  isFullscreen.value = false
+}
+
 // ==================== 数据加载 ====================
 async function loadPlan() {
   const id = planId.value
@@ -1035,7 +1135,7 @@ onMounted(async () => {
   document.addEventListener('mousedown', onDocumentMouseDown)
   // 支持 ?resource=xxx 跳转自动打开对应资源
   const queryResource = route.query.resource
-  if (queryResource) {
+  if (queryResource && !isTreeMode.value) {
     const resId = Number(queryResource)
     if (resId > 0) {
       openResourceById(resId)
@@ -1055,21 +1155,27 @@ watch(planId, () => {
     loadPlan()
     loadResources()
     selectedModuleIndex.value = -1
-    selectedResourceId.value = null
-    selectedResource.value = null
-    quizData.value = null
-    mindmapData.value = null
-    gradingResult.value = null
-    quizSubmittedAnswers.value = null
+    clearSelectedResource()
+    if (isTreeMode.value) {
+      ensureTreeLoaded(true)
+    }
   }
 })
 
 // 监听 ?resource= 查询参数变化（同 plan 内跳转不同资源）
 watch(() => route.query.resource, (resId) => {
-  if (resId && resources.value.length > 0) {
+  if (resId && resources.value.length > 0 && !isTreeMode.value) {
     openResourceById(Number(resId))
   }
 })
+
+watch(isTreeMode, async value => {
+  if (value) {
+    await ensureTreeLoaded()
+  } else {
+    closeTreeSubdivide()
+  }
+}, { immediate: true })
 
 // 标题编辑
 const editingTitle = ref(false)
@@ -1231,6 +1337,98 @@ const modules = computed(() => {
   })
   return Array.from(moduleMap.values()).sort((a, b) => a.order - b.order)
 })
+
+const rootTreeNodeId = computed(() => {
+  const root = knowledgeTreeStore.nodes.find(node => !node.parentId)
+    || knowledgeTreeStore.nodes.find(node => node.depth === 0)
+    || knowledgeTreeStore.nodes[0]
+  return root?.id || null
+})
+
+const treePlanOutline = computed(() =>
+  buildTreePlanOutline(knowledgeTreeStore.nodes, resources.value, rootTreeNodeId.value)
+)
+
+const selectedTreeNode = computed(() =>
+  knowledgeTreeStore.nodes.find(node => node.id === knowledgeTreeStore.currentNodeId) || null
+)
+
+const treePopoverNode = computed(() =>
+  knowledgeTreeStore.nodes.find(node => node.id === treePopoverNodeId.value) || null
+)
+
+async function ensureTreeLoaded(force = false) {
+  if (!Number.isFinite(planId.value)) return
+  if (!force && knowledgeTreeStore.tree?.planId === planId.value && knowledgeTreeStore.nodes.length > 0) return
+  await knowledgeTreeStore.loadByPlan(planId.value)
+}
+
+async function enterTreeMode() {
+  heartbeat.stop()
+  clearSelectedResource()
+  await router.replace({ query: { ...route.query, view: 'tree', resource: undefined } })
+  await ensureTreeLoaded()
+}
+
+async function toggleTreeMode() {
+  if (isTreeMode.value) {
+    await exitTreeMode()
+    return
+  }
+  await enterTreeMode()
+}
+
+async function exitTreeMode() {
+  closeTreeSubdivide()
+  const nextQuery = { ...route.query }
+  delete nextQuery.view
+  await router.replace({ query: nextQuery })
+}
+
+async function selectTreeNode(nodeId: string) {
+  await knowledgeTreeStore.selectNode(nodeId)
+}
+
+async function toggleTreeNodeCollapse(nodeId: string) {
+  await knowledgeTreeStore.toggleCollapsed(nodeId)
+}
+
+async function openOutlineResource(resourceId: number) {
+  await exitTreeMode()
+  await nextTick()
+  await openResourceById(resourceId)
+}
+
+async function openTreeSubdivide(nodeId: string) {
+  const selected = await knowledgeTreeStore.selectNode(nodeId)
+  if (!selected) return
+  treeSubdivisionOptions.value = []
+  treePopoverNodeId.value = nodeId
+}
+
+function closeTreeSubdivide() {
+  treePopoverNodeId.value = null
+  treeSubdivisionOptions.value = []
+}
+
+async function loadTreeSubdivideOptions() {
+  treeSubdivisionOptions.value = await knowledgeTreeStore.loadSubdivisionOptionsCurrent()
+}
+
+async function runSingleAngleSplit(angle: string) {
+  closeTreeSubdivide()
+  await knowledgeTreeStore.subdivideCurrent(angle)
+}
+
+async function runMultiAngleSplit(options: TreeSubdivisionOption[]) {
+  closeTreeSubdivide()
+  await knowledgeTreeStore.multiAngleSubdivideCurrent(options)
+}
+
+async function runFirstPrinciplesSplit() {
+  closeTreeSubdivide()
+  await knowledgeTreeStore.firstPrinciplesCurrent()
+}
 
 function renderMd(text: string) { return parseMarkdown(text) }
 
