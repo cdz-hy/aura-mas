@@ -48,11 +48,11 @@ class FakeService:
         yield {"type": "done"}
 
     async def quiz_node(self, **kwargs):
-        yield {"type": "quiz", "data": [{"question": "Q"}]}
+        yield {"type": "resource_generated", "resources": [{"id": 123, "type": "quiz", "title": "节点练习题"}]}
         yield {"type": "done"}
 
     async def flashcards_node(self, **kwargs):
-        yield {"type": "flashcards", "data": [{"question": "Q", "answer": "A"}]}
+        yield {"type": "flashcards_generated", "cards": [{"question": "Q", "answer": "A", "difficulty": 1}]}
         yield {"type": "done"}
 
 
@@ -89,7 +89,7 @@ def test_node_action_routes_verify_node_ownership(monkeypatch):
         ("/api/ai/tree/tree_a/nodes/node_a/subdivide", {"ticket": "ticket_a", "angle": "按学习顺序"}),
         ("/api/ai/tree/tree_a/nodes/node_a/first-principles", {"ticket": "ticket_a"}),
         ("/api/ai/tree/tree_a/nodes/node_a/quiz", {"ticket": "ticket_a", "plan_id": 42}),
-        ("/api/ai/tree/tree_a/nodes/node_a/flashcards", {"ticket": "ticket_a"}),
+        ("/api/ai/tree/tree_a/nodes/node_a/flashcards", {"ticket": "ticket_a", "plan_id": 42}),
     ]
 
     for path, params in routes:
@@ -158,7 +158,7 @@ def test_first_principles_endpoint_streams_nodes_created(monkeypatch):
     assert payloads[-1]["type"] == "done"
 
 
-def test_quiz_endpoint_streams_quiz(monkeypatch):
+def test_quiz_endpoint_streams_resource_generated(monkeypatch):
     client, fake_java = make_client(monkeypatch)
 
     response = client.get(
@@ -169,7 +169,8 @@ def test_quiz_endpoint_streams_quiz(monkeypatch):
     payloads = parse_sse_lines(response.text)
     assert response.status_code == 200
     assert fake_java.plan_checks == [(42, 7)]
-    assert payloads[0]["type"] == "quiz"
+    assert payloads[0]["type"] == "resource_generated"
+    assert payloads[0]["resources"] == [{"id": 123, "type": "quiz", "title": "节点练习题"}]
     assert payloads[-1]["type"] == "done"
 
 
@@ -188,14 +189,16 @@ def test_quiz_endpoint_rejects_plan_tree_mismatch_before_streaming(monkeypatch):
 
 
 def test_flashcards_endpoint_streams_flashcards(monkeypatch):
-    client, _ = make_client(monkeypatch)
+    client, fake_java = make_client(monkeypatch)
 
     response = client.get(
         "/api/ai/tree/tree_a/nodes/node_a/flashcards",
-        params={"ticket": "ticket_a"},
+        params={"ticket": "ticket_a", "plan_id": 42},
     )
 
     payloads = parse_sse_lines(response.text)
     assert response.status_code == 200
-    assert payloads[0]["type"] == "flashcards"
+    assert fake_java.plan_checks == [(42, 7)]
+    assert payloads[0]["type"] == "flashcards_generated"
+    assert payloads[0]["cards"] == [{"question": "Q", "answer": "A", "difficulty": 1}]
     assert payloads[-1]["type"] == "done"

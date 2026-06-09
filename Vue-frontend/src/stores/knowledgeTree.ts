@@ -4,12 +4,21 @@ import { issueTicket } from '@/api/auth'
 import {
   ensureKnowledgeTree,
   getKnowledgeNodeMessages,
+  streamTreeFlashcards,
   streamTreeExplain,
   streamTreeFirstPrinciples,
+  streamTreeQuiz,
   streamTreeSubdivide,
   updateKnowledgeNode,
 } from '@/api/knowledgeTree'
-import type { KnowledgeNode, KnowledgeTree, TreeMessage, TreeSseHandlers } from '@/types/knowledgeTree'
+import type {
+  KnowledgeNode,
+  KnowledgeTree,
+  TreeFlashcard,
+  TreeGeneratedResource,
+  TreeMessage,
+  TreeSseHandlers,
+} from '@/types/knowledgeTree'
 
 type StreamStarter = (ticket: string, handlers: TreeSseHandlers) => EventSource
 
@@ -156,6 +165,36 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     ))
   }
 
+  async function generateQuizCurrent() {
+    if (!tree.value || !currentNodeId.value) return
+    const treeId = tree.value.id
+    const nodeId = currentNodeId.value
+    const planId = tree.value.planId
+
+    await startStream(nodeId, (ticket, handlers) => streamTreeQuiz(
+      ticket,
+      treeId,
+      nodeId,
+      planId,
+      handlers,
+    ))
+  }
+
+  async function generateFlashcardsCurrent() {
+    if (!tree.value || !currentNodeId.value) return
+    const treeId = tree.value.id
+    const nodeId = currentNodeId.value
+    const planId = tree.value.planId
+
+    await startStream(nodeId, (ticket, handlers) => streamTreeFlashcards(
+      ticket,
+      treeId,
+      nodeId,
+      planId,
+      handlers,
+    ))
+  }
+
   function stopStream() {
     streamToken += 1
     if (activeSource.value) {
@@ -229,6 +268,14 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
           if (!isActiveStream(token, source)) return
           mergeNodes(nextNodes)
         },
+        onResources: resources => {
+          if (!isActiveStream(token, source)) return
+          appendGeneratedResourcesMessage(nodeId, resources)
+        },
+        onFlashcards: cards => {
+          if (!isActiveStream(token, source)) return
+          appendFlashcardsMessage(nodeId, cards)
+        },
         onDone: () => {
           if (!isActiveStream(token, source)) return
           activeSource.value = null
@@ -272,6 +319,37 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     nodes.value = Array.from(byId.values())
   }
 
+  function appendGeneratedResourcesMessage(nodeId: string, resources: TreeGeneratedResource[]) {
+    if (!resources.length || !tree.value) return
+    const titles = resources.map(resource => resource.title || resource.type).join('、')
+    appendLocalAssistantMessage(nodeId, `已生成学习资源：${titles}`)
+  }
+
+  function appendFlashcardsMessage(nodeId: string, cards: TreeFlashcard[]) {
+    if (!cards.length || !tree.value) return
+    const preview = cards
+      .slice(0, 3)
+      .map((card, index) => `${index + 1}. ${card.question}\n   ${card.answer}`)
+      .join('\n')
+    const suffix = cards.length > 3 ? `\n...共 ${cards.length} 张` : `\n共 ${cards.length} 张`
+    appendLocalAssistantMessage(nodeId, `已生成闪卡：\n${preview}${suffix}`)
+  }
+
+  function appendLocalAssistantMessage(nodeId: string, content: string) {
+    if (!tree.value) return
+    const existing = messagesByNode.value[nodeId] || []
+    messagesByNode.value[nodeId] = [
+      ...existing,
+      {
+        id: -Date.now(),
+        treeId: tree.value.id,
+        nodeId,
+        role: 'assistant',
+        content,
+      },
+    ]
+  }
+
   function hasNode(nodeId: string) {
     return nodes.value.some(node => node.id === nodeId)
   }
@@ -303,6 +381,8 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     sendMessage,
     subdivideCurrent,
     firstPrinciplesCurrent,
+    generateQuizCurrent,
+    generateFlashcardsCurrent,
     stopStream,
   }
 })

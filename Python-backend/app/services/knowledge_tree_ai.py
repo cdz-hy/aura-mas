@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import queue
 import threading
@@ -123,7 +124,28 @@ class KnowledgeTreeAiService:
                 {"role": "system", "content": "严格输出 JSON：{\"questions\":[{\"question\":\"...\",\"options\":[\"A\"],\"answer\":\"A\",\"explanation\":\"...\"}]}"},
                 {"role": "user", "content": self._quiz_prompt(node_id, plan_id, context_chunks)},
             ])
-            yield {"type": "quiz", "data": result.get("questions", [])}
+            questions = self._normalize_quiz_questions(result.get("questions", []) if isinstance(result, dict) else [])
+            resource = self.java_client.create_resource(
+                plan_id=plan_id,
+                module_type="quiz",
+                module_data={
+                    "title": "节点练习题",
+                    "description": f"知识树节点 {node_id} 自动生成练习题",
+                    "questions": questions,
+                    "totalPoints": sum(question.get("points", 1) for question in questions),
+                    "estimatedMinutes": max(1, len(questions) * 2),
+                },
+                module_order=self._next_module_order(plan_id),
+                generated_by_agent="knowledge_tree_quiz",
+            )
+            yield {
+                "type": "resource_generated",
+                "resources": [{
+                    "id": resource.get("id"),
+                    "type": "quiz",
+                    "title": "节点练习题",
+                }],
+            }
             yield {"type": "done"}
         except Exception as exc:
             logger.exception("quiz_node failed")
@@ -134,6 +156,7 @@ class KnowledgeTreeAiService:
         user_id: int,
         tree_id: str,
         node_id: str,
+        plan_id: int,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         yield {"type": "start", "node_id": node_id}
         try:
@@ -143,7 +166,33 @@ class KnowledgeTreeAiService:
                 {"role": "system", "content": "严格输出 JSON：{\"flashcards\":[{\"question\":\"...\",\"answer\":\"...\",\"difficulty\":1}]}"},
                 {"role": "user", "content": self._flashcards_prompt(node_id, context_chunks)},
             ])
-            yield {"type": "flashcards", "data": result.get("flashcards", [])}
+            raw_cards = self._extract_flashcards(result)
+            cards = self._normalize_flashcards(raw_cards)
+            if not cards:
+                yield {"type": "error", "content": "未能生成闪卡，请重试"}
+                return
+
+            note_id = self._find_note_id_for_node(plan_id, node_id)
+            if note_id is None:
+                self.java_client.create_resource(
+                    plan_id=plan_id,
+                    module_type="text",
+                    module_data={
+                        "title": "知识树闪卡来源",
+                        "content": self._flashcard_source_text(node_id, context_chunks, cards),
+                        "nodeId": node_id,
+                        "flashcards": cards,
+                    },
+                    module_order=self._next_module_order(plan_id),
+                    generated_by_agent="knowledge_tree_flashcards",
+                )
+            else:
+                self.java_client._request("POST", "/api/flashcard/internal/save", json={
+                    "userId": user_id,
+                    "noteId": note_id,
+                    "cards": cards,
+                })
+            yield {"type": "flashcards_generated", "cards": cards}
             yield {"type": "done"}
         except Exception as exc:
             logger.exception("flashcards_node failed")
@@ -219,6 +268,138 @@ class KnowledgeTreeAiService:
         else:
             children = []
         return [child for child in children if isinstance(child, dict)]
+
+    @staticmethod
+    def _normalize_quiz_questions(raw_questions: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_questions, list):
+            return []
+        questions = []
+        for idx, item in enumerate(raw_questions):
+            if not isinstance(item, dict):
+                continue
+            question = item.get("question") or item.get("question_text") or item.get("prompt") or ""
+            correct_answer = (
+                item.get("correctAnswer")
+                or item.get("correct_answer")
+                or item.get("answer")
+                or item.get("correct")
+                or ""
+            )
+            questions.append({
+                "index": item.get("index", idx),
+                "type": item.get("type") or item.get("question_type") or "single_choice",
+                "question": question,
+                "options": item.get("options") or [],
+                "correctAnswer": correct_answer,
+                "explanation": item.get("explanation") or item.get("analysis") or "",
+                "difficulty": KnowledgeTreeAiService._coerce_int(item.get("difficulty"), 3),
+                "points": KnowledgeTreeAiService._coerce_int(item.get("points"), 1),
+            })
+        return questions
+
+    @staticmethod
+    def _extract_flashcards(result: Any) -> Any:
+        if isinstance(result, dict):
+            return result.get("flashcards") or result.get("cards") or []
+        if isinstance(result, list):
+            return result
+        return []
+
+    @staticmethod
+    def _normalize_flashcards(raw_cards: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_cards, list):
+            return []
+        cards = []
+        for item in raw_cards:
+            if not isinstance(item, dict):
+                continue
+            question = item.get("question") or item.get("question_text") or item.get("front") or item.get("q") or ""
+            answer = item.get("answer") or item.get("answer_text") or item.get("back") or item.get("a") or ""
+            if not str(question).strip() or not str(answer).strip():
+                continue
+            cards.append({
+                "question": str(question).strip(),
+                "answer": str(answer).strip(),
+                "difficulty": KnowledgeTreeAiService._coerce_int(
+                    item.get("difficulty", item.get("level", item.get("difficulty_level", 1))),
+                    1,
+                ),
+            })
+        return cards
+
+    @staticmethod
+    def _coerce_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _next_module_order(self, plan_id: int) -> int:
+        try:
+            resources = self.java_client.get_plan_resources(plan_id)
+        except Exception:
+            return 1
+        orders = []
+        for resource in resources or []:
+            if not isinstance(resource, dict):
+                continue
+            order = resource.get("moduleOrder")
+            if order is None:
+                order = resource.get("module_order")
+            try:
+                orders.append(int(order))
+            except (TypeError, ValueError):
+                continue
+        return max(orders, default=0) + 1
+
+    def _find_note_id_for_node(self, plan_id: int, node_id: str) -> Optional[int]:
+        try:
+            resources = self.java_client.get_plan_resources(plan_id)
+        except Exception:
+            return None
+        for resource in resources or []:
+            if not isinstance(resource, dict):
+                continue
+            module_data = self._parse_module_data(resource.get("moduleData"))
+            resource_node_id = (
+                resource.get("nodeId")
+                or module_data.get("nodeId")
+                or module_data.get("node_id")
+            )
+            if resource_node_id != node_id:
+                continue
+            note_id = (
+                resource.get("noteId")
+                or resource.get("note_id")
+                or module_data.get("noteId")
+                or module_data.get("note_id")
+            )
+            if note_id is not None:
+                try:
+                    return int(note_id)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    @staticmethod
+    def _parse_module_data(module_data: Any) -> Dict[str, Any]:
+        if isinstance(module_data, dict):
+            return module_data
+        if isinstance(module_data, str):
+            try:
+                parsed = json.loads(module_data)
+                return parsed if isinstance(parsed, dict) else {}
+            except json.JSONDecodeError:
+                return {}
+        return {}
+
+    def _flashcard_source_text(self, node_id: str, context_chunks: List[Dict[str, Any]], cards: List[Dict[str, Any]]) -> str:
+        card_lines = "\n".join(f"- Q: {card['question']}\n  A: {card['answer']}" for card in cards)
+        return (
+            f"知识树节点：{node_id}\n\n"
+            f"参考资料：\n{self._context_text(context_chunks)}\n\n"
+            f"生成闪卡：\n{card_lines}"
+        )
 
     @staticmethod
     def _context_text(context_chunks: List[Dict[str, Any]]) -> str:

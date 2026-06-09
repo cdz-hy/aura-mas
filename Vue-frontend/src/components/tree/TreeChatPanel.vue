@@ -17,10 +17,10 @@
         <button class="quick-button" :disabled="disabled" title="第一性原理" @click="firstPrinciples">
           第一性原理
         </button>
-        <button class="quick-button" disabled title="后续任务开放">
+        <button class="quick-button" :disabled="disabled" title="生成测验" @click="generateQuiz">
           生成测验
         </button>
-        <button class="quick-button" disabled title="后续任务开放">
+        <button class="quick-button" :disabled="disabled" title="生成闪卡" @click="generateFlashcards">
           生成闪卡
         </button>
       </div>
@@ -124,6 +124,16 @@ async function subdivide() {
 async function firstPrinciples() {
   if (disabled.value) return
   await store.firstPrinciplesCurrent()
+}
+
+async function generateQuiz() {
+  if (disabled.value) return
+  await store.generateQuizCurrent()
+}
+
+async function generateFlashcards() {
+  if (disabled.value) return
+  await store.generateFlashcardsCurrent()
 }
 </script>
 

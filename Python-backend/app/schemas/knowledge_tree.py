@@ -10,3 +10,5 @@ class KnowledgeTreeAiEvent(BaseModel):
     data: Optional[Any] = None
     message: Optional[Dict[str, Any]] = None
     nodes: Optional[List[Dict[str, Any]]] = None
+    resources: Optional[List[Dict[str, Any]]] = None
+    cards: Optional[List[Dict[str, Any]]] = None

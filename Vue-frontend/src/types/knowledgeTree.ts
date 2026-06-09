@@ -52,12 +52,26 @@ export interface KnowledgeTreeResponse {
   nodes: KnowledgeNode[]
 }
 
+export interface TreeGeneratedResource {
+  id: number
+  type: string
+  title: string
+}
+
+export interface TreeFlashcard {
+  question: string
+  answer: string
+  difficulty: number
+}
+
 export interface TreeSseHandlers {
   onProgress?: (content: string) => void
   onChunk?: (content: string) => void
   onStreamText?: (content: string) => void
   onMessage?: (message: TreeMessage) => void
   onNodes?: (nodes: KnowledgeNode[]) => void
+  onResources?: (resources: TreeGeneratedResource[]) => void
+  onFlashcards?: (cards: TreeFlashcard[]) => void
   onDone?: () => void
   onError?: (error: string) => void
 }

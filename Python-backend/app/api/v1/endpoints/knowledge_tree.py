@@ -118,11 +118,13 @@ async def flashcards_node(
     tree_id: str,
     node_id: str,
     ticket: str = Query(...),
+    plan_id: int = Query(...),
 ):
     user_id = _user_id_from_ticket(ticket)
     _verify_node_access(tree_id, node_id, user_id)
+    _verify_plan_tree_access(plan_id, tree_id, user_id)
     service = get_knowledge_tree_ai_service()
     return StreamingResponse(
-        _event_stream(service.flashcards_node(user_id=user_id, tree_id=tree_id, node_id=node_id)),
+        _event_stream(service.flashcards_node(user_id=user_id, tree_id=tree_id, node_id=node_id, plan_id=plan_id)),
         media_type="text/event-stream",
     )

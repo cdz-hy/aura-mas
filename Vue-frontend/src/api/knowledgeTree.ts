@@ -63,6 +63,34 @@ export function streamTreeFirstPrinciples(
   )
 }
 
+export function streamTreeQuiz(
+  ticket: string,
+  treeId: string,
+  nodeId: string,
+  planId: number,
+  handlers: TreeSseHandlers,
+): EventSource {
+  return createTreeSse(
+    `/api/ai/tree/${treeId}/nodes/${nodeId}/quiz`,
+    { ticket, plan_id: String(planId) },
+    handlers,
+  )
+}
+
+export function streamTreeFlashcards(
+  ticket: string,
+  treeId: string,
+  nodeId: string,
+  planId: number,
+  handlers: TreeSseHandlers,
+): EventSource {
+  return createTreeSse(
+    `/api/ai/tree/${treeId}/nodes/${nodeId}/flashcards`,
+    { ticket, plan_id: String(planId) },
+    handlers,
+  )
+}
+
 function createTreeSse(
   path: string,
   params: Record<string, string>,
@@ -92,6 +120,12 @@ function createTreeSse(
         case 'nodes_created':
           handlers.onNodes?.(data.nodes || data.data || [])
           break
+        case 'resource_generated':
+          handlers.onResources?.(data.resources || [])
+          break
+        case 'flashcards_generated':
+          handlers.onFlashcards?.(data.cards || [])
+          break
         case 'done':
           handlers.onDone?.()
           source.close()
@@ -110,7 +144,7 @@ function createTreeSse(
 
   source.onmessage = (event) => handleData(event.data)
 
-  for (const eventType of ['progress', 'chunk', 'stream_text', 'message', 'message_saved', 'nodes', 'nodes_created', 'done', 'error']) {
+  for (const eventType of ['progress', 'chunk', 'stream_text', 'message', 'message_saved', 'nodes', 'nodes_created', 'resource_generated', 'flashcards_generated', 'done', 'error']) {
     source.addEventListener(eventType, (event: MessageEvent) => handleData(event.data))
   }
 

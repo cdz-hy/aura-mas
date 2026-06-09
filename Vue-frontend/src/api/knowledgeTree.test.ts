@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { streamTreeExplain } from './knowledgeTree'
+import { streamTreeExplain, streamTreeFlashcards, streamTreeQuiz } from './knowledgeTree'
 import type { TreeMessage } from '@/types/knowledgeTree'
 
 vi.mock('@/api/request', () => ({
@@ -82,6 +82,35 @@ describe('knowledge tree SSE API', () => {
 
     expect(onMessage).toHaveBeenCalledWith(message)
     expect(onNodes).toHaveBeenCalledWith(createdNodes)
+  })
+
+  it('maps generated resource and flashcard backend events to tree handlers', () => {
+    const onResources = vi.fn()
+    const onFlashcards = vi.fn()
+    const resources = [{ id: 123, type: 'quiz', title: '节点练习题' }]
+    const cards = [{ question: 'Q', answer: 'A', difficulty: 1 }]
+
+    streamTreeQuiz('ticket_1', 'tree_1', 'node_root', 42, { onResources })
+    streamTreeFlashcards('ticket_1', 'tree_1', 'node_root', 42, { onFlashcards })
+
+    const quizSource = FakeEventSource.instances[0]
+    const flashcardSource = FakeEventSource.instances[1]
+    expect(quizSource.url).toContain('plan_id=42')
+    expect(flashcardSource.url).toContain('plan_id=42')
+    expect(quizSource.listeners.has('resource_generated')).toBe(true)
+    expect(flashcardSource.listeners.has('flashcards_generated')).toBe(true)
+
+    quizSource.emit('resource_generated', {
+      type: 'resource_generated',
+      resources,
+    })
+    flashcardSource.emit('flashcards_generated', {
+      type: 'flashcards_generated',
+      cards,
+    })
+
+    expect(onResources).toHaveBeenCalledWith(resources)
+    expect(onFlashcards).toHaveBeenCalledWith(cards)
   })
 
   it('surfaces parse errors and closes the source', () => {

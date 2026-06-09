@@ -5,7 +5,9 @@ import {
   ensureKnowledgeTree,
   getKnowledgeNodeMessages,
   streamTreeExplain,
+  streamTreeFlashcards,
   streamTreeFirstPrinciples,
+  streamTreeQuiz,
   streamTreeSubdivide,
   updateKnowledgeNode,
 } from '@/api/knowledgeTree'
@@ -24,6 +26,8 @@ vi.mock('@/api/knowledgeTree', () => ({
   streamTreeExplain: vi.fn(),
   streamTreeSubdivide: vi.fn(),
   streamTreeFirstPrinciples: vi.fn(),
+  streamTreeQuiz: vi.fn(),
+  streamTreeFlashcards: vi.fn(),
 }))
 
 const tree: KnowledgeTree = {
@@ -258,6 +262,8 @@ describe('useKnowledgeTreeStore', () => {
     vi.mocked(getKnowledgeNodeMessages).mockResolvedValue({ data: [] })
     vi.mocked(streamTreeSubdivide).mockReturnValue(new FakeEventSource() as unknown as EventSource)
     vi.mocked(streamTreeFirstPrinciples).mockReturnValue(new FakeEventSource() as unknown as EventSource)
+    vi.mocked(streamTreeQuiz).mockReturnValue(new FakeEventSource() as unknown as EventSource)
+    vi.mocked(streamTreeFlashcards).mockReturnValue(new FakeEventSource() as unknown as EventSource)
 
     const store = useKnowledgeTreeStore()
     await store.loadByPlan(42)
@@ -289,6 +295,38 @@ describe('useKnowledgeTreeStore', () => {
       'ticket_2',
       'tree_1',
       'node_root',
+      expect.any(Object),
+    )
+
+    await store.selectNode('node_root')
+    const quizTicket = deferred<{ data: { ticket: string } }>()
+    vi.mocked(issueTicket).mockReturnValueOnce(quizTicket.promise)
+    const quizPromise = store.generateQuizCurrent()
+    await store.selectNode('node_child')
+    quizTicket.resolve({ data: { ticket: 'ticket_3' } })
+    await quizPromise
+
+    expect(streamTreeQuiz).toHaveBeenCalledWith(
+      'ticket_3',
+      'tree_1',
+      'node_root',
+      42,
+      expect.any(Object),
+    )
+
+    await store.selectNode('node_root')
+    const flashcardsTicket = deferred<{ data: { ticket: string } }>()
+    vi.mocked(issueTicket).mockReturnValueOnce(flashcardsTicket.promise)
+    const flashcardsPromise = store.generateFlashcardsCurrent()
+    await store.selectNode('node_child')
+    flashcardsTicket.resolve({ data: { ticket: 'ticket_4' } })
+    await flashcardsPromise
+
+    expect(streamTreeFlashcards).toHaveBeenCalledWith(
+      'ticket_4',
+      'tree_1',
+      'node_root',
+      42,
       expect.any(Object),
     )
   })
@@ -479,6 +517,31 @@ describe('useKnowledgeTreeStore', () => {
 
     expect(store.messagesByNode.node_root.map(message => message.content)).toEqual(['hello', 'saved'])
     expect(store.nodes.some(node => node.id === 'node_created')).toBe(true)
+  })
+
+  it('appends local summaries for generated resources and flashcards', async () => {
+    const source = new FakeEventSource() as unknown as EventSource
+    let handlers: TreeSseHandlers | undefined
+    vi.mocked(streamTreeQuiz).mockImplementation((_ticket, _treeId, _nodeId, _planId, h) => {
+      handlers = h
+      return source
+    })
+
+    const store = useKnowledgeTreeStore()
+    await store.loadByPlan(42)
+    await store.generateQuizCurrent()
+
+    handlers?.onResources?.([{ id: 123, type: 'quiz', title: '节点练习题' }])
+    handlers?.onFlashcards?.([
+      { question: 'Q1', answer: 'A1', difficulty: 1 },
+      { question: 'Q2', answer: 'A2', difficulty: 2 },
+    ])
+
+    expect(store.messagesByNode.node_root.map(message => message.content)).toEqual([
+      'hello',
+      '已生成学习资源：节点练习题',
+      '已生成闪卡：\n1. Q1\n   A1\n2. Q2\n   A2\n共 2 张',
+    ])
   })
 
   it('closes the active stream when stopped', async () => {

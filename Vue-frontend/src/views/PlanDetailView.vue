@@ -31,6 +31,22 @@
             <button
               v-if="!editingTitle"
               class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
+              title="进入知识树"
+              @click="$router.push(`/plan/${planId}/tree`)"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 3v6" />
+                <path d="M6 13h12" />
+                <path d="M6 13v5" />
+                <path d="M18 13v5" />
+                <circle cx="12" cy="9" r="2" />
+                <circle cx="6" cy="19" r="2" />
+                <circle cx="18" cy="19" r="2" />
+              </svg>
+            </button>
+            <button
+              v-if="!editingTitle"
+              class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
               @click="editTitle = plan.title; editingTitle = true"
               title="修改计划名称"
             >
