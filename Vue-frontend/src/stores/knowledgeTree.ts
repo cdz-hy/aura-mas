@@ -3,10 +3,12 @@ import { ref, shallowRef } from 'vue'
 import { issueTicket } from '@/api/auth'
 import {
   ensureKnowledgeTree,
+  getTreeSubdivisionOptions,
   getKnowledgeNodeMessages,
   streamTreeFlashcards,
   streamTreeExplain,
   streamTreeFirstPrinciples,
+  streamTreeMultiAngleSubdivide,
   streamTreeQuiz,
   streamTreeSubdivide,
   updateKnowledgeNode,
@@ -17,6 +19,7 @@ import type {
   TreeFlashcard,
   TreeGeneratedResource,
   TreeMessage,
+  TreeSubdivisionOption,
   TreeSseHandlers,
 } from '@/types/knowledgeTree'
 
@@ -31,6 +34,8 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
   const streamingText = ref('')
   const loading = ref(false)
   const error = ref('')
+  const subdivisionOptionsLoading = ref(false)
+  const subdivisionOptionsError = ref('')
   const panX = ref(0)
   const panY = ref(0)
   const zoom = ref(1)
@@ -38,6 +43,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
   let loadToken = 0
   let selectionToken = 0
   let streamToken = 0
+  let subdivisionOptionsToken = 0
 
   async function loadByPlan(planId: number) {
     const token = nextLoadToken()
@@ -152,6 +158,46 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     ))
   }
 
+  async function loadSubdivisionOptionsCurrent(): Promise<TreeSubdivisionOption[]> {
+    if (!tree.value || !currentNodeId.value) return []
+    const token = nextSubdivisionOptionsToken()
+    const treeId = tree.value.id
+    const nodeId = currentNodeId.value
+    subdivisionOptionsLoading.value = true
+    subdivisionOptionsError.value = ''
+
+    try {
+      const ticketRes = await issueTicket()
+      if (!isCurrentSubdivisionOptions(token) || currentNodeId.value !== nodeId) return []
+      const res = await getTreeSubdivisionOptions(ticketRes.data.ticket, treeId, nodeId)
+      if (!isCurrentSubdivisionOptions(token) || currentNodeId.value !== nodeId) return []
+      return res.data?.options || []
+    } catch (e) {
+      if (isCurrentSubdivisionOptions(token)) {
+        subdivisionOptionsError.value = getErrorMessage(e)
+      }
+      return []
+    } finally {
+      if (isCurrentSubdivisionOptions(token)) {
+        subdivisionOptionsLoading.value = false
+      }
+    }
+  }
+
+  async function multiAngleSubdivideCurrent(angles: TreeSubdivisionOption[]) {
+    if (!tree.value || !currentNodeId.value || angles.length === 0) return
+    const treeId = tree.value.id
+    const nodeId = currentNodeId.value
+
+    await startStream(nodeId, (ticket, handlers) => streamTreeMultiAngleSubdivide(
+      ticket,
+      treeId,
+      nodeId,
+      angles,
+      handlers,
+    ))
+  }
+
   async function firstPrinciplesCurrent() {
     if (!tree.value || !currentNodeId.value) return
     const treeId = tree.value.id
@@ -204,6 +250,8 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     loading.value = false
     streamingNodeId.value = null
     streamingText.value = ''
+    subdivisionOptionsLoading.value = false
+    subdivisionOptionsError.value = ''
   }
 
   function clearTreeState() {
@@ -232,6 +280,15 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
 
   function isCurrentSelection(token: number) {
     return token === selectionToken
+  }
+
+  function nextSubdivisionOptionsToken() {
+    subdivisionOptionsToken += 1
+    return subdivisionOptionsToken
+  }
+
+  function isCurrentSubdivisionOptions(token: number) {
+    return token === subdivisionOptionsToken
   }
 
   async function startStream(nodeId: string, start: StreamStarter) {
@@ -371,6 +428,8 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     streamingText,
     loading,
     error,
+    subdivisionOptionsLoading,
+    subdivisionOptionsError,
     panX,
     panY,
     zoom,
@@ -380,6 +439,8 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     toggleCollapsed,
     sendMessage,
     subdivideCurrent,
+    loadSubdivisionOptionsCurrent,
+    multiAngleSubdivideCurrent,
     firstPrinciplesCurrent,
     generateQuizCurrent,
     generateFlashcardsCurrent,

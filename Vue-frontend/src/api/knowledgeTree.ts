@@ -3,6 +3,8 @@ import type {
   KnowledgeNode,
   KnowledgeTreeResponse,
   TreeMessage,
+  TreeSubdivisionOption,
+  TreeSubdivisionOptionsResponse,
   TreeSseHandlers,
 } from '@/types/knowledgeTree'
 
@@ -20,6 +22,17 @@ export function updateKnowledgeNode(nodeId: string, data: Partial<KnowledgeNode>
 
 export function getKnowledgeNodeMessages(nodeId: string) {
   return request.get<any, { data: TreeMessage[] }>(`/knowledge-tree/nodes/${nodeId}/messages`)
+}
+
+export function getTreeSubdivisionOptions(
+  ticket: string,
+  treeId: string,
+  nodeId: string,
+) {
+  return request.get<any, { data: TreeSubdivisionOptionsResponse }>(
+    `${PYTHON_AI_BASE}/api/ai/tree/${treeId}/nodes/${nodeId}/subdivision-options`,
+    { params: { ticket } },
+  )
 }
 
 export function streamTreeExplain(
@@ -46,6 +59,20 @@ export function streamTreeSubdivide(
   return createTreeSse(
     `/api/ai/tree/${treeId}/nodes/${nodeId}/subdivide`,
     { ticket, angle },
+    handlers,
+  )
+}
+
+export function streamTreeMultiAngleSubdivide(
+  ticket: string,
+  treeId: string,
+  nodeId: string,
+  angles: TreeSubdivisionOption[],
+  handlers: TreeSseHandlers,
+): EventSource {
+  return createTreeSse(
+    `/api/ai/tree/${treeId}/nodes/${nodeId}/multi-angle-subdivide`,
+    { ticket, angles: JSON.stringify(angles) },
     handlers,
   )
 }

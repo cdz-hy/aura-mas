@@ -58,6 +58,19 @@ export interface TreeGeneratedResource {
   title: string
 }
 
+export interface TreeSubdivisionOption {
+  angle: string
+  label: string
+  rationale: string
+}
+
+export interface TreeSubdivisionOptionsResponse {
+  tree_id?: string
+  node_id: string
+  options: TreeSubdivisionOption[]
+  search_results?: unknown[]
+}
+
 export interface TreeFlashcard {
   question: string
   answer: string

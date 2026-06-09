@@ -3,10 +3,12 @@ import { createPinia, setActivePinia } from 'pinia'
 import { issueTicket } from '@/api/auth'
 import {
   ensureKnowledgeTree,
+  getTreeSubdivisionOptions,
   getKnowledgeNodeMessages,
   streamTreeExplain,
   streamTreeFlashcards,
   streamTreeFirstPrinciples,
+  streamTreeMultiAngleSubdivide,
   streamTreeQuiz,
   streamTreeSubdivide,
   updateKnowledgeNode,
@@ -21,11 +23,13 @@ vi.mock('@/api/auth', () => ({
 vi.mock('@/api/knowledgeTree', () => ({
   ensureKnowledgeTree: vi.fn(),
   getKnowledgeTree: vi.fn(),
+  getTreeSubdivisionOptions: vi.fn(),
   updateKnowledgeNode: vi.fn(),
   getKnowledgeNodeMessages: vi.fn(),
   streamTreeExplain: vi.fn(),
   streamTreeSubdivide: vi.fn(),
   streamTreeFirstPrinciples: vi.fn(),
+  streamTreeMultiAngleSubdivide: vi.fn(),
   streamTreeQuiz: vi.fn(),
   streamTreeFlashcards: vi.fn(),
 }))
@@ -329,6 +333,80 @@ describe('useKnowledgeTreeStore', () => {
       42,
       expect.any(Object),
     )
+  })
+
+  it('loads subdivision options for the current node with a ticket', async () => {
+    vi.mocked(getTreeSubdivisionOptions).mockResolvedValueOnce({
+      data: {
+        node_id: 'node_root',
+        options: [{ angle: 'by_concept', label: '按概念拆', rationale: '先拆概念' }],
+      },
+    })
+    const store = useKnowledgeTreeStore()
+    await store.loadByPlan(42)
+
+    const options = await store.loadSubdivisionOptionsCurrent()
+
+    expect(issueTicket).toHaveBeenCalled()
+    expect(getTreeSubdivisionOptions).toHaveBeenCalledWith('ticket_1', 'tree_1', 'node_root')
+    expect(options).toEqual([{ angle: 'by_concept', label: '按概念拆', rationale: '先拆概念' }])
+    expect(store.subdivisionOptionsLoading).toBe(false)
+    expect(store.subdivisionOptionsError).toBe('')
+  })
+
+  it('ignores stale subdivision options when selection changes while loading', async () => {
+    const pendingOptions = deferred<{
+      data: {
+        node_id: string
+        options: { angle: string; label: string; rationale: string }[]
+      }
+    }>()
+    vi.mocked(getTreeSubdivisionOptions).mockReturnValueOnce(pendingOptions.promise)
+    vi.mocked(getKnowledgeNodeMessages).mockResolvedValue({ data: [] })
+
+    const store = useKnowledgeTreeStore()
+    await store.loadByPlan(42)
+    const optionsPromise = store.loadSubdivisionOptionsCurrent()
+    await store.selectNode('node_child')
+    pendingOptions.resolve({
+      data: {
+        node_id: 'node_root',
+        options: [{ angle: 'stale', label: '过期角度', rationale: '不应使用' }],
+      },
+    })
+
+    expect(await optionsPromise).toEqual([])
+    expect(store.currentNodeId).toBe('node_child')
+    expect(store.subdivisionOptionsError).toBe('')
+  })
+
+  it('starts multi-angle split stream and merges created nodes', async () => {
+    const source = new FakeEventSource() as unknown as EventSource
+    let handlers: TreeSseHandlers | undefined
+    vi.mocked(streamTreeMultiAngleSubdivide).mockImplementation((_ticket, _treeId, _nodeId, _angles, h) => {
+      handlers = h
+      return source
+    })
+    const store = useKnowledgeTreeStore()
+    await store.loadByPlan(42)
+
+    await store.multiAngleSubdivideCurrent([
+      { angle: 'by_concept', label: '按概念拆', rationale: '先拆概念' },
+    ])
+    handlers?.onNodes?.([
+      { id: 'group_1', treeId: 'tree_1', parentId: 'node_root', title: '按概念拆' },
+    ])
+    handlers?.onDone?.()
+
+    expect(streamTreeMultiAngleSubdivide).toHaveBeenCalledWith(
+      'ticket_1',
+      'tree_1',
+      'node_root',
+      [{ angle: 'by_concept', label: '按概念拆', rationale: '先拆概念' }],
+      expect.any(Object),
+    )
+    expect(store.nodes.some(node => node.id === 'group_1')).toBe(true)
+    expect(store.loading).toBe(false)
   })
 
   it('ignores stale callbacks from an old stream after a newer stream starts', async () => {
