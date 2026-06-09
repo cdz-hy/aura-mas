@@ -80,6 +80,45 @@ function restoreLatex(html: string, placeholders: Map<string, string>): string {
   return html
 }
 
+// 保护完整的 Mermaid 块，防止 marked 解析破坏
+function protectMermaid(md: string): { text: string; placeholders: Map<string, string> } {
+  const placeholders = new Map<string, string>()
+  let counter = 0
+
+  function replacer(match: string, code: string): string {
+    const key = `%%MERMAID_${counter++}%%`
+    placeholders.set(key, code)
+    return key
+  }
+
+  let text = md
+  // 只保护完整的 mermaid 块（已闭合）
+  text = text.replace(/```mermaid\s*\n([\s\S]*?)```/g, replacer)
+
+  return { text, placeholders }
+}
+
+// 将 Mermaid 占位符还原为图表挂载容器
+function restoreMermaid(html: string, placeholders: Map<string, string>): string {
+  for (const [key, code] of Array.from(placeholders.entries())) {
+    const encoded = encodeURIComponent(code.trim())
+    // 渲染为一个包裹了原始代码的预留占位 div，等待前端组件懒加载 mermaid 渲染
+    const wrapper = `<div class="gv-mermaid-wrapper" data-mermaid-code="${encoded}">
+      <div class="flex items-center justify-center p-8 bg-navy-50/50 rounded-xl border border-navy-100/50 animate-pulse">
+        <span class="text-sm text-navy-400">正在渲染图表...</span>
+      </div>
+    </div>`
+    
+    const pRegex = new RegExp(`<p>\\s*${key}\\s*</p>`, 'g')
+    if (pRegex.test(html)) {
+      html = html.replace(pRegex, wrapper)
+    } else {
+      html = html.replace(key, wrapper)
+    }
+  }
+  return html
+}
+
 // 处理流式输出中的不完整 LaTeX（等待更多内容）
 function stripIncompleteLatex(md: string): string {
   let i = 0
@@ -284,10 +323,13 @@ export function parseMarkdown(md: string): string {
   citations.forEach(c => citMap.set(c.id, { url: c.url, title: c.title }))
 
   // 3. 保护 LaTeX 公式（公式内部的内容包括 \n、\r、\t 等将保持原样，免受外部替换和 marked 影响）
-  const { text, placeholders } = protectLatex(cleanedImage)
+  const latexProt = protectLatex(cleanedImage)
+  
+  // 3.5 保护完整闭合的 Mermaid 图表代码块
+  const mermaidProt = protectMermaid(latexProt.text)
 
   // 4. 兜底处理外围文本的转义字符：将字面 \n（反斜杠+n）转为实际换行
-  let fixed = text.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+  let fixed = mermaidProt.text.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
 
   // 5. 替换正文中的引用标识 [1]、[page1] 为交互式的 HTML Span
   // 仅匹配不在感叹号后面、且不紧跟 ( 的引用标识，防止破坏图片和正常 markdown 链接
@@ -304,8 +346,13 @@ export function parseMarkdown(md: string): string {
   let html = marked.parse(fixed) as string
 
   // 7. 还原 LaTeX 为 KaTeX HTML
-  if (placeholders.size > 0) {
-    html = restoreLatex(html, placeholders)
+  if (latexProt.placeholders.size > 0) {
+    html = restoreLatex(html, latexProt.placeholders)
+  }
+
+  // 7.5 还原 Mermaid 占位符为挂载容器
+  if (mermaidProt.placeholders.size > 0) {
+    html = restoreMermaid(html, mermaidProt.placeholders)
   }
 
   // 8. 处理图片：防防盗链 + 加载失败降级

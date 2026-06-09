@@ -1224,6 +1224,289 @@ const renderedResourceContent = computed(() => {
   return renderMd(content)
 })
 
+// === Mermaid 图表渲染 ===
+async function renderMermaidInResource() {
+  await nextTick()
+  const containers = document.querySelectorAll('.markdown-body')
+  for (const container of containers) {
+    const unrendered = container.querySelectorAll('.gv-mermaid-wrapper:not([data-rendered="true"]):not([data-rendering="true"])')
+    if (unrendered.length === 0) continue
+
+    unrendered.forEach(el => el.setAttribute('data-rendering', 'true'))
+
+    try {
+      const mermaid = (await import('mermaid')).default
+      if (!(window as any).__mermaid_initialized__) {
+        mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' })
+        ;(window as any).__mermaid_initialized__ = true
+      }
+
+      for (const el of Array.from(unrendered)) {
+        const codeBase64 = el.getAttribute('data-mermaid-code')
+        if (!codeBase64) continue
+
+        try {
+          const rawCode = decodeURIComponent(codeBase64)
+          const normalizedCode = rawCode
+            .replace(/[    　]/g, ' ')
+            .replace(/[​‌‍﻿]/g, '')
+
+          const id = 'mermaid-' + Math.random().toString(36).substr(2, 9)
+          const { svg } = await mermaid.render(id, normalizedCode)
+
+          if (el.getAttribute('data-mermaid-code') !== codeBase64) continue
+
+          // 构建带工具栏和缩放平移的容器
+          const uid = Math.random().toString(36).substr(2, 6)
+          el.innerHTML = `
+            <div class="mermaid-viewer" data-uid="${uid}" style="position:relative;overflow:hidden;border-radius:12px;border:1px solid rgba(26,40,71,0.08);background:#fafbfc;">
+              <div class="mermaid-toolbar" style="position:absolute;top:8px;right:8px;z-index:10;display:flex;gap:4px;opacity:0;transition:opacity 0.2s;">
+                <button class="mermaid-zoom-in" title="放大" style="width:28px;height:28px;border-radius:6px;border:1px solid rgba(26,40,71,0.12);background:rgba(255,255,255,0.9);backdrop-filter:blur(8px);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;color:#34508e;">+</button>
+                <button class="mermaid-zoom-out" title="缩小" style="width:28px;height:28px;border-radius:6px;border:1px solid rgba(26,40,71,0.12);background:rgba(255,255,255,0.9);backdrop-filter:blur(8px);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;color:#34508e;">-</button>
+                <button class="mermaid-reset" title="重置" style="width:28px;height:28px;border-radius:6px;border:1px solid rgba(26,40,71,0.12);background:rgba(255,255,255,0.9);backdrop-filter:blur(8px);cursor:pointer;display:flex;align-items:center;justify-content:center;color:#34508e;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
+                <div class="mermaid-export-dropdown" style="position:relative;">
+                  <button class="mermaid-export-btn" title="导出图片" style="width:28px;height:28px;border-radius:6px;border:1px solid rgba(26,40,71,0.12);background:rgba(255,255,255,0.9);backdrop-filter:blur(8px);cursor:pointer;display:flex;align-items:center;justify-content:center;color:#34508e;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  </button>
+                  <div class="mermaid-export-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:white;border-radius:8px;border:1px solid rgba(26,40,71,0.12);box-shadow:0 4px 12px rgba(0,0,0,0.1);overflow:hidden;min-width:90px;z-index:20;">
+                    <button class="mermaid-export-png" style="width:100%;padding:6px 12px;text-align:left;font-size:12px;color:#34508e;background:none;border:none;cursor:pointer;font-family:inherit;" onmouseover="this.style.background='#f0f3f9'" onmouseout="this.style.background='none'">导出 PNG</button>
+                    <button class="mermaid-export-svg" style="width:100%;padding:6px 12px;text-align:left;font-size:12px;color:#34508e;background:none;border:none;cursor:pointer;font-family:inherit;" onmouseover="this.style.background='#f0f3f9'" onmouseout="this.style.background='none'">导出 SVG</button>
+                  </div>
+                </div>
+              </div>
+              <div class="mermaid-viewport" style="transform-origin:0 0;cursor:grab;transition:none;padding:16px;">
+                ${svg}
+              </div>
+            </div>
+          `
+          el.setAttribute('data-rendered', 'true')
+          el.removeAttribute('data-rendering')
+          el.classList.add('stream-fade-in')
+
+          // 初始化缩放平移交互并居中
+          _initMermaidInteraction(el, uid, true)
+        } catch (err: any) {
+          if (el.getAttribute('data-mermaid-code') === codeBase64) {
+            console.error('Mermaid rendering error:', err)
+            el.innerHTML = `
+              <div class="flex flex-col p-4 bg-red-50 rounded-xl border border-red-100">
+                <span class="text-sm font-semibold text-red-600 mb-2">图表渲染失败</span>
+                <pre class="text-xs text-red-500 overflow-x-auto p-2 bg-white rounded border border-red-50/50">${err.message || String(err)}</pre>
+              </div>
+            `
+            el.setAttribute('data-rendered', 'true')
+            el.removeAttribute('data-rendering')
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load Mermaid module:', err)
+      unrendered.forEach(el => el.removeAttribute('data-rendering'))
+    }
+  }
+}
+
+function _initMermaidInteraction(wrapper: Element, uid: string, center = false) {
+  const viewer = wrapper.querySelector(`.mermaid-viewer[data-uid="${uid}"]`) as HTMLElement
+  if (!viewer) return
+  const viewport = viewer.querySelector('.mermaid-viewport') as HTMLElement
+  const toolbar = viewer.querySelector('.mermaid-toolbar') as HTMLElement
+  if (!viewport || !toolbar) return
+
+  let scale = 1
+  let panX = 0
+  let panY = 0
+  let isDragging = false
+  let startX = 0
+  let startY = 0
+
+  function applyTransform() {
+    viewport.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`
+  }
+
+  viewer.addEventListener('mouseenter', () => { toolbar.style.opacity = '1' })
+  viewer.addEventListener('mouseleave', () => { toolbar.style.opacity = '0' })
+
+  viewer.addEventListener('wheel', (e: WheelEvent) => {
+    e.preventDefault()
+    const rect = viewer.getBoundingClientRect()
+    const mouseX = e.clientX - rect.left
+    const mouseY = e.clientY - rect.top
+    const oldScale = scale
+    scale = Math.max(0.2, Math.min(5, scale * (e.deltaY > 0 ? 0.9 : 1.1)))
+    panX = mouseX - (mouseX - panX) * (scale / oldScale)
+    panY = mouseY - (mouseY - panY) * (scale / oldScale)
+    applyTransform()
+  }, { passive: false })
+
+  viewport.addEventListener('mousedown', (e: MouseEvent) => {
+    if (e.button !== 0) return
+    isDragging = true
+    startX = e.clientX - panX
+    startY = e.clientY - panY
+    viewport.style.cursor = 'grabbing'
+    e.preventDefault()
+  })
+
+  const onMove = (e: MouseEvent) => {
+    if (!isDragging) return
+    panX = e.clientX - startX
+    panY = e.clientY - startY
+    applyTransform()
+  }
+  const onUp = () => {
+    if (isDragging) { isDragging = false; viewport.style.cursor = 'grab' }
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+
+  viewer.querySelector('.mermaid-zoom-in')?.addEventListener('click', (e) => {
+    e.stopPropagation(); scale = Math.min(5, scale * 1.25); applyTransform()
+  })
+  viewer.querySelector('.mermaid-zoom-out')?.addEventListener('click', (e) => {
+    e.stopPropagation(); scale = Math.max(0.2, scale * 0.8); applyTransform()
+  })
+  viewer.querySelector('.mermaid-reset')?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    scale = 1; panX = 0; panY = 0
+    // 居中显示
+    const vw = viewer.clientWidth
+    const vh = viewer.clientHeight
+    const sw = viewport.scrollWidth
+    const sh = viewport.scrollHeight
+    panX = Math.max(0, (vw - sw) / 2)
+    panY = Math.max(0, (vh - sh) / 2)
+    applyTransform()
+  })
+
+  // 导出下拉菜单
+  const exportBtn = viewer.querySelector('.mermaid-export-btn') as HTMLElement
+  const exportMenu = viewer.querySelector('.mermaid-export-menu') as HTMLElement
+  if (exportBtn && exportMenu) {
+    exportBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      exportMenu.style.display = exportMenu.style.display === 'none' ? 'block' : 'none'
+    })
+    // 点击外部关闭
+    const closeMenu = (e: MouseEvent) => {
+      if (!exportMenu.contains(e.target as Node) && e.target !== exportBtn) {
+        exportMenu.style.display = 'none'
+      }
+    }
+    document.addEventListener('click', closeMenu)
+  }
+
+  async function _doExport(format: 'png' | 'svg') {
+    const svgEl = viewport.querySelector('svg')
+    if (!svgEl) return
+    exportMenu.style.display = 'none'
+
+    try {
+      const cloned = svgEl.cloneNode(true) as SVGSVGElement
+      cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+      cloned.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+
+      const bbox = svgEl.getBoundingClientRect()
+      const w = Math.ceil(bbox.width) || parseInt(cloned.getAttribute('width') || '800')
+      const h = Math.ceil(bbox.height) || parseInt(cloned.getAttribute('height') || '600')
+      cloned.setAttribute('width', String(w))
+      cloned.setAttribute('height', String(h))
+      cloned.removeAttribute('viewBox')
+
+      // 内嵌字体 CSS 到 SVG（避免外部请求污染 canvas）
+      let fontCss = ''
+      try {
+        const resp = await fetch('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Noto+Sans+SC:wght@400;600&display=swap')
+        fontCss = await resp.text()
+        // 将 url(...) 中的相对路径转为绝对路径
+        fontCss = fontCss.replace(/url\((\/[^)]+)\)/g, 'url(https://fonts.gstatic.com$1)')
+      } catch { /* 字体加载失败，降级 */ }
+
+      // 注入 <style> 到 SVG
+      const styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style')
+      styleEl.textContent = fontCss + `
+        .node rect, .node circle, .node polygon, .node ellipse { shape-rendering: crispEdges; }
+        foreignObject div { display: inline-block; }
+      `
+      cloned.insertBefore(styleEl, cloned.firstChild)
+
+      // 外层添加白色背景
+      const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      bgRect.setAttribute('width', '100%')
+      bgRect.setAttribute('height', '100%')
+      bgRect.setAttribute('fill', '#ffffff')
+      cloned.insertBefore(bgRect, cloned.firstChild)
+
+      const svgData = new XMLSerializer().serializeToString(cloned)
+
+      if (format === 'svg') {
+        const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url; a.download = 'mermaid-diagram.svg'
+        document.body.appendChild(a); a.click(); document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        return
+      }
+
+      // PNG: data URL → Image → Canvas
+      const svgBase64 = btoa(unescape(encodeURIComponent(svgData)))
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        const pad = 24
+        canvas.width = img.naturalWidth + pad * 2
+        canvas.height = img.naturalHeight + pad * 2
+        const ctx = canvas.getContext('2d')!
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(img, pad, pad)
+        try {
+          canvas.toBlob((blob) => {
+            if (blob) {
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url; a.download = 'mermaid-diagram.png'
+              document.body.appendChild(a); a.click(); document.body.removeChild(a)
+              URL.revokeObjectURL(url)
+            }
+          }, 'image/png')
+        } catch (e) { console.error('Canvas export failed:', e) }
+      }
+      img.onerror = () => { console.error('SVG image load failed') }
+      img.src = 'data:image/svg+xml;base64,' + svgBase64
+    } catch (err) { console.error('导出图表失败:', err) }
+  }
+
+  viewer.querySelector('.mermaid-export-png')?.addEventListener('click', (e) => {
+    e.stopPropagation(); _doExport('png')
+  })
+  viewer.querySelector('.mermaid-export-svg')?.addEventListener('click', (e) => {
+    e.stopPropagation(); _doExport('svg')
+  })
+
+  // 初始居中
+  if (center) {
+    requestAnimationFrame(() => {
+      const vw = viewer.clientWidth
+      const vh = viewer.clientHeight
+      const sw = viewport.scrollWidth
+      const sh = viewport.scrollHeight
+      panX = Math.max(0, (vw - sw) / 2)
+      panY = Math.max(0, (vh - sh) / 2)
+      applyTransform()
+    })
+  }
+}
+
+watch(() => selectedResource.value?.moduleData?.content, () => {
+  renderMermaidInResource()
+})
+
+onMounted(() => {
+  renderMermaidInResource()
+})
+
 // === 引用源（Citation）解析与交互逻辑 ===
 const hoveredCitation = ref<{ id: string; title: string; url: string; domain: string } | null>(null)
 const popoverX = ref(0)
