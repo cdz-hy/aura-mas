@@ -81,6 +81,73 @@ class KnowledgeTreeAiService:
             logger.exception("subdivide_node failed")
             yield {"type": "error", "content": str(exc)}
 
+    async def suggest_subdivision_options(
+        self,
+        user_id: int,
+        tree_id: str,
+        node_id: str,
+    ) -> Dict[str, Any]:
+        search_results, context_chunks = await self._search("知识点拆分角度")
+        result = await self._chat_json([
+            {"role": "system", "content": self._subdivision_options_json_system_prompt()},
+            {"role": "user", "content": self._subdivision_options_prompt(node_id, context_chunks)},
+        ])
+        return {
+            "tree_id": tree_id,
+            "node_id": node_id,
+            "options": self._normalize_subdivision_options(result),
+            "search_results": search_results,
+        }
+
+    async def multi_angle_subdivide(
+        self,
+        user_id: int,
+        tree_id: str,
+        node_id: str,
+        angles: List[Dict[str, str]],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        yield {"type": "start", "node_id": node_id}
+        try:
+            normalized_angles = self._normalize_requested_angles(angles)
+            if not normalized_angles:
+                yield {"type": "error", "content": "请选择至少一个拆分角度"}
+                return
+
+            search_results, context_chunks = await self._search(" ".join(a["label"] for a in normalized_angles))
+            yield {"type": "search_results", "data": search_results}
+
+            result = await self._chat_json([
+                {"role": "system", "content": self._multi_angle_json_system_prompt()},
+                {"role": "user", "content": self._multi_angle_prompt(node_id, normalized_angles, context_chunks)},
+            ])
+            groups = self._normalize_angle_groups(result, normalized_angles)
+            nodes: List[Dict[str, Any]] = []
+            for group_index, group in enumerate(groups):
+                group_node = self.java_client.create_tree_node({
+                    "treeId": tree_id,
+                    "parentId": node_id,
+                    "title": group["label"],
+                    "summary": group.get("rationale", ""),
+                    "content": "",
+                    "status": "pending",
+                    "importance": 2,
+                    "relevanceScore": 2,
+                    "difficulty": 2,
+                    "sortOrder": group_index,
+                    "collapsed": False,
+                })
+                nodes.append(group_node)
+                group_node_id = str(group_node.get("id"))
+                for child_index, child in enumerate(group["children"]):
+                    payload = self._child_payload(tree_id, group_node_id, child, child_index)
+                    nodes.append(self.java_client.create_tree_node(payload))
+
+            yield {"type": "nodes_created", "nodes": nodes}
+            yield {"type": "done"}
+        except Exception as exc:
+            logger.exception("multi_angle_subdivide failed")
+            yield {"type": "error", "content": str(exc)}
+
     async def first_principles(
         self,
         user_id: int,
@@ -270,6 +337,88 @@ class KnowledgeTreeAiService:
         return [child for child in children if isinstance(child, dict)]
 
     @staticmethod
+    def _normalize_requested_angles(angles: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        normalized: List[Dict[str, str]] = []
+        for item in angles[:4]:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or item.get("angle") or "").strip()
+            angle = str(item.get("angle") or label).strip()
+            rationale = str(item.get("rationale") or "").strip()
+            if not label or not angle:
+                continue
+            normalized.append({
+                "angle": angle[:60],
+                "label": label[:40],
+                "rationale": rationale[:180],
+            })
+        return normalized
+
+    @staticmethod
+    def _normalize_subdivision_options(result: Any) -> List[Dict[str, str]]:
+        raw_options = result.get("options", []) if isinstance(result, dict) else []
+        normalized: List[Dict[str, str]] = []
+        for item in raw_options:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or item.get("title") or item.get("angle") or "").strip()
+            angle = str(item.get("angle") or label).strip()
+            rationale = str(item.get("rationale") or item.get("reason") or item.get("summary") or "").strip()
+            if not label or not angle:
+                continue
+            normalized.append({
+                "angle": angle[:60],
+                "label": label[:40],
+                "rationale": rationale[:180],
+            })
+            if len(normalized) >= 4:
+                break
+        if normalized:
+            return normalized
+        return [
+            {"angle": "按概念拆", "label": "按概念拆", "rationale": "把抽象概念拆成可逐个理解的知识点。"},
+            {"angle": "按学习顺序拆", "label": "按学习顺序拆", "rationale": "按先易后难的路径组织学习。"},
+            {"angle": "按应用场景拆", "label": "按应用场景拆", "rationale": "把知识放到实际使用场景中理解。"},
+        ]
+
+    def _normalize_angle_groups(
+        self,
+        result: Any,
+        requested_angles: List[Dict[str, str]],
+    ) -> List[Dict[str, Any]]:
+        raw_groups = result.get("groups", []) if isinstance(result, dict) else []
+        groups_by_angle = {}
+        for group in raw_groups:
+            if not isinstance(group, dict):
+                continue
+            key = str(group.get("angle") or group.get("label") or "").strip()
+            children = self._coerce_children({"children": group.get("children", [])})
+            if key and children:
+                groups_by_angle[key] = {
+                    "angle": key,
+                    "label": str(group.get("label") or key).strip()[:40],
+                    "rationale": str(group.get("rationale") or "").strip()[:180],
+                    "children": children,
+                }
+
+        normalized: List[Dict[str, Any]] = []
+        for requested in requested_angles:
+            group = groups_by_angle.get(requested["angle"]) or groups_by_angle.get(requested["label"])
+            if group:
+                normalized.append(group)
+                continue
+            normalized.append({
+                "angle": requested["angle"],
+                "label": requested["label"],
+                "rationale": requested.get("rationale", ""),
+                "children": [
+                    {"title": f"{requested['label']}要点 1", "summary": "从这个角度继续细化学习。"},
+                    {"title": f"{requested['label']}要点 2", "summary": "补足这个角度下的关键知识。"},
+                ],
+            })
+        return normalized
+
+    @staticmethod
     def _normalize_quiz_questions(raw_questions: Any) -> List[Dict[str, Any]]:
         if not isinstance(raw_questions, list):
             return []
@@ -421,6 +570,26 @@ class KnowledgeTreeAiService:
     def _first_principles_prompt(self, node_id: str, context_chunks: List[Dict[str, Any]]) -> str:
         return f"请为节点 {node_id} 提炼第一性原理子节点。\n资料：\n{self._context_text(context_chunks)}"
 
+    def _subdivision_options_prompt(self, node_id: str, context_chunks: List[Dict[str, Any]]) -> str:
+        return (
+            f"请为知识树节点 node_id={node_id} 推荐 3 个适合继续拆分的角度。"
+            "角度必须能生成并列的学习子节点，避免泛泛而谈。"
+            f"\n参考资料：\n{self._context_text(context_chunks)}"
+        )
+
+    def _multi_angle_prompt(
+        self,
+        node_id: str,
+        angles: List[Dict[str, str]],
+        context_chunks: List[Dict[str, Any]],
+    ) -> str:
+        return (
+            f"请把知识树节点 node_id={node_id} 按这些角度一次性拆开："
+            f"{json.dumps(angles, ensure_ascii=False)}。"
+            "每个角度先形成一个分组节点，再在分组下生成具体可学习子节点。"
+            f"\n参考资料：\n{self._context_text(context_chunks)}"
+        )
+
     def _quiz_prompt(self, node_id: str, plan_id: int, context_chunks: List[Dict[str, Any]]) -> str:
         return f"请为 plan_id={plan_id}, node_id={node_id} 生成 3 道测验题。\n资料：\n{self._context_text(context_chunks)}"
 
@@ -432,6 +601,24 @@ class KnowledgeTreeAiService:
         return (
             "你是知识树拆分助手。严格输出 JSON："
             "{\"children\":[{\"title\":\"...\",\"summary\":\"...\",\"importance\":1,\"difficulty\":1}]}"
+        )
+
+    @staticmethod
+    def _subdivision_options_json_system_prompt() -> str:
+        return (
+            "严格输出 JSON："
+            "{\"options\":[{\"angle\":\"stable_key\",\"label\":\"按概念拆\","
+            "\"rationale\":\"为什么这个角度适合当前节点\"}]}。"
+            "只返回 2 到 4 个拆分角度，不要返回 caution/先别拆。"
+        )
+
+    @staticmethod
+    def _multi_angle_json_system_prompt() -> str:
+        return (
+            "严格输出 JSON：{\"groups\":[{\"angle\":\"by_concept\",\"label\":\"按概念拆\","
+            "\"rationale\":\"拆分理由\",\"children\":[{\"title\":\"子知识点\",\"summary\":\"说明\","
+            "\"importance\":3,\"difficulty\":2}]}]}。"
+            "每个 group 对应用户给定的一个角度，每组 children 生成 2 到 5 个。"
         )
 
     @staticmethod

@@ -148,6 +148,81 @@ async def _test_subdivide_node_creates_children():
     assert events[-1]["type"] == "done"
 
 
+def test_suggest_subdivision_options_normalizes_llm_output():
+    asyncio.run(_test_suggest_subdivision_options_normalizes_llm_output())
+
+
+async def _test_suggest_subdivision_options_normalizes_llm_output():
+    client = FakeJavaClient()
+    service = KnowledgeTreeAiService(java_client=client, retriever=FakeRetriever(), llm=FakeJsonLlm({
+        "options": [
+            {"angle": "by_concept", "label": "按概念拆", "rationale": "先把核心概念分开"},
+            {"angle": "by_flow", "label": "按流程拆", "rationale": "再按学习顺序推进"},
+            {"label": "按错误拆", "rationale": "覆盖常见误区"},
+            {"angle": "", "label": "", "rationale": "空项应被过滤"},
+        ],
+        "caution": {"label": "先别拆", "rationale": "Aura UI 不使用这个分支"},
+    }))
+
+    result = await service.suggest_subdivision_options(
+        user_id=7,
+        tree_id="tree_a",
+        node_id="node_a",
+    )
+
+    assert result["node_id"] == "node_a"
+    assert [option["label"] for option in result["options"]] == ["按概念拆", "按流程拆", "按错误拆"]
+    assert [option["angle"] for option in result["options"]] == ["by_concept", "by_flow", "按错误拆"]
+    assert all("caution" not in option for option in result["options"])
+
+
+def test_multi_angle_subdivide_creates_group_nodes_and_children():
+    asyncio.run(_test_multi_angle_subdivide_creates_group_nodes_and_children())
+
+
+async def _test_multi_angle_subdivide_creates_group_nodes_and_children():
+    client = FakeJavaClient()
+    service = KnowledgeTreeAiService(java_client=client, retriever=FakeRetriever(), llm=FakeJsonLlm({
+        "groups": [
+            {
+                "angle": "by_concept",
+                "label": "按概念拆",
+                "children": [
+                    {"title": "变量是什么", "summary": "理解变量的定义"},
+                    {"title": "类型是什么", "summary": "理解类型的约束"},
+                ],
+            },
+            {
+                "angle": "by_flow",
+                "label": "按流程拆",
+                "children": [
+                    {"title": "赋值", "summary": "把值绑定到变量"},
+                ],
+            },
+        ],
+    }))
+
+    events = [event async for event in service.multi_angle_subdivide(
+        user_id=7,
+        tree_id="tree_a",
+        node_id="node_parent",
+        angles=[
+            {"angle": "by_concept", "label": "按概念拆", "rationale": "概念清楚"},
+            {"angle": "by_flow", "label": "按流程拆", "rationale": "按顺序学"},
+        ],
+    )]
+
+    created = client.created_nodes
+    assert created[0]["title"] == "按概念拆"
+    assert created[0]["parentId"] == "node_parent"
+    assert created[1]["title"] == "变量是什么"
+    assert created[1]["parentId"] == created[0]["id"]
+    assert created[3]["title"] == "按流程拆"
+    assert created[3]["parentId"] == "node_parent"
+    assert any(event["type"] == "nodes_created" for event in events)
+    assert events[-1]["type"] == "done"
+
+
 def test_first_principles_creates_children_and_finishes_with_done():
     asyncio.run(_test_first_principles_creates_children_and_finishes_with_done())
 

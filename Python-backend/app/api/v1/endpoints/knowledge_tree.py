@@ -1,3 +1,4 @@
+import json
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Query
@@ -77,6 +78,50 @@ async def subdivide_node(
     service = get_knowledge_tree_ai_service()
     return StreamingResponse(
         _event_stream(service.subdivide_node(user_id=user_id, tree_id=tree_id, node_id=node_id, angle=angle)),
+        media_type="text/event-stream",
+    )
+
+
+@router.get("/tree/{tree_id}/nodes/{node_id}/subdivision-options")
+async def subdivision_options(
+    tree_id: str,
+    node_id: str,
+    ticket: str = Query(...),
+):
+    user_id = _user_id_from_ticket(ticket)
+    _verify_node_access(tree_id, node_id, user_id)
+    service = get_knowledge_tree_ai_service()
+    return await service.suggest_subdivision_options(
+        user_id=user_id,
+        tree_id=tree_id,
+        node_id=node_id,
+    )
+
+
+@router.get("/tree/{tree_id}/nodes/{node_id}/multi-angle-subdivide")
+async def multi_angle_subdivide_node(
+    tree_id: str,
+    node_id: str,
+    ticket: str = Query(...),
+    angles: str = Query("[]"),
+):
+    user_id = _user_id_from_ticket(ticket)
+    _verify_node_access(tree_id, node_id, user_id)
+    try:
+        parsed_angles = json.loads(angles)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="invalid angles json") from exc
+    if not isinstance(parsed_angles, list):
+        raise HTTPException(status_code=400, detail="angles must be a list")
+
+    service = get_knowledge_tree_ai_service()
+    return StreamingResponse(
+        _event_stream(service.multi_angle_subdivide(
+            user_id=user_id,
+            tree_id=tree_id,
+            node_id=node_id,
+            angles=parsed_angles,
+        )),
         media_type="text/event-stream",
     )
 

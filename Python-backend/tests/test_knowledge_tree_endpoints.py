@@ -33,6 +33,13 @@ class FakeJavaClient:
 
 
 class FakeService:
+    async def suggest_subdivision_options(self, **kwargs):
+        return {
+            "tree_id": kwargs["tree_id"],
+            "node_id": kwargs["node_id"],
+            "options": [{"angle": "by_concept", "label": "按概念拆", "rationale": "先拆概念"}],
+        }
+
     async def explain_node(self, **kwargs):
         yield {"type": "start", "node_id": kwargs["node_id"]}
         yield {"type": "stream_text", "content": "你好"}
@@ -41,6 +48,17 @@ class FakeService:
     async def subdivide_node(self, **kwargs):
         yield {"type": "start", "node_id": kwargs["node_id"]}
         yield {"type": "nodes_created", "nodes": [{"id": "node_1"}]}
+        yield {"type": "done"}
+
+    async def multi_angle_subdivide(self, **kwargs):
+        yield {"type": "start", "node_id": kwargs["node_id"]}
+        yield {
+            "type": "nodes_created",
+            "nodes": [
+                {"id": "group_1", "title": "按概念拆", "parentId": kwargs["node_id"]},
+                {"id": "child_1", "title": "变量是什么", "parentId": "group_1"},
+            ],
+        }
         yield {"type": "done"}
 
     async def first_principles(self, **kwargs):
@@ -128,6 +146,43 @@ def test_subdivide_endpoint_streams_nodes_created(monkeypatch):
     payloads = parse_sse_lines(response.text)
     assert response.status_code == 200
     assert any(e["type"] == "nodes_created" for e in payloads)
+    assert payloads[-1]["type"] == "done"
+
+
+def test_subdivision_options_endpoint_validates_ticket_and_node(monkeypatch):
+    client, fake_java = make_client(monkeypatch)
+
+    response = client.get(
+        "/api/ai/tree/tree_a/nodes/node_a/subdivision-options",
+        params={"ticket": "ticket_a"},
+    )
+
+    assert response.status_code == 200
+    assert fake_java.validated == ["ticket_a"]
+    assert fake_java.verified == [("tree_a", "node_a", 7)]
+    assert response.json()["options"] == [
+        {"angle": "by_concept", "label": "按概念拆", "rationale": "先拆概念"}
+    ]
+
+
+def test_multi_angle_endpoint_streams_grouped_nodes(monkeypatch):
+    client, fake_java = make_client(monkeypatch)
+
+    response = client.get(
+        "/api/ai/tree/tree_a/nodes/node_a/multi-angle-subdivide",
+        params={
+            "ticket": "ticket_a",
+            "angles": json.dumps([
+                {"angle": "by_concept", "label": "按概念拆", "rationale": "先拆概念"}
+            ], ensure_ascii=False),
+        },
+    )
+
+    payloads = parse_sse_lines(response.text)
+    assert response.status_code == 200
+    assert fake_java.verified == [("tree_a", "node_a", 7)]
+    assert payloads[1]["type"] == "nodes_created"
+    assert payloads[1]["nodes"][0]["title"] == "按概念拆"
     assert payloads[-1]["type"] == "done"
 
 
