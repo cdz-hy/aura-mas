@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     JAVA_BACKEND_URL: str = "http://localhost:8080"
     JAVA_SERVICE_SECRET: str = "learning-system-internal-service-secret-2024"
 
+    # Redis 缓存设置
+    REDIS_URL: str = "redis://localhost:6379/0"
+
     # 应用基础设置
     DEBUG: bool = True
     PORT: int = 8000

@@ -603,6 +603,12 @@ def get_simple_answer_llm() -> MIMOClient:
                       thinking=THINKING_DISABLED)
 
 
+def get_note_format_llm() -> MIMOClient:
+    """笔记整理智能体 - pro 模型，较大输出空间（含批注标记 + 思维导图）"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=16384,
+                      thinking=THINKING_DISABLED)
+
+
 def get_rag_retriever_llm() -> MIMOClient:
     """RAG 检索智能体 - pro 模型，关闭思维链，只需生成检索词"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=1536,

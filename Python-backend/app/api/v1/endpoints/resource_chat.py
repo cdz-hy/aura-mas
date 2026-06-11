@@ -209,9 +209,9 @@ async def plan_chat(
     计划关联 AI 对话 - SSE 流式输出
     使用现有 learning_graph 的完整多智能体工作流
     """
-    # 验证 ticket
+    # 验证 ticket（同步调用，放到线程池）
     try:
-        ticket_info = java_client.validate_ticket(ticket)
+        ticket_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
@@ -240,10 +240,10 @@ async def plan_chat(
     logger.info(f"[计划对话] 用户 {user_id}, 计划 {plan_id}, 会话 {session_id}")
     logger.info(f"[计划对话] 消息: {message[:100]}")
 
-    # 获取用户画像
+    # 获取用户画像（同步调用，放到线程池）
     user_profile = {}
     try:
-        user_profile = java_client.get_user_profile(user_id)
+        user_profile = await asyncio.to_thread(java_client.get_user_profile, user_id)
         # 确保 learning_behavior 字段完整
         if "learning_behavior" in user_profile:
             user_profile["learning_behavior"] = ensure_learning_behavior_fields(
@@ -252,26 +252,23 @@ async def plan_chat(
     except Exception:
         pass
 
-    # 获取对话历史（按当前会话隔离，多取以支持压缩上下文）
+    # 获取对话历史（按当前会话隔离，多取以支持压缩上下文，同步调用放到线程池）
     chat_history = []
     raw_history = []
     try:
-        raw_history = java_client.get_dialogue_history(
-            user_id=user_id, plan_id=plan_id_int, session_id=session_id, limit=200
+        raw_history = await asyncio.to_thread(
+            java_client.get_dialogue_history, user_id, plan_id=plan_id_int, session_id=session_id, limit=200
         )
         # 使用压缩上下文构建 chat_history（压缩摘要 + context 之后的所有实际对话）
         chat_history = build_chat_history_with_context(raw_history)
     except Exception:
         pass
 
-    # 记录用户消息
+    # 记录用户消息（同步调用，放到线程池）
     try:
-        java_client.create_dialogue(
-            user_id=user_id,
-            session_id=session_id,
-            conversation_text=message,
-            dialogue_type="USER",
-            plan_id=plan_id_int,
+        await asyncio.to_thread(
+            java_client.create_dialogue,
+            user_id, session_id, message, "USER", plan_id_int,
             intent_type="plan_chat",
         )
     except Exception as e:
@@ -795,9 +792,9 @@ async def generate_single_resource(
     使用现有 learning_graph，以 generate_resource 意图进入，
     图会自动走: 主控 -> 任务分解(可选) -> RAG检索 -> 审查 -> 编排
     """
-    # 验证 ticket
+    # 验证 ticket（同步调用，放到线程池）
     try:
-        ticket_info = java_client.validate_ticket(ticket)
+        ticket_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
@@ -812,10 +809,10 @@ async def generate_single_resource(
     logger.info(f"[资源生成] 用户 {user_id}, 计划 {plan_id_int}, 模块 {module_id_int}")
     logger.info(f"[资源生成] 类型: {type}, 标题: {title}")
 
-    # 获取用户画像
+    # 获取用户画像（同步调用，放到线程池）
     user_profile = {}
     try:
-        user_profile = java_client.get_user_profile(user_id)
+        user_profile = await asyncio.to_thread(java_client.get_user_profile, user_id)
         # 确保 learning_behavior 字段完整
         if "learning_behavior" in user_profile:
             user_profile["learning_behavior"] = ensure_learning_behavior_fields(
@@ -824,11 +821,11 @@ async def generate_single_resource(
     except Exception:
         pass
 
-    # 获取该计划的对话历史作为上下文
+    # 获取该计划的对话历史作为上下文（同步调用，放到线程池）
     chat_history = []
     try:
-        history = java_client.get_dialogue_history(
-            user_id=user_id, plan_id=plan_id_int, limit=20
+        history = await asyncio.to_thread(
+            java_client.get_dialogue_history, user_id, plan_id=plan_id_int, limit=20
         )
         for h in history:
             chat_history.append({
@@ -1178,7 +1175,7 @@ async def submit_quiz(
     逐题批改，每题结果存入 quiz_record 表，通过 SSE 实时推送
     """
     try:
-        ticket_info = java_client.validate_ticket(ticket)
+        ticket_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
@@ -1195,9 +1192,9 @@ async def submit_quiz(
     except Exception:
         user_answers = {}
 
-    # 获取 quiz 资源数据
+    # 获取 quiz 资源数据（同步调用，放到线程池）
     try:
-        resource = java_client.get_resource_by_id(resource_id_int)
+        resource = await asyncio.to_thread(java_client.get_resource_by_id, resource_id_int)
     except Exception as e:
         return StreamingResponse(
             _error_stream(f"获取资源失败: {str(e)}"),
@@ -1439,7 +1436,7 @@ async def tutor_chat(
     针对用户当前点击的模块内容进行个性化辅导
     """
     try:
-        ticket_info = java_client.validate_ticket(ticket)
+        ticket_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
@@ -1456,10 +1453,11 @@ async def tutor_chat(
 
     logger.info(f"[智能辅导] 用户 {user_id}, 计划 {plan_id_int}, 资源 {resource_id_int}, 会话 {session_id}")
 
-    # 记录用户消息
+    # 记录用户消息（同步调用，放到线程池）
     try:
-        java_client.create_dialogue(
-            user_id=user_id,
+        await asyncio.to_thread(
+            java_client.create_dialogue,
+            user_id,
             session_id=session_id,
             conversation_text=message,
             dialogue_type="USER",
