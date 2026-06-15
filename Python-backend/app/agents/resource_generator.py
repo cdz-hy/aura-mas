@@ -57,6 +57,8 @@ def _generate_single_module(
     user_profile: Dict[str, Any],
     sse_callback=None,
     resource_id: int = 0,
+    user_id: int = 0,
+    task_id: int = None,
 ) -> Dict[str, Any]:
     """
     为单个模块执行搜索 + 内容生成流程
@@ -81,10 +83,9 @@ def _generate_single_module(
 
     # 用户画像风格提示
     behavior = user_profile.get("learning_behavior", {})
-
-    vv = behavior.get("visual_vs_verbal", 0)
-    si = behavior.get("sensing_vs_intuitive", 0)
-    sg = behavior.get("sequential_vs_global", 0)
+    vv = behavior.get("visual_vs_verbal", 0.0)
+    si = behavior.get("sensing_vs_intuitive", 0.0)
+    sg = behavior.get("sequential_vs_global", 0.0)
     
     # 1. 详细度与文本长度偏好
     if si < -0.3:
@@ -94,13 +95,17 @@ def _generate_single_module(
     else:
         detail_pref = "详细度高，需要输出较长篇幅的文本。提供丰富的理论说明与充实的实例分析，请放开字数限制，尽可能详尽地展开讲解。"
         
-    # 2. 图片使用偏好
-    if vv < -0.3:
-        image_pref = "强偏好视觉。必须积极从可用图片列表中挑选多张相关的真实图片嵌入内容中（强烈建议选用 2-3 张甚至更多合适图片，只要相关即可）"
+    # 2. 图片使用偏好 (Visual vs Verbal)
+    if vv <= -0.8:
+        image_pref = "极度偏好视觉学习。1. 必须积极从可用图片列表中挑选多张相关的真实图片嵌入内容中。2. 请极其频繁地自主生成能够提纲挈领的 Mermaid 各种图表（flowchart、sequenceDiagram等）来直观展现知识点逻辑。注意：必须确保内容有意义需要时才生成，严禁胡编乱造事实，必须基于提供的文本或网络资源生成，且必须严格遵循 Mermaid 语法。"
+    elif vv <= -0.4:
+        image_pref = "强偏好视觉。1. 必须积极挑选相关的真实图片嵌入内容中。2. 对于关键且复杂的概念，请较常地自主生成一些 Mermaid 图表（如 flowchart）来辅助说明。注意：必须有必要且有意义时才生成，严禁胡编乱造，必须基于检索资源生成，严格遵循 Mermaid 语法。"
+    elif vv < 0:
+        image_pref = "轻微偏好视觉。自然搭配真实图片。当内容极度复杂且确有必要时，偶尔可以选择性地自主生成少量的 Mermaid 流程图（flowchart）辅助说明。严禁胡编乱造，严格遵循 Mermaid 语法。"
     elif vv > 0.3:
-        image_pref = "强偏好文字。尽量少用图片（除非对理解核心概念不可或缺，最多插入 1 张最核心的图片，否则完全不用）"
+        image_pref = "强偏好纯文字与逻辑表述。尽量少用图片（最多插入 1 张最核心的图片）。严禁自主生成任何 Mermaid 图表。"
     else:
-        image_pref = "图文平衡。自然搭配图片，根据需要适量插入（1-2 张核心图片）"
+        image_pref = "图文平衡。自然搭配图片（1-2 张）。除非极度必要，否则不要自主生成 Mermaid 图表。"
         
     # 3. 结构偏好
     if sg < -0.3:
@@ -218,6 +223,7 @@ def _generate_single_module(
             logger.debug(f"  [ReAct] 观察:\n{observation[:300]}...")
 
         logger.info(f"  [资源生成] 模块{module_order} ReAct 搜索完成: {len(history_tracker.all_snippets)} 条片段, {len(history_tracker.extracted_pages)} 个完整网页")
+        record_from_mimo(llm, user_id, "resource_react_search", task_id)
 
     except Exception as e:
         import traceback
@@ -310,14 +316,14 @@ def _generate_single_module(
 
         # 图片处理（如果生成结果没有嵌入图片，附加在结果中）
         content_text = result.get("content", "")
-        if images and "![" not in content_text:
+        if images and "![" not in content_text and "<img" not in content_text:
             result["images"] = images[:3]
 
         result["module_order"] = module_order
         result["module_id"] = module_info.get("module_id", module_order)
 
         logger.info(f"  [资源生成] 模块{module_order} 生成完成: {result.get('title', '')}")
-        record_from_mimo(llm, 0, "resource_generation", None)
+        record_from_mimo(llm, user_id, "resource_generation", task_id)
 
         return result
 
@@ -343,6 +349,8 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
     user_profile = state.get("user_profile", {})
     rag_chunks = state.get("rag_context_chunks", [])
     session_id = state.get("session_id", "")
+    user_id = state.get("user_id", 0)
+    task_id = state.get("task_id")
     # 优先从 state 获取回调；回退到 stream_registry（checkpointer 序列化会丢失 callable）
     sse_callback = state.get("sse_callback") or stream_registry.get_sse_callback(session_id)
     placeholder_map = state.get("placeholder_resource_map") or stream_registry.get_placeholder_map(session_id)
@@ -410,7 +418,7 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
         result = await asyncio.to_thread(
             _generate_single_module,
             module, 1, learning_goal, user_profile,
-            sse_callback, res_id,
+            sse_callback, res_id, user_id, task_id,
         )
         module_list = [result]
     else:
@@ -430,6 +438,8 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
                 user_profile,
                 sse_callback,
                 res_id,
+                user_id,
+                task_id,
             )
             tasks.append(task)
 
@@ -484,7 +494,7 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
 
     if not state.get("background_generation"):
         from app.agents.anomaly_checker import check_content_alignment
-        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary)
+        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary, user_id, task_id)
         if not is_aligned:
             logger.warning(f"  [资源生成智能体] 自主检测到内容偏离: {anomaly_reason}")
             return {

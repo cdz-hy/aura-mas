@@ -137,12 +137,45 @@ CONTENT_GENERATION_WITH_SOURCES_PROMPT = """你是一个专业的知识内容生
   常见的激活函数包括 ReLU、Sigmoid 和 Tanh [2][3]。
   ```
 
-### 3. 图片智能精选与使用（重要）
-- 运用你的多模态分析与理解能力，对"可用图片"列表中的候选图片进行初步筛选（不要太严格，但要保证基本相关性）。
-- 从中挑选出与你生成的文本段落、核心概念以及学习目标**最相关**的 1-3 张图片进行插入。如果发现某张图片与当前讲解的主题毫无关联，请果断舍弃。
-- 必须用 Markdown 语法嵌入正文：`![描述](URL)`
+### 3. 图片智能精选与美化排版（重要：严禁直接堆砌大图，必须设计排版）
+- 运用你的多模态分析与理解能力，对"可用图片"列表中的候选图片进行初步筛选（不要太严格，但要保证基本相关性），从中挑选出与你生成的文本段落、核心概念以及学习目标**最相关**的 1-3 张图片进行插入。如果发现某张图片与当前讲解的主题毫无关联，请果断舍弃。
+- **排版布局硬性要求**：为了防止图片在网页上无规则地平铺堆砌（非常影响美观），**严禁使用**默认的 Markdown 语法 `![描述](URL)`。你必须使用以下四种高级排版模板之一来构建极致的阅读视觉体验：
+  1. **右侧悬浮图卡片（强烈推荐，适合较小的高度/概念图，文字会自然环绕图片，极具排版美感）**：
+     ```html
+     <div style="float: right; max-width: 42%; margin: 8px 0 16px 16px; padding: 6px; border-radius: 12px; border: 1px solid rgba(26, 40, 71, 0.08); background: #ffffff; box-shadow: 0 4px 16px rgba(0,0,0,0.06); text-align: center;">
+       <img src="图片URL" alt="图片说明" style="width: 100%; height: auto; border-radius: 8px; display: block;" />
+       <div style="font-size: 10px; color: #718096; margin-top: 6px; font-weight: 500; font-family: system-ui, sans-serif; line-height: 1.3;">图片说明描述</div>
+     </div>
+     ```
+  2. **左侧悬浮图卡片（适合需要左侧呼应 of 的图，文字会环绕图片）**：
+     ```html
+     <div style="float: left; max-width: 42%; margin: 8px 16px 16px 0; padding: 6px; border-radius: 12px; border: 1px solid rgba(26, 40, 71, 0.08); background: #ffffff; box-shadow: 0 4px 16px rgba(0,0,0,0.06); text-align: center;">
+       <img src="图片URL" alt="图片说明" style="width: 100%; height: auto; border-radius: 8px; display: block;" />
+       <div style="font-size: 10px; color: #718096; margin-top: 6px; font-weight: 500; font-family: system-ui, sans-serif; line-height: 1.3;">图片说明描述</div>
+     </div>
+     ```
+  3. **独立居中精美展示大图与图题（适合架构图、流程图或需要单独突出的精细大图）**：
+     ```html
+     <div style="text-align: center; margin: 28px auto; max-width: 80%; padding: 12px; border-radius: 16px; border: 1px solid rgba(26, 40, 71, 0.08); background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%); box-shadow: 0 8px 24px rgba(26, 40, 71, 0.05); display: flex; flex-direction: column; align-items: center; justify-content: center;">
+       <img src="图片URL" alt="图片说明" style="max-width: 100%; max-height: 400px; width: auto; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); display: block;" />
+       <div style="font-size: 12px; color: #4a5568; margin-top: 10px; font-weight: 500; font-family: system-ui, sans-serif; display: flex; align-items: center; gap: 4px; justify-content: center;"><span style="color: #4164b2; font-weight: bold;">◆</span>图：图片说明描述</div>
+     </div>
+     ```
+  4. **双图对比/并排展示画廊（非常适合比较、流向或相关的一组图）**：
+     ```html
+     <div style="margin: 28px 0; display: flex; gap: 16px; justify-content: center; align-items: stretch; width: 100%;">
+       <div style="flex: 1; max-width: 48%; padding: 8px; border-radius: 12px; border: 1px solid rgba(26, 40, 71, 0.08); background: #ffffff; box-shadow: 0 4px 16px rgba(0,0,0,0.06); text-align: center; display: flex; flex-direction: column; justify-content: space-between;">
+         <img src="图片URL1" alt="描述1" style="width: 100%; height: auto; border-radius: 8px; display: block;" />
+         <div style="font-size: 10px; color: #718096; margin-top: 8px; font-weight: 500; font-family: system-ui, sans-serif; line-height: 1.3;">图1：描述1</div>
+       </div>
+       <div style="flex: 1; max-width: 48%; padding: 8px; border-radius: 12px; border: 1px solid rgba(26, 40, 71, 0.08); background: #ffffff; box-shadow: 0 4px 16px rgba(0,0,0,0.06); text-align: center; display: flex; flex-direction: column; justify-content: space-between;">
+         <img src="图片URL2" alt="描述2" style="width: 100%; height: auto; border-radius: 8px; display: block;" />
+         <div style="font-size: 10px; color: #718096; margin-top: 8px; font-weight: 500; font-family: system-ui, sans-serif; line-height: 1.3;">图2：描述2</div>
+       </div>
+     </div>
+     ```
 - 图片必须紧贴着解释相关概念的文字旁边放置，严禁全部堆砌在文末。
-- 如果可用图片列表完全为空，但存在极其需要图解的核心概念，你可以用自己的知识补充极其相关的公开可用图片 URL。
+- 如果悬浮排版后下一段内容需要正常开始换行，可以在段落后插入 `<div style="clear: both;"></div>` 进行清除浮动。
 - 好的内容应该图文并茂且图文相符，宁缺毋滥，但对于相关度尚可的图片可以适度放宽容忍度。
 
 ### 4. 代码示例

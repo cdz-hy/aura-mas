@@ -198,7 +198,7 @@ const quickQuestions = [
 const resourceTypeLabel = (type: string) => {
   const labels: Record<string, string> = {
     document: '文档', mindmap: '思维导图', quiz: '练习题',
-    code: '代码', video: '视频', reading: '阅读',
+    code: '代码', video: '视频', reading: '阅读', podcast: '播客',
   }
   return labels[type] || type
 }

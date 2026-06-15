@@ -257,6 +257,18 @@
           </div>
           <div class="flex items-center gap-1.5 flex-shrink-0">
             <button
+              v-if="['text', 'document', 'reading'].includes(selectedResource.moduleType)"
+              class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
+              @click="exportToPdf(selectedResource)"
+              title="导出为 PDF"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+            </button>
+            <button
               class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
               @click="isFullscreen = !isFullscreen"
               :title="isFullscreen ? '退出全屏' : '全屏显示'"
@@ -283,7 +295,7 @@
         <!-- 内容区 -->
         <div
           class="flex-1 overflow-y-auto"
-          :class="selectedResource.moduleType === 'animation' ? 'resource-content--animation' : 'p-4'"
+          :class="selectedResource.moduleType === 'animation' ? 'resource-content--animation' : (selectedResource.moduleType === 'podcast' ? 'resource-content--podcast' : 'p-4')"
           @click="handleCitationClick($event); onResourceClick($event)"
           @mouseover="handleCitationMouseOver"
           @mouseout="handleCitationMouseOut"
@@ -317,7 +329,7 @@
 
           <!-- 文档/阅读/图文类型 -->
           <template v-else-if="selectedResource.moduleType === 'text' || selectedResource.moduleType === 'document' || selectedResource.moduleType === 'reading'">
-            <div v-if="selectedResource.moduleData?.content" class="prose prose-sm max-w-none text-navy-700 leading-relaxed markdown-body" v-html="renderedResourceContent"></div>
+            <div id="pdf-content" v-if="selectedResource.moduleData?.content" class="prose prose-sm max-w-none text-navy-700 leading-relaxed markdown-body" v-html="renderedResourceContent"></div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>资源内容待生成</p>
             </div>
@@ -345,33 +357,12 @@
 
           <!-- 视频类型 -->
           <template v-else-if="selectedResource.moduleType === 'video'">
-            <div v-if="selectedResource.moduleData?.videos?.length" class="space-y-3">
-              <a
-                v-for="(v, vi) in selectedResource.moduleData.videos"
-                :key="vi"
-                :href="v.url"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="block p-4 rounded-xl border border-navy-100/50 hover:border-red-200 hover:bg-red-50/30 transition-colors group"
-              >
-                <div class="flex items-start gap-3">
-                  <div class="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center flex-shrink-0 group-hover:bg-red-100 transition-colors">
-                    <svg class="w-5 h-5 text-red-500" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M8 5v14l11-7z"/>
-                    </svg>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-navy-800 group-hover:text-red-600 transition-colors line-clamp-2">{{ v.title }}</p>
-                    <div class="flex items-center gap-2 mt-1.5">
-                      <span v-if="v.platform" class="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-500">{{ v.platform }}</span>
-                      <span v-if="v.snippet" class="text-xs text-navy-400 line-clamp-1">{{ v.snippet }}</span>
-                    </div>
-                  </div>
-                  <svg class="w-4 h-4 text-navy-300 group-hover:text-red-400 flex-shrink-0 mt-1 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                  </svg>
-                </div>
-              </a>
+            <div v-if="selectedResource.moduleData?.videos?.length" class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <VideoPlayer 
+                v-for="(v, vi) in selectedResource.moduleData.videos" 
+                :key="vi" 
+                :video="v" 
+              />
             </div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>暂无视频资源</p>
@@ -391,6 +382,22 @@
             </div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>动画内容待生成</p>
+            </div>
+          </template>
+
+          <!-- 播客类型 -->
+          <template v-else-if="selectedResource.moduleType === 'podcast'">
+            <div v-if="selectedResource.moduleData?.content || selectedResource.moduleData?.html" class="podcast-stage">
+              <iframe
+                class="podcast-frame"
+                :class="{ 'pointer-events-none': isDragging }"
+                :srcdoc="selectedResource.moduleData?.content || selectedResource.moduleData?.html"
+                sandbox="allow-scripts allow-same-origin allow-downloads"
+                title="播客节目"
+              ></iframe>
+            </div>
+            <div v-else class="text-center py-8 text-navy-300 text-sm">
+              <p>播客内容待生成</p>
             </div>
           </template>
 
@@ -595,11 +602,13 @@ import { normalizeAnimationHtml } from '@/utils/animationHtml'
 import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
 import { issueTicket } from '@/api/auth'
+import { PYTHON_AI_BASE } from '@/api/request'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useHeartbeat } from '@/composables/useHeartbeat'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
+import VideoPlayer from '@/components/resource/VideoPlayer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
 import KnowledgeTreeCanvas from '@/components/tree/KnowledgeTreeCanvas.vue'
 import KnowledgeTreeOutline from '@/components/tree/KnowledgeTreeOutline.vue'
@@ -934,7 +943,7 @@ function onDocumentMouseDown(e: MouseEvent) {
 }
 
 // ==================== 面板拖拽调整 ====================
-const panelWidth = ref(window.innerWidth > 1400 ? 520 : 420)
+const panelWidth = ref(window.innerWidth > 1400 ? 760 : 560)
 const isDragging = ref(false)
 
 // 中间面板的宽度样式（包含关闭态：width=0，由 CSS transition 驱动动画）
@@ -944,14 +953,6 @@ const panelStyle = computed(() => {
   }
   if (!selectedResource.value && !showResourceStreamPreview.value) {
     return { width: '0px', minWidth: '0px', marginLeft: '0px', marginRight: '0px' }
-  }
-  if (selectedResource.value?.moduleType === 'animation') {
-    const preferredWidth = Math.max(panelWidth.value, 760)
-    return {
-      width: `min(${preferredWidth}px, calc(100vw - 620px))`,
-      minWidth: '320px',
-      flexShrink: '0',
-    }
   }
   return { width: panelWidth.value + 'px', minWidth: '240px' }
 })
@@ -1214,6 +1215,7 @@ function badgeClass(type: string) {
     image: 'bg-pink-100 text-pink-700',
     diagram: 'bg-teal-100 text-teal-700',
     animation: 'bg-orange-100 text-orange-700',
+    podcast: 'bg-emerald-100 text-emerald-700',
   }
   return map[type] || 'bg-navy-100 text-navy-700'
 }
@@ -1295,8 +1297,9 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
 
   const moduleOrder = resources.value.length > 0
     ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1
+
   const newResource: LearningResource = {
-    id: resource.id || Date.now(),
+    id: resource.id || -Date.now(),
     planId: planId.value,
     parentId: null,
     moduleOrder,
@@ -1314,7 +1317,7 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
 }
 
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画',
+  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客',
 }
 
 // ==================== 计算属性 ====================
@@ -1449,6 +1452,338 @@ const renderedResourceContent = computed(() => {
     }
   }
   return renderMd(content)
+})
+
+// === 导出为 PDF ===
+async function exportToPdf(resource: any) {
+  if (!resource) return;
+  const contentEl = document.getElementById('pdf-content');
+  if (!contentEl) return;
+
+  try {
+    // 克隆 DOM，避免修改页面上可见的元素
+    const clone = contentEl.cloneNode(true) as HTMLElement;
+    const images = clone.querySelectorAll('img');
+    const placeholder = document.createElement('div');
+    placeholder.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
+    document.body.appendChild(placeholder);
+    placeholder.appendChild(clone);
+
+    // 通过后端代理将所有图片转为 base64 data URL，绕过 CORS
+    const convertPromises = Array.from(images).map(async (img) => {
+      const src = img.getAttribute('src');
+      if (!src || src.startsWith('data:')) return;
+      try {
+        const resp = await fetch(`${PYTHON_AI_BASE}/api/ai/proxy-image?url=${encodeURIComponent(src)}`);
+        const data = await resp.json();
+        if (data.data_url) {
+          img.setAttribute('src', data.data_url);
+        }
+      } catch {
+        // 转换失败时保留原图，html2canvas 会处理
+      }
+    });
+    await Promise.all(convertPromises);
+
+    const html2pdf = (await import('html2pdf.js')).default;
+    const opt = {
+      margin:       10,
+      filename:     `${resource.moduleData?.title || '文档'}.pdf`,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2 },
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+    };
+    await html2pdf().set(opt).from(clone).save();
+
+    // 清理临时 DOM
+    document.body.removeChild(placeholder);
+  } catch (err) {
+    console.error('Failed to load html2pdf or export:', err);
+  }
+}
+
+// === Mermaid 图表渲染 ===
+async function renderMermaidInResource() {
+  await nextTick()
+  const containers = document.querySelectorAll('.markdown-body')
+  for (const container of containers) {
+    const unrendered = container.querySelectorAll('.gv-mermaid-wrapper:not([data-rendered="true"]):not([data-rendering="true"])')
+    if (unrendered.length === 0) continue
+
+    unrendered.forEach(el => el.setAttribute('data-rendering', 'true'))
+
+    try {
+      const mermaid = (await import('mermaid')).default
+      if (!(window as any).__mermaid_initialized__) {
+        mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' })
+        ;(window as any).__mermaid_initialized__ = true
+      }
+
+      for (const el of Array.from(unrendered)) {
+        const codeBase64 = el.getAttribute('data-mermaid-code')
+        if (!codeBase64) continue
+
+        try {
+          const rawCode = decodeURIComponent(codeBase64)
+          const normalizedCode = rawCode
+            .replace(/[    　]/g, ' ')
+            .replace(/[​‌‍﻿]/g, '')
+
+          const id = 'mermaid-' + Math.random().toString(36).substr(2, 9)
+          const { svg } = await mermaid.render(id, normalizedCode)
+
+          if (el.getAttribute('data-mermaid-code') !== codeBase64) continue
+
+          // 构建带工具栏和缩放平移的容器
+          const uid = Math.random().toString(36).substr(2, 6)
+          el.innerHTML = `
+            <div class="mermaid-viewer" data-uid="${uid}" style="position:relative;overflow:hidden;border-radius:12px;border:1px solid rgba(26,40,71,0.08);background:#fafbfc;">
+              <div class="mermaid-toolbar" style="position:absolute;top:8px;right:8px;z-index:10;display:flex;gap:4px;opacity:0;transition:opacity 0.2s;">
+                <button class="mermaid-zoom-in" title="放大" style="width:28px;height:28px;border-radius:6px;border:1px solid rgba(26,40,71,0.12);background:rgba(255,255,255,0.9);backdrop-filter:blur(8px);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;color:#34508e;">+</button>
+                <button class="mermaid-zoom-out" title="缩小" style="width:28px;height:28px;border-radius:6px;border:1px solid rgba(26,40,71,0.12);background:rgba(255,255,255,0.9);backdrop-filter:blur(8px);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;color:#34508e;">-</button>
+                <button class="mermaid-reset" title="重置" style="width:28px;height:28px;border-radius:6px;border:1px solid rgba(26,40,71,0.12);background:rgba(255,255,255,0.9);backdrop-filter:blur(8px);cursor:pointer;display:flex;align-items:center;justify-content:center;color:#34508e;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
+                <div class="mermaid-export-dropdown" style="position:relative;">
+                  <button class="mermaid-export-btn" title="导出图片" style="width:28px;height:28px;border-radius:6px;border:1px solid rgba(26,40,71,0.12);background:rgba(255,255,255,0.9);backdrop-filter:blur(8px);cursor:pointer;display:flex;align-items:center;justify-content:center;color:#34508e;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  </button>
+                  <div class="mermaid-export-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:white;border-radius:8px;border:1px solid rgba(26,40,71,0.12);box-shadow:0 4px 12px rgba(0,0,0,0.1);overflow:hidden;min-width:90px;z-index:20;">
+                    <button class="mermaid-export-png" style="width:100%;padding:6px 12px;text-align:left;font-size:12px;color:#34508e;background:none;border:none;cursor:pointer;font-family:inherit;" onmouseover="this.style.background='#f0f3f9'" onmouseout="this.style.background='none'">导出 PNG</button>
+                    <button class="mermaid-export-svg" style="width:100%;padding:6px 12px;text-align:left;font-size:12px;color:#34508e;background:none;border:none;cursor:pointer;font-family:inherit;" onmouseover="this.style.background='#f0f3f9'" onmouseout="this.style.background='none'">导出 SVG</button>
+                  </div>
+                </div>
+              </div>
+              <div class="mermaid-viewport" style="transform-origin:0 0;cursor:grab;transition:none;padding:16px;">
+                ${svg}
+              </div>
+            </div>
+          `
+          el.setAttribute('data-rendered', 'true')
+          el.removeAttribute('data-rendering')
+          el.classList.add('stream-fade-in')
+
+          // 初始化缩放平移交互并居中
+          _initMermaidInteraction(el, uid, true)
+        } catch (err: any) {
+          if (el.getAttribute('data-mermaid-code') === codeBase64) {
+            console.error('Mermaid rendering error:', err)
+            el.innerHTML = `
+              <div class="flex flex-col p-4 bg-red-50 rounded-xl border border-red-100">
+                <span class="text-sm font-semibold text-red-600 mb-2">图表渲染失败</span>
+                <pre class="text-xs text-red-500 overflow-x-auto p-2 bg-white rounded border border-red-50/50">${err.message || String(err)}</pre>
+              </div>
+            `
+            el.setAttribute('data-rendered', 'true')
+            el.removeAttribute('data-rendering')
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load Mermaid module:', err)
+      unrendered.forEach(el => el.removeAttribute('data-rendering'))
+    }
+  }
+}
+
+function _initMermaidInteraction(wrapper: Element, uid: string, center = false) {
+  const viewer = wrapper.querySelector(`.mermaid-viewer[data-uid="${uid}"]`) as HTMLElement
+  if (!viewer) return
+  const viewport = viewer.querySelector('.mermaid-viewport') as HTMLElement
+  const toolbar = viewer.querySelector('.mermaid-toolbar') as HTMLElement
+  if (!viewport || !toolbar) return
+
+  let scale = 1
+  let panX = 0
+  let panY = 0
+  let isDragging = false
+  let startX = 0
+  let startY = 0
+
+  function applyTransform() {
+    viewport.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`
+  }
+
+  viewer.addEventListener('mouseenter', () => { toolbar.style.opacity = '1' })
+  viewer.addEventListener('mouseleave', () => { toolbar.style.opacity = '0' })
+
+  viewer.addEventListener('wheel', (e: WheelEvent) => {
+    e.preventDefault()
+    const rect = viewer.getBoundingClientRect()
+    const mouseX = e.clientX - rect.left
+    const mouseY = e.clientY - rect.top
+    const oldScale = scale
+    scale = Math.max(0.2, Math.min(5, scale * (e.deltaY > 0 ? 0.9 : 1.1)))
+    panX = mouseX - (mouseX - panX) * (scale / oldScale)
+    panY = mouseY - (mouseY - panY) * (scale / oldScale)
+    applyTransform()
+  }, { passive: false })
+
+  viewport.addEventListener('mousedown', (e: MouseEvent) => {
+    if (e.button !== 0) return
+    isDragging = true
+    startX = e.clientX - panX
+    startY = e.clientY - panY
+    viewport.style.cursor = 'grabbing'
+    e.preventDefault()
+  })
+
+  const onMove = (e: MouseEvent) => {
+    if (!isDragging) return
+    panX = e.clientX - startX
+    panY = e.clientY - startY
+    applyTransform()
+  }
+  const onUp = () => {
+    if (isDragging) { isDragging = false; viewport.style.cursor = 'grab' }
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+
+  viewer.querySelector('.mermaid-zoom-in')?.addEventListener('click', (e) => {
+    e.stopPropagation(); scale = Math.min(5, scale * 1.25); applyTransform()
+  })
+  viewer.querySelector('.mermaid-zoom-out')?.addEventListener('click', (e) => {
+    e.stopPropagation(); scale = Math.max(0.2, scale * 0.8); applyTransform()
+  })
+  viewer.querySelector('.mermaid-reset')?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    scale = 1; panX = 0; panY = 0
+    // 居中显示
+    const vw = viewer.clientWidth
+    const vh = viewer.clientHeight
+    const sw = viewport.scrollWidth
+    const sh = viewport.scrollHeight
+    panX = Math.max(0, (vw - sw) / 2)
+    panY = Math.max(0, (vh - sh) / 2)
+    applyTransform()
+  })
+
+  // 导出下拉菜单
+  const exportBtn = viewer.querySelector('.mermaid-export-btn') as HTMLElement
+  const exportMenu = viewer.querySelector('.mermaid-export-menu') as HTMLElement
+  if (exportBtn && exportMenu) {
+    exportBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      exportMenu.style.display = exportMenu.style.display === 'none' ? 'block' : 'none'
+    })
+    // 点击外部关闭
+    const closeMenu = (e: MouseEvent) => {
+      if (!exportMenu.contains(e.target as Node) && e.target !== exportBtn) {
+        exportMenu.style.display = 'none'
+      }
+    }
+    document.addEventListener('click', closeMenu)
+  }
+
+  async function _doExport(format: 'png' | 'svg') {
+    const svgEl = viewport.querySelector('svg')
+    if (!svgEl) return
+    exportMenu.style.display = 'none'
+
+    try {
+      const cloned = svgEl.cloneNode(true) as SVGSVGElement
+      cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+      cloned.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+
+      const bbox = svgEl.getBoundingClientRect()
+      const w = Math.ceil(bbox.width) || parseInt(cloned.getAttribute('width') || '800')
+      const h = Math.ceil(bbox.height) || parseInt(cloned.getAttribute('height') || '600')
+      cloned.setAttribute('width', String(w))
+      cloned.setAttribute('height', String(h))
+      cloned.removeAttribute('viewBox')
+
+      // 内嵌字体 CSS 到 SVG（避免外部请求污染 canvas）
+      let fontCss = ''
+      try {
+        const resp = await fetch('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Noto+Sans+SC:wght@400;600&display=swap')
+        fontCss = await resp.text()
+        // 将 url(...) 中的相对路径转为绝对路径
+        fontCss = fontCss.replace(/url\((\/[^)]+)\)/g, 'url(https://fonts.gstatic.com$1)')
+      } catch { /* 字体加载失败，降级 */ }
+
+      // 注入 <style> 到 SVG
+      const styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style')
+      styleEl.textContent = fontCss + `
+        .node rect, .node circle, .node polygon, .node ellipse { shape-rendering: crispEdges; }
+        foreignObject div { display: inline-block; }
+      `
+      cloned.insertBefore(styleEl, cloned.firstChild)
+
+      // 外层添加白色背景
+      const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      bgRect.setAttribute('width', '100%')
+      bgRect.setAttribute('height', '100%')
+      bgRect.setAttribute('fill', '#ffffff')
+      cloned.insertBefore(bgRect, cloned.firstChild)
+
+      const svgData = new XMLSerializer().serializeToString(cloned)
+
+      if (format === 'svg') {
+        const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url; a.download = 'mermaid-diagram.svg'
+        document.body.appendChild(a); a.click(); document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        return
+      }
+
+      // PNG: data URL → Image → Canvas
+      const svgBase64 = btoa(unescape(encodeURIComponent(svgData)))
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        const pad = 24
+        canvas.width = img.naturalWidth + pad * 2
+        canvas.height = img.naturalHeight + pad * 2
+        const ctx = canvas.getContext('2d')!
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(img, pad, pad)
+        try {
+          canvas.toBlob((blob) => {
+            if (blob) {
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url; a.download = 'mermaid-diagram.png'
+              document.body.appendChild(a); a.click(); document.body.removeChild(a)
+              URL.revokeObjectURL(url)
+            }
+          }, 'image/png')
+        } catch (e) { console.error('Canvas export failed:', e) }
+      }
+      img.onerror = () => { console.error('SVG image load failed') }
+      img.src = 'data:image/svg+xml;base64,' + svgBase64
+    } catch (err) { console.error('导出图表失败:', err) }
+  }
+
+  viewer.querySelector('.mermaid-export-png')?.addEventListener('click', (e) => {
+    e.stopPropagation(); _doExport('png')
+  })
+  viewer.querySelector('.mermaid-export-svg')?.addEventListener('click', (e) => {
+    e.stopPropagation(); _doExport('svg')
+  })
+
+  // 初始居中
+  if (center) {
+    requestAnimationFrame(() => {
+      const vw = viewer.clientWidth
+      const vh = viewer.clientHeight
+      const sw = viewport.scrollWidth
+      const sh = viewport.scrollHeight
+      panX = Math.max(0, (vw - sw) / 2)
+      panY = Math.max(0, (vh - sh) / 2)
+      applyTransform()
+    })
+  }
+}
+
+watch(() => selectedResource.value?.moduleData?.content, () => {
+  renderMermaidInResource()
+})
+
+onMounted(() => {
+  renderMermaidInResource()
 })
 
 // === 引用源（Citation）解析与交互逻辑 ===
@@ -2059,6 +2394,13 @@ watch(() => chatStore.lastGeneratedResources, async (resList) => {
       if (fullRes) {
         // 解析 moduleData（API 返回 JSON 字符串，需转为对象）
         parseModuleData([fullRes])
+
+        // 清理由于提前接收到内联内容而创建的临时资源
+        const tempIndex = resources.value.findIndex(res => res.id < 0 && res.moduleType === fullRes.moduleType)
+        if (tempIndex >= 0) {
+          resources.value.splice(tempIndex, 1)
+        }
+
         const existingIndex = resources.value.findIndex(resource => resource.id === fullRes.id)
         if (existingIndex >= 0) {
           // 生成前通常已经插入 status=1 的占位资源；生成完成后必须用完整资源覆盖，
@@ -2197,6 +2539,30 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
   height: 100%;
   border: 0;
   background: #050505;
+  display: block;
+}
+
+.resource-content--podcast {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.podcast-stage {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  border: none;
+  border-radius: 0;
+}
+
+.podcast-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
   display: block;
 }
 

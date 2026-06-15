@@ -209,9 +209,9 @@ async def plan_chat(
     计划关联 AI 对话 - SSE 流式输出
     使用现有 learning_graph 的完整多智能体工作流
     """
-    # 验证 ticket
+    # 验证 ticket（同步调用，放到线程池）
     try:
-        ticket_info = java_client.validate_ticket(ticket)
+        ticket_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
@@ -240,10 +240,10 @@ async def plan_chat(
     logger.info(f"[计划对话] 用户 {user_id}, 计划 {plan_id}, 会话 {session_id}")
     logger.info(f"[计划对话] 消息: {message[:100]}")
 
-    # 获取用户画像
+    # 获取用户画像（同步调用，放到线程池）
     user_profile = {}
     try:
-        user_profile = java_client.get_user_profile(user_id)
+        user_profile = await asyncio.to_thread(java_client.get_user_profile, user_id)
         # 确保 learning_behavior 字段完整
         if "learning_behavior" in user_profile:
             user_profile["learning_behavior"] = ensure_learning_behavior_fields(
@@ -252,26 +252,23 @@ async def plan_chat(
     except Exception:
         pass
 
-    # 获取对话历史（按当前会话隔离，多取以支持压缩上下文）
+    # 获取对话历史（按当前会话隔离，多取以支持压缩上下文，同步调用放到线程池）
     chat_history = []
     raw_history = []
     try:
-        raw_history = java_client.get_dialogue_history(
-            user_id=user_id, plan_id=plan_id_int, session_id=session_id, limit=200
+        raw_history = await asyncio.to_thread(
+            java_client.get_dialogue_history, user_id, plan_id=plan_id_int, session_id=session_id, limit=200
         )
         # 使用压缩上下文构建 chat_history（压缩摘要 + context 之后的所有实际对话）
         chat_history = build_chat_history_with_context(raw_history)
     except Exception:
         pass
 
-    # 记录用户消息
+    # 记录用户消息（同步调用，放到线程池）
     try:
-        java_client.create_dialogue(
-            user_id=user_id,
-            session_id=session_id,
-            conversation_text=message,
-            dialogue_type="USER",
-            plan_id=plan_id_int,
+        await asyncio.to_thread(
+            java_client.create_dialogue,
+            user_id, session_id, message, "USER", plan_id_int,
             intent_type="plan_chat",
         )
     except Exception as e:
@@ -795,9 +792,9 @@ async def generate_single_resource(
     使用现有 learning_graph，以 generate_resource 意图进入，
     图会自动走: 主控 -> 任务分解(可选) -> RAG检索 -> 审查 -> 编排
     """
-    # 验证 ticket
+    # 验证 ticket（同步调用，放到线程池）
     try:
-        ticket_info = java_client.validate_ticket(ticket)
+        ticket_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
@@ -812,10 +809,10 @@ async def generate_single_resource(
     logger.info(f"[资源生成] 用户 {user_id}, 计划 {plan_id_int}, 模块 {module_id_int}")
     logger.info(f"[资源生成] 类型: {type}, 标题: {title}")
 
-    # 获取用户画像
+    # 获取用户画像（同步调用，放到线程池）
     user_profile = {}
     try:
-        user_profile = java_client.get_user_profile(user_id)
+        user_profile = await asyncio.to_thread(java_client.get_user_profile, user_id)
         # 确保 learning_behavior 字段完整
         if "learning_behavior" in user_profile:
             user_profile["learning_behavior"] = ensure_learning_behavior_fields(
@@ -824,11 +821,11 @@ async def generate_single_resource(
     except Exception:
         pass
 
-    # 获取该计划的对话历史作为上下文
+    # 获取该计划的对话历史作为上下文（同步调用，放到线程池）
     chat_history = []
     try:
-        history = java_client.get_dialogue_history(
-            user_id=user_id, plan_id=plan_id_int, limit=20
+        history = await asyncio.to_thread(
+            java_client.get_dialogue_history, user_id, plan_id=plan_id_int, limit=20
         )
         for h in history:
             chat_history.append({
@@ -868,7 +865,7 @@ async def generate_single_resource(
     is_quiz = (type == "quiz")
     is_video = (type == "video")
     is_animation = (type == "animation")
-    is_type_resource = type in ("mindmap", "summary", "code")
+    is_type_resource = type in ("mindmap", "summary", "code", "podcast")
 
     # 路由决策
     if is_quiz:
@@ -969,11 +966,46 @@ async def generate_single_resource(
     }
 
     async def event_stream() -> AsyncGenerator[str, None]:
+        clear_stop(session_id)
         try:
-            # video 类型：直接搜索视频，不走 LangGraph
+            # video 类型：使用自主视频搜索智能体，不走主流程 LangGraph
             if is_video:
-                yield f'data: {json.dumps({"type": "progress", "content": f"正在搜索「{title}」相关教学视频..."}, ensure_ascii=False)}\n\n'
-                videos = _search_videos(title)
+                from app.agents.video_search_agent import search_videos_with_agent
+                
+                yield f'data: {json.dumps({"type": "progress", "content": f"正在启动智能体搜索「{title}」相关教学视频..."}, ensure_ascii=False)}\n\n'
+                
+                _v_sentinel = object()
+                _v_queue: asyncio.Queue = asyncio.Queue()
+                v_loop = asyncio.get_event_loop()
+                
+                def _v_sse_push(msg):
+                    v_loop.call_soon_threadsafe(_v_queue.put_nowait, msg)
+                    
+                def _run_video_agent():
+                    try:
+                        videos = search_videos_with_agent(title, source_resource_content, _v_sse_push, user_id, generation_task_id)
+                        _v_sse_push({"type": "result", "videos": videos})
+                    except Exception as e:
+                        logger.error(f"[视频生成] 智能体异常: {e}")
+                        _v_sse_push({"type": "error", "error": str(e)})
+                    finally:
+                        _v_sse_push(_v_sentinel)
+                        
+                threading.Thread(target=_run_video_agent, daemon=True).start()
+                
+                videos = []
+                while True:
+                    item = await _v_queue.get()
+                    if item is _v_sentinel:
+                        break
+                    if isinstance(item, str):
+                        # 进度消息
+                        yield item
+                    elif isinstance(item, dict):
+                        if item.get("type") == "result":
+                            videos = item.get("videos", [])
+                        elif item.get("type") == "error":
+                            yield f'data: {json.dumps({"type": "error", "content": item.get("error")}, ensure_ascii=False)}\n\n'
 
                 if videos:
                     res_id = _save_video_resource(plan_id_int, videos, current_module_order)
@@ -982,6 +1014,7 @@ async def generate_single_resource(
                 else:
                     yield f'data: {json.dumps({"type": "progress", "content": "未找到相关教学视频，建议直接在视频平台搜索"}, ensure_ascii=False)}\n\n'
                 yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
+                
                 if generation_task_id:
                     try:
                         java_client.update_generation_task(generation_task_id, 2, update_resource_status=False)
@@ -1098,18 +1131,22 @@ async def generate_single_resource(
             threading.Thread(target=_run_graph, daemon=True).start()
 
             # 实时消费 queue
+            _completed_normally = False
             try:
                 while True:
                     item = await _queue.get()
                     if item is _sentinel:
+                        _completed_normally = True
                         break
                     if item is None:
                         yield f'data: {json.dumps({"type": "done", "stopped": True}, ensure_ascii=False)}\n\n'
+                        _completed_normally = True
                         break
                     yield item
             finally:
-                # 客户端断开连接或发生异常时，主动触发停止信号，通知后台线程停止大模型调用
-                request_stop(session_id)
+                # 仅在客户端断开连接或异常退出时触发停止信号，正常完成不触发
+                if not _completed_normally:
+                    request_stop(session_id)
 
         except Exception as e:
             logger.error(f"[资源生成] 异常: {e}", exc_info=True)
@@ -1138,7 +1175,7 @@ async def submit_quiz(
     逐题批改，每题结果存入 quiz_record 表，通过 SSE 实时推送
     """
     try:
-        ticket_info = java_client.validate_ticket(ticket)
+        ticket_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
@@ -1155,9 +1192,9 @@ async def submit_quiz(
     except Exception:
         user_answers = {}
 
-    # 获取 quiz 资源数据
+    # 获取 quiz 资源数据（同步调用，放到线程池）
     try:
-        resource = java_client.get_resource_by_id(resource_id_int)
+        resource = await asyncio.to_thread(java_client.get_resource_by_id, resource_id_int)
     except Exception as e:
         return StreamingResponse(
             _error_stream(f"获取资源失败: {str(e)}"),
@@ -1252,6 +1289,7 @@ async def submit_quiz(
                 result = await loop.run_in_executor(
                     None, lambda: llm.chat_json_stream(messages, on_chunk=on_token, max_tokens=2048)
                 )
+                record_from_mimo(llm, user_id, "quiz_grading_inline", generation_task_id)
             except Exception as e:
                 logger.error(f"[测验批改] Q{idx + 1} LLM 批改异常: {e}")
                 result = {"score": 0, "is_correct": False, "feedback": f"批改异常: {str(e)}",
@@ -1399,7 +1437,7 @@ async def tutor_chat(
     针对用户当前点击的模块内容进行个性化辅导
     """
     try:
-        ticket_info = java_client.validate_ticket(ticket)
+        ticket_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
@@ -1416,10 +1454,11 @@ async def tutor_chat(
 
     logger.info(f"[智能辅导] 用户 {user_id}, 计划 {plan_id_int}, 资源 {resource_id_int}, 会话 {session_id}")
 
-    # 记录用户消息
+    # 记录用户消息（同步调用，放到线程池）
     try:
-        java_client.create_dialogue(
-            user_id=user_id,
+        await asyncio.to_thread(
+            java_client.create_dialogue,
+            user_id,
             session_id=session_id,
             conversation_text=message,
             dialogue_type="USER",
@@ -1673,9 +1712,19 @@ def _build_resource_summary(module_list: list, quiz_questions: list = None, orch
     parts = []
     if module_list:
         titles = [m.get("title", "") for m in module_list if m.get("title")]
-        types = list({_normalize_module_type(m.get("module_type", "text")) for m in module_list})
-        type_label = "/".join(types)
-        parts.append(f"已生成 {len(module_list)} 个{type_label}类型学习模块：{'、'.join(titles)}")
+        raw_types = list({_normalize_module_type(m.get("module_type", "text")) for m in module_list})
+        type_map = {
+            "text": "图文",
+            "video": "视频",
+            "animation": "动画",
+            "podcast": "播客",
+            "code": "代码交互",
+            "mindmap": "思维导图",
+            "quiz": "测试练习"
+        }
+        translated_types = [type_map.get(t, t) for t in raw_types]
+        type_label = "/".join(translated_types)
+        parts.append(f"已生成 {len(module_list)} 个「{type_label}」学习模块：{'、'.join(titles)}")
     if quiz_questions:
         parts.append(f"已生成 {len(quiz_questions)} 道练习题")
     if orchestrated_content and orchestrated_content.get("summary"):
@@ -2269,3 +2318,20 @@ async def stop_generation(
         pass
 
     return {"data": {"status": "stop_requested"}}
+
+
+@router.get("/proxy-image")
+def proxy_image(url: str = Query(..., description="图片 URL")):
+    """代理图片请求，返回 base64 data URL，解决 PDF 导出时的 CORS 问题"""
+    import base64
+    import requests as req
+    try:
+        resp = req.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        content_type = resp.headers.get("Content-Type", "image/jpeg")
+        if ";" in content_type:
+            content_type = content_type.split(";")[0].strip()
+        b64 = base64.b64encode(resp.content).decode()
+        return {"data_url": f"data:{content_type};base64,{b64}"}
+    except Exception as e:
+        return {"data_url": None, "error": str(e)}

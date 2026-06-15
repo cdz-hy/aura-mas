@@ -8,7 +8,7 @@ import type { ChatSession, ChatMessage } from '@/types/chat'
 
 const moduleTypeLabels: Record<string, string> = {
   text: '图文', image: '图片', diagram: '导图', code: '代码', quiz: '题目', summary: '总结',
-  document: '文档', mindmap: '导图', reading: '阅读', video: '教学视频',
+  document: '文档', mindmap: '导图', reading: '阅读', video: '教学视频', podcast: '播客',
 }
 
 /** 单个会话的流式状态 */
@@ -672,7 +672,7 @@ export const useChatStore = defineStore('chat', () => {
     if (streaming.value) return
 
     const typeLabels: Record<string, string> = {
-      quiz: '测验', mindmap: '思维导图', code: '代码示例', summary: '总结', video: '教学视频', animation: '动画',
+      quiz: '测验', mindmap: '思维导图', code: '代码示例', summary: '总结', video: '教学视频', animation: '动画', podcast: '播客',
     }
     const typeLabel = typeLabels[resourceType] || resourceType
     const capturedSessionId = activeSessionId.value

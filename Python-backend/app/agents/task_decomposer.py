@@ -5,7 +5,11 @@ import logging
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState, NODE_CONTROLLER, NODE_HUMAN_CONFIRM
 from app.agents.llm_factory import get_task_decomposer_llm
-from app.prompts import TASK_DECOMPOSER_PROMPT
+from app.prompts import TASK_DECOMPOSER_PROMPT, TASK_DECOMPOSER_REACT_PROMPT
+from app.agents.enhanced_search import (
+    SearchHistoryTracker,
+    execute_actions_parallel
+)
 from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("agents.task_decomposer")
@@ -47,6 +51,124 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
 
     logger.info(f"  [任务分解智能体] 画像摘要: {profile_summary[:200]}")
 
+    # ==================== ReAct 自主搜索循环（最多2轮） ====================
+    MAX_REACT_ROUNDS = 2
+    history_tracker = SearchHistoryTracker()
+    search_executed = False
+
+    try:
+        system_prompt = TASK_DECOMPOSER_REACT_PROMPT.format(max_rounds=MAX_REACT_ROUNDS)
+
+        for round_num in range(1, MAX_REACT_ROUNDS + 1):
+            logger.info(f"  [ReAct] 任务分解 - 第 {round_num} 轮思考")
+
+            # 构建本轮 prompt
+            if round_num == 1:
+                user_prompt = f"""## 研究任务
+学习主题/目标: {learning_goal}
+用户画像及偏好:
+{profile_summary}
+
+这是第 1 轮，请判断是否需要使用网页搜索工具来验证/查询该主题的最新知识体系结构或核心大纲要点。
+【重要原则】：如果你对此主题的知识结构非常清晰，无需搜索，请务必直接输出 decision 为 "finish"。"""
+            else:
+                history_summary = history_tracker.get_summary_for_llm(max_recent_snippets=10)
+                user_prompt = f"""## 研究任务
+学习主题/目标: {learning_goal}
+用户画像及偏好:
+{profile_summary}
+
+{history_summary}
+
+这是第 {round_num} 轮，请基于已有信息判断是否需要继续搜索，或选择 finish。"""
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+
+            # 调用 LLM 进行 ReAct 决策
+            react_result = llm.chat_json(messages)
+            logger.debug(f"  [ReAct] LLM 原始返回: {str(react_result)[:300]}")
+
+            if not isinstance(react_result, dict):
+                logger.warning(f"  [ReAct] LLM 返回非字典类型: {type(react_result)}，结束搜索")
+                break
+
+            thought = str(react_result.get("thought", ""))
+            decision = str(react_result.get("decision", "finish")).lower().strip()
+            actions = react_result.get("actions", [])
+
+            if not isinstance(actions, list):
+                actions = []
+
+            logger.info(f"  [ReAct] 思考: {thought[:100]}...")
+            logger.info(f"  [ReAct] 决策: {decision}, 动作数: {len(actions)}")
+
+            if decision == "finish" or not actions:
+                logger.info(f"  [ReAct] 结束自主搜索规划")
+                break
+
+            # 验证动作格式
+            valid_actions = []
+            for action in actions:
+                if isinstance(action, dict):
+                    action_type = action.get("action", "")
+                    if action_type in ["search", "extract"]:
+                        valid_actions.append(action)
+
+            if not valid_actions:
+                break
+
+            search_executed = True
+            # 并发执行所有有效动作
+            action_results = execute_actions_parallel(valid_actions)
+
+            # 更新历史记录
+            for result in action_results:
+                action_type = result.get("action_type", "")
+                if action_type == "search":
+                    query = result.get("query", "")
+                    results = result.get("results", [])
+                    images = result.get("images", [])
+                    if results or images:
+                        history_tracker.add_search_result(query, results, images)
+                elif action_type == "extract":
+                    url = result.get("url", "")
+                    title = result.get("title", "")
+                    content = result.get("content", "")
+                    success = result.get("success", False)
+                    if success and content:
+                        history_tracker.add_extracted_page(url, title, content)
+
+    except Exception as e:
+        logger.warning(f"  [任务分解智能体] ReAct 搜索规划异常: {str(e)}，降级为直接生成")
+
+    record_from_mimo(llm, state.get("user_id", 0), "task_decomposition_react", state.get("task_id"))
+
+    # 构建最终生成的参考搜索内容
+    search_context = ""
+    if search_executed:
+        all_content = history_tracker.get_all_content_for_generation()
+        snippets = all_content["snippets"]
+        extracted_pages = all_content["extracted_pages"]
+
+        snippet_lines = []
+        for i, snippet in enumerate(snippets[:15], 1):
+            title = snippet.get("title", "无标题")
+            text = (snippet.get("snippet", "") or "")[:300]
+            snippet_lines.append(f"[{i}] {title}\n    {text}")
+
+        page_lines = []
+        for i, (url, content) in enumerate(list(extracted_pages.items())[:2], 1):
+            page_lines.append(f"[网页参考{i}] {url}\n    {content[:1500]}...")
+
+        search_context = "\n## 搜索到的参考网络资料\n"
+        if snippet_lines:
+            search_context += "### 网页片段\n" + "\n\n".join(snippet_lines) + "\n\n"
+        if page_lines:
+            search_context += "### 详细网页内容\n" + "\n\n".join(page_lines) + "\n\n"
+
     # 有已有计划 + 用户反馈 → 增量优化模式
     if existing_plan and human_feedback:
         import json as _json
@@ -64,6 +186,8 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
 ## 学习目标
 {learning_goal}
 
+{search_context}
+
 ## 对话历史（请结合上下文理解用户意图）
 {history_text if history_text else "无历史记录"}
 
@@ -80,6 +204,8 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
 
 ## 学习目标
 {learning_goal}
+
+{search_context}
 
 ## 对话历史（请结合上下文理解用户意图）
 {history_text if history_text else "无历史记录"}
@@ -122,7 +248,7 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
             f"{m.get('title', '')}: {m.get('description', '')}" for m in modules[:3]
         )
         from app.agents.anomaly_checker import check_content_alignment
-        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary)
+        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary, state.get("user_id", 0), state.get("task_id"))
         if not is_aligned:
             logger.warning(f"  [任务分解智能体] 自主检测到内容偏离: {anomaly_reason}")
             logger.warning(f"  [任务分解智能体] 中断当前流程 -> 回到主控")
@@ -212,36 +338,59 @@ def _format_profile(profile: Dict[str, Any]) -> str:
         parts.append(f"领域: {profile['domain']}")
     if profile.get("age"):
         parts.append(f"年龄: {profile['age']}")
+    if profile.get("gender"):
+        parts.append(f"性别: {profile['gender']}")
 
     behavior = profile.get("learning_behavior", {})
+    # 确保画像字典结构完整，双向对齐嵌套与扁平两套命名规范
+    from app.utils.profile_utils import ensure_learning_behavior_fields
+    behavior = ensure_learning_behavior_fields(behavior)
+
     if behavior:
+        goal_orientation = behavior.get("goal_orientation", "exam")
+        goal_map = {
+            "career": "职业发展 (career)",
+            "exam": "考试提分 (exam)",
+            "interest": "兴趣学习 (interest)",
+            "research": "学术研究 (research)",
+            "skill": "技能提升 (skill)"
+        }
+        goal_zh = goal_map.get(goal_orientation, goal_orientation)
+        parts.append(f"目标导向: {goal_zh}")
+
         knowledge = behavior.get("knowledge_base", [])
         if knowledge:
             parts.append(f"已有知识基础: {', '.join(knowledge)}")
 
-        si = behavior.get("sensing_vs_intuitive", 0)
-        vv = behavior.get("visual_vs_verbal", 0)
-        ar = behavior.get("active_vs_reflective", 0)
-        sg = behavior.get("sequential_vs_global", 0)
-        if any([si, vv, ar, sg]):
-            dimensions = []
-            dimensions.append(f"{'感官型' if si < 0 else '直觉型'}(倾向度: {abs(si):.1f})")
-            dimensions.append(f"{'视觉型' if vv < 0 else '言语型'}(倾向度: {abs(vv):.1f})")
-            dimensions.append(f"{'活跃型' if ar < 0 else '沉思型'}(倾向度: {abs(ar):.1f})")
-            dimensions.append(f"{'序列型' if sg < 0 else '全局型'}(倾向度: {abs(sg):.1f})")
-            parts.append(f"学习风格: {'; '.join(dimensions)}")
+        weak_areas = behavior.get("weak_areas", [])
+        if weak_areas:
+            parts.append(f"薄弱环节: {', '.join(weak_areas)}")
 
-        weak_points = behavior.get("weak_areas", [])
-        if weak_points:
-            parts.append(f"薄弱点: {', '.join(weak_points)}")
+        interest_tags = behavior.get("interest_tags", [])
+        if interest_tags:
+            parts.append(f"兴趣标签: {', '.join(interest_tags)}")
+
+        # 使用标准的扁平字段名称进行安全获取，支持精确浮点值显示
+        si = behavior.get("sensing_vs_intuitive", 0.0)
+        vv = behavior.get("visual_vs_verbal", 0.0)
+        ar = behavior.get("active_vs_reflective", 0.0)
+        sg = behavior.get("sequential_vs_global", 0.0)
+
+        dimensions = [
+            f"{'感官型(Sensing)' if si < 0 else '直觉型(Intuitive)'}(数值: {si:.2f})",
+            f"{'视觉型(Visual)' if vv < 0 else '言语型(Verbal)'}(数值: {vv:.2f})",
+            f"{'活跃型(Active)' if ar < 0 else '沉思型(Reflective)'}(数值: {ar:.2f})",
+            f"{'序列型(Sequential)' if sg < 0 else '全局型(Global)'}(数值: {sg:.2f})"
+        ]
+        parts.append(f"学习风格偏好及倾向数值(范围[-1,1]): {'; '.join(dimensions)}")
 
         pref_quiz = behavior.get("preferred_quiz_types", [])
         if pref_quiz:
             parts.append(f"偏好题型: {', '.join(pref_quiz)}")
 
-        prefs = behavior.get("preferred_resource_types", [])
-        if prefs:
-            parts.append(f"内容偏好: {', '.join(prefs)}")
+        pref_resources = behavior.get("preferred_resource_types", [])
+        if pref_resources:
+            parts.append(f"偏好资源: {', '.join(pref_resources)}")
 
     return "\n".join(parts) if parts else "暂无详细画像信息"
 

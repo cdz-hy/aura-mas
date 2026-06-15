@@ -15,7 +15,7 @@ from html.parser import HTMLParser
 from typing import Dict, Any, Tuple
 
 from app.agents.schemas import AgentState
-from app.agents.llm_factory import get_resource_type_generator_llm
+from app.agents.llm_factory import get_animation_skill_generator_llm
 from app.skills.loader import load_skill
 from app.utils.token_recorder import record_from_mimo
 
@@ -167,7 +167,7 @@ def _summarize_source_content(source_content: str, state: AgentState) -> str:
     logger.info(f"  [动画生成] 源内容过长({len(source_content)}字符)，尝试 LLM 摘要...")
 
     try:
-        llm = get_resource_type_generator_llm()
+        llm = get_animation_skill_generator_llm()
         summary_messages = [
             {
                 "role": "system",
@@ -787,7 +787,7 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
 
     while True:
         try:
-            llm = get_resource_type_generator_llm()
+            llm = get_animation_skill_generator_llm()
             llm.request_timeout = ANIMATION_REQUEST_TIMEOUT
             logger.info("  [动画生成] 正在调用 LLM 流式生成完整 HTML...")
 

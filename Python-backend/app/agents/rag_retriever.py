@@ -293,7 +293,7 @@ async def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
                     chunk_headings.append(h)
             anomaly_summary = f"检索目标: {user_message[:200]}; 检索到内容主题: {'; '.join(chunk_headings) if chunk_headings else '无有效结果'}"
             from app.agents.anomaly_checker import check_content_alignment
-            is_aligned, anomaly_reason = check_content_alignment(user_message, anomaly_summary)
+            is_aligned, anomaly_reason = check_content_alignment(user_message, anomaly_summary, state.get("user_id", 0), state.get("task_id"))
             if not is_aligned:
                 logger.warning(f"  [RAG检索智能体] 自主检测到检索内容偏离: {anomaly_reason}")
                 return {

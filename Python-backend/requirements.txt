@@ -15,4 +15,6 @@ langgraph
 langchain-core
 aio-pika
 tavily-python
-playwright
+bilibili-api-python
+redis
+pika

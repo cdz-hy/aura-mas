@@ -7,7 +7,7 @@ from typing import Tuple
 logger = logging.getLogger("agents.anomaly_checker")
 
 
-def check_content_alignment(original_goal: str, content_summary: str) -> Tuple[bool, str]:
+def check_content_alignment(original_goal: str, content_summary: str, user_id: int = 0, task_id: int = None) -> Tuple[bool, str]:
     """
     检查生成/检索的内容是否与原始学习目标对齐。
 
@@ -45,6 +45,8 @@ def check_content_alignment(original_goal: str, content_summary: str) -> Tuple[b
 
     try:
         result = llm.chat_json(messages, max_tokens=128)
+        from app.utils.token_recorder import record_from_mimo
+        record_from_mimo(llm, user_id, "anomaly_check", task_id)
         is_aligned = result.get("is_aligned", True)
         reason = result.get("reason", "")
         if not is_aligned:

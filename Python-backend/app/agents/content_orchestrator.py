@@ -76,8 +76,8 @@ def _flush_module_usage(modules_list: list, user_id: int, scene: str, task_id=No
 def _get_personalized_preferences(user_profile: Dict[str, Any]) -> str:
     """根据用户画像中的 Felder-Silverman 学习风格计算个性化编排要求"""
     behavior = user_profile.get("learning_behavior", {})
-    vv = behavior.get("visual_vs_verbal", 0)
-    si = behavior.get("sensing_vs_intuitive", 0)
+    vv = behavior.get("visual_vs_verbal", 0.0)
+    si = behavior.get("sensing_vs_intuitive", 0.0)
 
     # 1. 详细度与文本长度偏好 (Sensing vs Intuitive)
     if si < -0.3:
@@ -88,12 +88,16 @@ def _get_personalized_preferences(user_profile: Dict[str, Any]) -> str:
         detail_pref = "详细度高，需要输出较长篇幅的文本。提供丰富的理论说明与充实的实例分析，请放开字数限制，尽可能详尽地展开讲解。"
 
     # 2. 图片数量与图文配比偏好 (Visual vs Verbal)
-    if vv < -0.3:
-        image_pref = "强偏好视觉。必须积极且合理地将检索上下文中提供的所有相关的真实图片（使用提供的完整HTML <img>标签格式）嵌入内容中（每个包含图片资料的模块建议插入 2-3 张图片，如果有）"
+    if vv <= -0.8:
+        image_pref = "极度偏好视觉学习。1. 必须积极且合理地将上下文中提供的所有相关的真实图片嵌入内容中。2. 请极其频繁地自主生成能够提纲挈领的 Mermaid 各种图表（flowchart、sequenceDiagram、mindmap等）来直观展现知识点逻辑。注意：必须确保内容有意义需要时才生成，严禁胡编乱造事实，必须基于提供的RAG文本或网络资源生成，且必须严格遵循 Mermaid 语法。"
+    elif vv <= -0.4:
+        image_pref = "强偏好视觉。1. 必须积极且合理地将上下文中提供的相关的真实图片嵌入内容中。2. 对于关键且复杂的概念，请较常地自主生成一些 Mermaid 图表（如 flowchart）来辅助说明。注意：必须有必要且有意义时才生成，严禁胡编乱造，必须基于检索资源生成，严格遵循 Mermaid 语法。"
+    elif vv < 0:
+        image_pref = "轻微偏好视觉。正常搭配真实图片。当内容极度复杂且确有必要时，偶尔可以选择性地自主生成少量的 Mermaid 流程图（flowchart）辅助说明。严禁胡编乱造，严格遵循 Mermaid 语法。"
     elif vv > 0.3:
-        image_pref = "强偏好纯文字与逻辑表述。除非对理解核心概念极其关键，否则请尽量少用图片（每个模块最多插入 1 张最核心的图片，如无极其关键的图片则完全不用）"
+        image_pref = "强偏好纯文字与逻辑表述。尽量少用图片（每个模块最多 1 张，无核心图则不用）。严禁自主生成任何 Mermaid 图表。"
     else:
-        image_pref = "图文平衡。根据内容自然搭配图片，每个模块合理插入 1-2 张核心图片（如果有）"
+        image_pref = "图文平衡。根据内容自然搭配图片（1-2 张）。除非极度必要，否则不要自主生成 Mermaid 图表。"
 
     return (
         f"1. 详细度与篇幅：{detail_pref}\n"
@@ -401,7 +405,8 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             if content_previews:
                 from app.agents.anomaly_checker import check_content_alignment
                 is_aligned, anomaly_reason = check_content_alignment(
-                    learning_goal, "重试编排模块: " + "; ".join(content_previews)
+                    learning_goal, "重试编排模块: " + "; ".join(content_previews),
+                    state.get("user_id", 0), state.get("task_id")
                 )
                 if not is_aligned:
                     logger.warning(f"  [内容编排智能体] 重试编排检测到内容偏离: {anomaly_reason}")
@@ -557,7 +562,8 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             if content_previews:
                 from app.agents.anomaly_checker import check_content_alignment
                 is_aligned, anomaly_reason = check_content_alignment(
-                    learning_goal, "编排模块: " + "; ".join(content_previews)
+                    learning_goal, "编排模块: " + "; ".join(content_previews),
+                    state.get("user_id", 0), state.get("task_id")
                 )
                 if not is_aligned:
                     logger.warning(f"  [内容编排智能体] 检测到编排内容偏离: {anomaly_reason}")
@@ -618,7 +624,8 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
         if content_previews:
             from app.agents.anomaly_checker import check_content_alignment
             is_aligned, anomaly_reason = check_content_alignment(
-                learning_goal, "批量编排模块: " + "; ".join(content_previews)
+                learning_goal, "批量编排模块: " + "; ".join(content_previews),
+                state.get("user_id", 0), state.get("task_id")
             )
             if not is_aligned:
                 logger.warning(f"  [内容编排智能体] 批量编排检测到内容偏离: {anomaly_reason}")

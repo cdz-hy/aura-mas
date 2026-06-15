@@ -185,5 +185,39 @@ def format_search_results(results: List[Dict[str, str]]) -> str:
         line = f"[{i + 1}] {title}\n    {snippet}"
         if url:
             line += f"\n    来源: {url}"
-        lines.append(line)
     return "\n".join(lines)
+
+def search_bilibili_videos(keyword: str) -> list:
+    """B站原生搜索工具 (利用 bilibili-api-python)"""
+    try:
+        from bilibili_api import search, sync
+    except ImportError:
+        logger.warning("[Bilibili搜索] 未安装 bilibili-api-python，请执行 pip install bilibili-api-python")
+        return []
+
+    try:
+        logger.info(f"  [Bilibili] 原生搜索: '{keyword}'")
+        result = sync(search.search_by_type(
+            keyword=keyword,
+            search_type=search.SearchObjectType.VIDEO,
+            page=1
+        ))
+
+        videos = []
+        for item in result.get('result', []):
+            title = item.get('title', '').replace('<em class="keyword">', '').replace('</em>', '')
+            videos.append({
+                "title": title,
+                "bvid": item.get('bvid'),
+                "author": item.get('author'),
+                "url": f"https://www.bilibili.com/video/{item.get('bvid')}",
+                "duration": item.get('duration'), # 格式如 10:23
+                "platform": "Bilibili",
+                "snippet": f"UP主: {item.get('author')} | 时长: {item.get('duration')}"
+            })
+
+        logger.info(f"  [Bilibili] 找到 {len(videos)} 个视频")
+        return videos[:5]
+    except Exception as e:
+        logger.warning(f"  [Bilibili] 原生搜索失败 '{keyword}': {e}")
+        return []

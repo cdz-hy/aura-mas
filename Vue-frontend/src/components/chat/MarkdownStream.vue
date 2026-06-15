@@ -3,7 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, nextTick } from 'vue'
 import { parseMarkdown } from '@/utils/markdown'
 
 const props = defineProps<{
@@ -12,6 +12,76 @@ const props = defineProps<{
 }>()
 
 const container = ref<HTMLElement | null>(null)
+let mermaidInitialized = false
+
+async function renderMermaidDiagrams() {
+  if (!container.value) return
+  
+  const unrendered = container.value.querySelectorAll('.gv-mermaid-wrapper:not([data-rendered="true"]):not([data-rendering="true"])')
+  if (unrendered.length === 0) return
+
+  // Mark them as currently rendering to prevent concurrent async render calls
+  unrendered.forEach(el => el.setAttribute('data-rendering', 'true'))
+
+  try {
+    const mermaid = (await import('mermaid')).default
+    if (!(window as any).__mermaid_initialized__) {
+      mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' })
+      ;(window as any).__mermaid_initialized__ = true
+    }
+
+    for (const el of Array.from(unrendered)) {
+      const codeBase64 = el.getAttribute('data-mermaid-code')
+      if (!codeBase64) continue
+
+      try {
+        const rawCode = decodeURIComponent(codeBase64)
+        // 空白字符规范化：处理NBSP/零宽空格等容易导致解析崩溃的字符
+        const normalizedCode = rawCode
+          .replace(/[\u00A0\u2003\u2002\u2009\u3000]/g, ' ')
+          .replace(/[\u200B\u200C\u200D\uFEFF]/g, '')
+
+        // Record what code we are rendering on this element
+        el.setAttribute('data-rendering-code', codeBase64)
+
+        const id = 'mermaid-' + Math.random().toString(36).substr(2, 9)
+        const { svg } = await mermaid.render(id, normalizedCode)
+        
+        // Check if the element's code has changed while we were rendering
+        if (el.getAttribute('data-mermaid-code') !== codeBase64) {
+          continue
+        }
+
+        el.innerHTML = svg
+        el.setAttribute('data-rendered', 'true')
+        el.removeAttribute('data-rendering')
+        el.removeAttribute('data-rendering-code')
+        el.classList.add('stream-fade-in')
+      } catch (err: any) {
+        // Only show error if the code hasn't changed in the meantime
+        if (el.getAttribute('data-mermaid-code') === codeBase64) {
+          console.error('Mermaid rendering error:', err)
+          el.innerHTML = `
+            <div class="flex flex-col p-4 bg-red-50 rounded-xl border border-red-100">
+              <span class="text-sm font-semibold text-red-600 mb-2">⚠️ 图表渲染失败</span>
+              <pre class="text-xs text-red-500 overflow-x-auto p-2 bg-white rounded border border-red-50/50">${err.message || String(err)}</pre>
+            </div>
+          `
+          el.setAttribute('data-rendered', 'true')
+          el.removeAttribute('data-rendering')
+          el.removeAttribute('data-rendering-code')
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load Mermaid module:', err)
+    // Revert rendering flag so it can retry later if needed
+    unrendered.forEach(el => {
+      el.removeAttribute('data-rendering')
+      el.removeAttribute('data-rendering-code')
+    })
+  }
+}
 
 function updateDOM() {
   if (!container.value) return
@@ -21,6 +91,9 @@ function updateDOM() {
   
   if (!props.streaming) {
     container.value.innerHTML = rawHtml
+    nextTick(() => {
+      renderMermaidDiagrams()
+    })
     return
   }
 
@@ -47,9 +120,25 @@ function updateDOM() {
       if (newNode.nodeType === Node.ELEMENT_NODE && oldNode.nodeType === Node.ELEMENT_NODE) {
         if (newNode.outerHTML !== oldNode.outerHTML) {
           if (newNode.tagName === oldNode.tagName) {
-            // Update contents of existing node without replacing it
-            oldNode.innerHTML = newNode.innerHTML
-            oldNode.className = newNode.className
+            // Special handling for Mermaid wrappers: preserve SVG if code hasn't changed
+            if (
+              oldNode.classList.contains('gv-mermaid-wrapper') &&
+              newNode.classList.contains('gv-mermaid-wrapper') &&
+              oldNode.getAttribute('data-mermaid-code') === newNode.getAttribute('data-mermaid-code')
+            ) {
+              // Code is identical, keep the already rendered SVG and data-rendered attribute
+              // Do nothing to oldNode.innerHTML
+            } else {
+              // Update contents of existing node without replacing it
+              oldNode.innerHTML = newNode.innerHTML
+              oldNode.className = newNode.className
+              if (oldNode.classList.contains('gv-mermaid-wrapper')) {
+                oldNode.removeAttribute('data-rendering')
+                oldNode.removeAttribute('data-rendered')
+                oldNode.removeAttribute('data-rendering-code')
+                oldNode.setAttribute('data-mermaid-code', newNode.getAttribute('data-mermaid-code') || '')
+              }
+            }
           } else {
             // Tag changed, replace the node entirely
             container.value.replaceChild(newNode, oldNode)
@@ -68,6 +157,10 @@ function updateDOM() {
   while (container.value.childNodes.length > newNodes.length) {
     container.value.removeChild(container.value.lastChild!)
   }
+
+  nextTick(() => {
+    renderMermaidDiagrams()
+  })
 }
 
 watch(() => props.content, updateDOM)

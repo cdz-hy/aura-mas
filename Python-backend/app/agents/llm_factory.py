@@ -21,12 +21,14 @@ class MIMOClient:
     # 模型配置：编排智能体用标准模型，其余用 pro 模型
     MODEL_STANDARD = settings.MIMO_MODEL_NAME        # 编排智能体
     MODEL_PRO = settings.MIMO_MODEL_PRO_NAME         # 其余智能体
+    MODEL_PRO_SPEED = settings.MIMO_MODEL_PRO_SPEED_NAME  # 动画生成专用（高速）
     MODEL_FLASH = settings.MIMO_MODEL_FLASH_NAME     # 轻量快速模型（异常检测等）
 
     # 各模型的上下文窗口上限（max_completion_tokens 上限）
     CONTEXT_WINDOWS = {
         settings.MIMO_MODEL_NAME: settings.MIMO_CONTEXT_WINDOW,
         settings.MIMO_MODEL_PRO_NAME: settings.MIMO_CONTEXT_WINDOW,
+        settings.MIMO_MODEL_PRO_SPEED_NAME: settings.MIMO_CONTEXT_WINDOW,
         settings.MIMO_MODEL_FLASH_NAME: settings.MIMO_CONTEXT_WINDOW,
     }
 
@@ -37,9 +39,10 @@ class MIMOClient:
     SAFETY_MARGIN = 1024
 
     def __init__(self, model: str = MODEL_PRO, temperature: float = 0.7, max_tokens: int = 4096,
-                 thinking: Optional[Dict[str, str]] = None, request_timeout: int = 120):
-        self.api_key = settings.MIMO_API_KEY
-        self.base_url = settings.MIMO_BASE_URL
+                 thinking: Optional[Dict[str, str]] = None, request_timeout: int = 120,
+                 base_url: Optional[str] = None, api_key: Optional[str] = None):
+        self.api_key = api_key or settings.MIMO_API_KEY
+        self.base_url = base_url or settings.MIMO_BASE_URL
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -603,6 +606,12 @@ def get_simple_answer_llm() -> MIMOClient:
                       thinking=THINKING_DISABLED)
 
 
+def get_note_format_llm() -> MIMOClient:
+    """笔记整理智能体 - pro 模型，较大输出空间（含批注标记 + 思维导图）"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=16384,
+                      thinking=THINKING_DISABLED)
+
+
 def get_rag_retriever_llm() -> MIMOClient:
     """RAG 检索智能体 - pro 模型，关闭思维链，只需生成检索词"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=1536,
@@ -653,7 +662,7 @@ def get_profile_maintainer_llm() -> MIMOClient:
 
 def get_compressor_llm() -> MIMOClient:
     """会话压缩智能体 - pro 模型，关闭思维链，快速压缩"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=1024,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=2048,
                       thinking=THINKING_DISABLED)
 
 
@@ -661,3 +670,15 @@ def get_tutor_llm() -> MIMOClient:
     """智能辅导智能体 - pro 模型，关闭思维链，中等温度"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=2048,
                       thinking=THINKING_DISABLED)
+
+def get_video_search_llm() -> MIMOClient:
+    """视频搜索智能体 - pro 模型，关闭思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=8192,
+                      thinking=THINKING_DISABLED)
+
+
+def get_animation_skill_generator_llm() -> MIMOClient:
+    """动画技能生成智能体 - pro-speed 模型（高速），专用端点，关闭思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO_SPEED, temperature=0.5, max_tokens=8192,
+                      thinking=THINKING_DISABLED, base_url=settings.MIMO_BASE_URL_SPEED,
+                      api_key=settings.MIMO_API_KEY_SPEED)

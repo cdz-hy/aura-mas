@@ -3,6 +3,8 @@ export interface Note {
   userId: number
   noteName: string
   content: string
+  tags?: string[] | string
+  isPinned?: number
   createdAt: string
   updatedAt: string
 }
@@ -21,6 +23,8 @@ export interface NoteResourceRel {
 export interface NoteCreateRequest {
   noteName: string
   content: string
+  tags?: string[]
+  isPinned?: number
 }
 
 export interface NoteLinkRequest {

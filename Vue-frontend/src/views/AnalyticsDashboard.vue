@@ -1,167 +1,197 @@
 <template>
-  <div class="space-y-6 animate-fade-in-up">
-    <div class="flex items-center justify-between">
-      <div>
-        <h1 class="section-title">学习分析</h1>
-        <p class="text-sm text-navy-400 mt-1">汇总你的学习进度、答题表现和知识掌握情况</p>
+  <div>
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
+      <h1 class="section-title">学习分析仪表盘</h1>
+      <div class="flex items-center gap-3">
+        <!-- Time Range -->
+        <div class="flex bg-navy-100/60 rounded-lg p-0.5 gap-0.5">
+          <button v-for="preset in timePresets" :key="preset.label"
+            class="px-3.5 py-1.5 text-xs rounded-md transition-all font-medium whitespace-nowrap"
+            :class="activePreset === preset.label ? 'bg-navy-700 text-white shadow-sm' : 'text-navy-500 hover:text-navy-700 hover:bg-navy-50'"
+            @click="applyPreset(preset)">
+            {{ preset.label }}
+          </button>
+        </div>
       </div>
-      <button class="btn-secondary text-sm" :disabled="loading" @click="loadAnalytics">
-        {{ loading ? '刷新中...' : '刷新数据' }}
-      </button>
     </div>
 
-    <div v-if="loading" class="flex items-center justify-center h-40">
-      <svg class="w-8 h-8 text-navy-300 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10" class="opacity-25" />
-        <path d="M4 12a8 8 0 018-8" class="opacity-75" stroke-linecap="round" />
+    <!-- Loading -->
+    <div v-if="loading" class="flex items-center justify-center py-20">
+      <svg class="w-8 h-8 animate-spin text-navy-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 12a9 9 0 11-6.219-8.56" />
       </svg>
     </div>
 
-    <template v-else>
-      <div v-if="loadError" class="card p-5 border-red-100 bg-red-50/60">
-        <p class="text-sm font-medium text-red-600">学习分析加载失败</p>
-        <p class="text-sm text-red-500 mt-1">{{ loadError }}</p>
-      </div>
-
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <div v-for="stat in overviewStats" :key="stat.label" class="stat-card">
-          <span class="stat-label">{{ stat.label }}</span>
+    <template v-else-if="analyticsData">
+      <!-- Summary Cards -->
+      <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+        <div v-for="(stat, i) in summaryStats" :key="stat.label"
+          class="stat-card animate-fade-in-up rounded-2xl"
+          :style="{ animationDelay: `${i * 0.08}s` }">
+          <div class="flex items-center gap-3 mb-2">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center" :class="stat.bgClass">
+              <div class="w-5 h-5" :class="stat.iconClass" v-html="stat.icon"></div>
+            </div>
+            <span class="stat-label">{{ stat.label }}</span>
+          </div>
           <span class="stat-value">{{ stat.value }}</span>
+          <span v-if="stat.sub" class="text-xs text-navy-400 mt-1">{{ stat.sub }}</span>
         </div>
       </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <section class="lg:col-span-2 card p-6">
-          <div class="flex items-center justify-between mb-5">
-            <h2 class="font-display text-lg font-semibold text-navy-800">答题趋势</h2>
-            <span class="text-xs px-2.5 py-1 rounded-full bg-sage-100 text-sage-700">
-              {{ trendLabel }}
-            </span>
-          </div>
-          <div v-if="dailyAccuracy.length" class="flex items-end gap-2 h-44">
-            <div
-              v-for="day in dailyAccuracy"
-              :key="day.date"
-              class="flex-1 min-w-0 flex flex-col items-center justify-end gap-2"
-              :title="`${day.date}: ${day.accuracy || 0}%`"
-            >
-              <div class="w-full rounded-t-md bg-gradient-to-t from-navy-500 to-sage-400 transition-all" :style="{ height: `${Math.max(4, day.accuracy || 0)}%` }"></div>
-              <span class="text-[10px] text-navy-300 truncate w-full text-center">{{ shortDate(day.date) }}</span>
-            </div>
-          </div>
-          <p v-else class="text-sm text-navy-300 text-center py-16">暂无答题趋势数据</p>
-        </section>
+      <!-- Week Comparison -->
+      <WeekComparison :week-data="analyticsData.weekComparison" class="mb-6" />
 
-        <section class="card p-6">
-          <h2 class="font-display text-lg font-semibold text-navy-800 mb-5">知识掌握</h2>
-          <div class="space-y-5">
-            <div>
-              <p class="text-sm font-medium text-navy-600 mb-2">已掌握</p>
-              <div class="flex flex-wrap gap-2">
-                <span v-for="item in mastered" :key="item" class="px-2.5 py-1 rounded-full bg-sage-100 text-sage-700 text-xs">{{ item }}</span>
-                <span v-if="!mastered.length" class="text-sm text-navy-300">暂无数据</span>
-              </div>
-            </div>
-            <div>
-              <p class="text-sm font-medium text-navy-600 mb-2">薄弱点</p>
-              <div class="flex flex-wrap gap-2">
-                <span v-for="item in weakAreas" :key="item" class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 text-xs">{{ item }}</span>
-                <span v-if="!weakAreas.length" class="text-sm text-navy-300">暂无数据</span>
-              </div>
-            </div>
-          </div>
-        </section>
+      <!-- Tabs -->
+      <div class="flex items-center gap-1 mb-6 border-b border-navy-100 pb-px overflow-x-auto">
+        <button v-for="tab in tabs" :key="tab.key"
+          class="px-4 py-2.5 text-sm font-medium transition-all whitespace-nowrap border-b-2 -mb-px"
+          :class="activeTab === tab.key
+            ? 'text-navy-800 border-navy-800'
+            : 'text-navy-400 border-transparent hover:text-navy-600 hover:border-navy-200'"
+          @click="activeTab = tab.key">
+          {{ tab.label }}
+        </button>
       </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <section class="card p-6">
-          <h2 class="font-display text-lg font-semibold text-navy-800 mb-5">按题型表现</h2>
-          <div v-if="questionTypes.length" class="space-y-4">
-            <div v-for="item in questionTypes" :key="item.type">
-              <div class="flex justify-between text-sm mb-1.5">
-                <span class="font-medium text-navy-700">{{ item.type }}</span>
-                <span class="text-navy-400">{{ item.correct }}/{{ item.total }} · {{ item.accuracy }}%</span>
-              </div>
-              <div class="h-2 bg-navy-100 rounded-full overflow-hidden">
-                <div class="h-full bg-navy-500 rounded-full" :style="{ width: `${Math.min(100, item.accuracy || 0)}%` }"></div>
-              </div>
-            </div>
-          </div>
-          <p v-else class="text-sm text-navy-300 text-center py-10">暂无题型数据</p>
-        </section>
-
-        <section class="card p-6">
-          <h2 class="font-display text-lg font-semibold text-navy-800 mb-5">按难度表现</h2>
-          <div v-if="difficulties.length" class="space-y-4">
-            <div v-for="item in difficulties" :key="item.difficulty">
-              <div class="flex justify-between text-sm mb-1.5">
-                <span class="font-medium text-navy-700">难度 {{ item.difficulty }}</span>
-                <span class="text-navy-400">{{ item.correct }}/{{ item.total }} · {{ item.accuracy }}%</span>
-              </div>
-              <div class="h-2 bg-navy-100 rounded-full overflow-hidden">
-                <div class="h-full bg-sage-500 rounded-full" :style="{ width: `${Math.min(100, item.accuracy || 0)}%` }"></div>
-              </div>
-            </div>
-          </div>
-          <p v-else class="text-sm text-navy-300 text-center py-10">暂无难度数据</p>
-        </section>
+      <!-- Tab Content -->
+      <div class="animate-fade-in-up">
+        <component :is="currentTabComponent" :data="analyticsData" />
       </div>
     </template>
+
+    <!-- Empty State -->
+    <div v-else class="flex flex-col items-center justify-center py-20">
+      <div class="w-16 h-16 rounded-2xl bg-navy-50 flex items-center justify-center mb-4">
+        <svg class="w-8 h-8 text-navy-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+        </svg>
+      </div>
+      <p class="text-navy-500 font-medium">暂无分析数据</p>
+      <p class="text-sm text-navy-400 mt-1">开始学习后，这里将展示你的学习分析</p>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { getAnalyticsData, type AnalyticsData } from '@/api/stats'
+import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
+import { getAnalyticsData, type AnalyticsData } from '@/api/analytics'
+import WeekComparison from '@/components/analytics/WeekComparison.vue'
 
-const loading = ref(true)
-const loadError = ref('')
-const analytics = ref<AnalyticsData | null>(null)
+// Async tab components
+const TabOverview = defineAsyncComponent(() => import('@/components/analytics/TabOverview.vue'))
+const TabAI = defineAsyncComponent(() => import('@/components/analytics/TabAI.vue'))
+const TabReview = defineAsyncComponent(() => import('@/components/analytics/TabReview.vue'))
 
-const overview = computed(() => analytics.value?.overview ?? {})
-const quizAnalysis = computed(() => analytics.value?.quizAnalysis ?? {})
-const knowledgeMastery = computed(() => analytics.value?.knowledgeMastery ?? {})
+const loading = ref(false)
+const analyticsData = ref<AnalyticsData | null>(null)
+const activeTab = ref('overview')
+const activePreset = ref('全部')
 
-const overviewStats = computed(() => [
-  { label: '学习计划', value: overview.value.totalPlans ?? 0 },
-  { label: '学习资源', value: overview.value.totalResources ?? 0 },
-  { label: '学习时长', value: `${overview.value.totalStudyHours ?? 0}h` },
-  { label: '答题正确率', value: `${overview.value.quizAccuracy ?? 0}%` },
-])
+const timePresets = [
+  { label: '近7天', days: 7 },
+  { label: '近30天', days: 30 },
+  { label: '全部', days: 365 },
+]
 
-const questionTypes = computed(() => quizAnalysis.value.byQuestionType ?? [])
-const difficulties = computed(() => quizAnalysis.value.byDifficulty ?? [])
-const dailyAccuracy = computed(() => (quizAnalysis.value.dailyAccuracy ?? []).slice(-14))
-const mastered = computed(() => knowledgeMastery.value.mastered ?? [])
-const weakAreas = computed(() => knowledgeMastery.value.weakAreas ?? [])
-
-const trendLabel = computed(() => {
-  const trend = quizAnalysis.value.trend
-  if (!trend?.direction) return '趋势稳定'
-  const change = trend.changePercent ?? 0
-  if (trend.direction === 'up') return `提升 ${change}%`
-  if (trend.direction === 'down') return `下降 ${change}%`
-  return '趋势稳定'
-})
-
-function shortDate(date: string) {
-  if (!date) return ''
-  return date.slice(5).replace('-', '/')
+function applyPreset(preset: { label: string; days: number }) {
+  activePreset.value = preset.label
+  fetchData(preset.days)
 }
 
-async function loadAnalytics() {
+const tabs = [
+  { key: 'overview', label: '学习概览' },
+  { key: 'ai', label: 'AI洞察' },
+  { key: 'review', label: '复习助手' },
+]
+
+const tabComponentMap: Record<string, any> = {
+  overview: TabOverview,
+  ai: TabAI,
+  review: TabReview,
+}
+
+const currentTabComponent = computed(() => tabComponentMap[activeTab.value])
+
+const summaryStats = computed(() => {
+  const data = analyticsData.value
+  if (!data) return []
+
+  const overview = data.overview || {}
+  const quiz = data.quizAnalysis || {}
+  const heatmap = data.heatmap || {}
+  const flashcard = data.flashcardStats || {}
+  const ai = data.aiInteraction || {}
+
+  return [
+    {
+      label: '今日学习',
+      value: formatDuration(overview.todayDurationSeconds || 0),
+      sub: `累计 ${formatHours(overview.totalDurationSeconds || 0)}`,
+      bgClass: 'bg-blue-50',
+      iconClass: 'text-blue-500',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
+    },
+    {
+      label: '答题正确率',
+      value: `${overview.quizAccuracy || 0}%`,
+      sub: quiz.recentTrend?.direction === 'up' ? `↑ ${quiz.recentTrend.changePercent}%` :
+        quiz.recentTrend?.direction === 'down' ? `↓ ${Math.abs(quiz.recentTrend.changePercent)}%` : '持平',
+      bgClass: 'bg-emerald-50',
+      iconClass: 'text-emerald-500',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+    },
+    {
+      label: '学习连续',
+      value: `${heatmap.currentStreak || 0}天`,
+      sub: `最长 ${heatmap.longestStreak || 0} 天`,
+      bgClass: 'bg-amber-50',
+      iconClass: 'text-amber-500',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
+    },
+    {
+      label: '闪卡待复习',
+      value: `${flashcard.dueToday || 0}张`,
+      sub: `共 ${flashcard.totalCards || 0} 张`,
+      bgClass: 'bg-purple-50',
+      iconClass: 'text-purple-500',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+    },
+    {
+      label: 'AI交互',
+      value: `${ai.totalDialogues || 0}轮`,
+      sub: `平均 ${ai.avgSessionLength || 0} 轮/会话`,
+      bgClass: 'bg-rose-50',
+      iconClass: 'text-rose-500',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    },
+  ]
+})
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}秒`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}分钟`
+  const hours = Math.floor(seconds / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
+  return mins > 0 ? `${hours}小时${mins}分` : `${hours}小时`
+}
+
+function formatHours(seconds: number): string {
+  return `${(seconds / 3600).toFixed(1)}小时`
+}
+
+async function fetchData(days?: number) {
   loading.value = true
-  loadError.value = ''
   try {
-    const res = await getAnalyticsData()
-    analytics.value = res.data || {}
-  } catch (error: any) {
-    loadError.value = error?.message || '无法获取学习分析数据'
-    analytics.value = {}
+    const res = await getAnalyticsData(days)
+    analyticsData.value = res.data || res
+  } catch (e) {
+    console.error('Failed to fetch analytics data:', e)
   } finally {
     loading.value = false
   }
 }
 
-onMounted(loadAnalytics)
+onMounted(() => fetchData())
 </script>

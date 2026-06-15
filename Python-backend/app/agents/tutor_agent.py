@@ -12,6 +12,7 @@ from app.services.db.java_client import java_client
 from app.services.retrieval import HybridRetrievalService
 from app.agents.conversation_compressor import build_chat_history_with_context
 from app.utils.profile_utils import ensure_learning_behavior_fields, update_learning_behavior
+from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("agents.tutor_agent")
 
@@ -107,18 +108,24 @@ TUTOR_PROFILE_PROMPT = """你是一个用户画像分析助手。根据辅导对
     "active_vs_reflective": 增量值或null,
     "sensing_vs_intuitive": 增量值或null,
     "sequential_vs_global": 增量值或null,
-    "knowledge_base": [...完整列表...] 或 null,
-    "weak_areas": [...完整列表...] 或 null,
-    "interest_tags": [...完整列表...] 或 null,
-    "preferred_resource_types": [...] 或 null,
+    "learning_speed": 增量值或null,
+    "engagement_level": 增量值或null,
+    "preferred_difficulty": 增量值或null,
+    "quiz_accuracy": 增量值或null,
+    "completion_rate": 增量值或null,
+    "knowledge_base": [...仅新增项...] 或 null,
+    "weak_areas": [...仅新增项...] 或 null,
+    "interest_tags": [...仅新增项...] 或 null,
+    "preferred_resource_types": [...仅新增项...] 或 null,
     "goal_orientation": "..." 或 null
   },
   "analysis": "简要分析依据"
 }
 
 ## 注意
-- 学习风格维度只输出增量（如 +0.1 或 -0.1），不要输出绝对值
-- 列表字段输出期望的最终完整列表，不是增量
+- 所有数值字段都输出增量值（如 +0.1 或 -0.1），不要输出绝对值，系统会自动累加到当前值
+- 列表字段只输出需要新增的项，系统会自动合并（只增不删）
+- goal_orientation 直接输出目标值（如 "exam"），不是增量
 - 如果没有足够信息判断，should_update 设为 false"""
 
 
@@ -267,6 +274,7 @@ async def tutor_chat(
 
         try:
             nr_analysis = llm.chat_json(no_resource_messages, max_tokens=512)
+            record_from_mimo(llm, user_id, "tutor_no_resource_analysis")
             is_clear = nr_analysis.get("clear", True)
             if is_clear:
                 sp = nr_analysis.get("search_points", [])
@@ -300,6 +308,7 @@ async def tutor_chat(
 
         try:
             analysis = llm.chat_json(analysis_messages, max_tokens=512)
+            record_from_mimo(llm, user_id, "tutor_analysis")
             related = analysis.get("related", True)
             search_points = analysis.get("search_points", [user_message])
             analysis_text = analysis.get("analysis", "")
@@ -441,6 +450,8 @@ async def tutor_chat(
         if not ai_response:
             _emit(sse_callback, "chunk", ai_response)
 
+    record_from_mimo(llm, user_id, "tutor_response")
+
     # 记录段落边界（\n\n 的位置）
     search_from = 0
     while True:
@@ -485,7 +496,7 @@ async def tutor_chat(
 - 感官-直觉: {current_behavior.get('sensing_vs_intuitive', 0.0)}
 - 序列-全局: {current_behavior.get('sequential_vs_global', 0.0)}
 - 偏好资源类型: {current_behavior.get('preferred_resource_types', [])}
-- 目标导向: {current_behavior.get('goal_orientation', 'career')}
+- 目标导向: {current_behavior.get('goal_orientation', 'exam')}
 
 ## 辅导对话
 用户: {user_message}
@@ -499,6 +510,7 @@ async def tutor_chat(
         ]
 
         profile_result = llm.chat_json(profile_messages, max_tokens=1024)
+        record_from_mimo(llm, user_id, "tutor_profile_analysis")
         should_update = profile_result.get("should_update", False)
         updates = profile_result.get("updates", {})
         confidence = profile_result.get("confidence", 0.5)
