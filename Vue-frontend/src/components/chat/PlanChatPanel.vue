@@ -1,47 +1,62 @@
 <template>
-  <div class="flex-1 flex-shrink-0 flex flex-col card overflow-hidden animate-fade-in-up min-w-[300px]" style="animation-delay: 0.1s">
+  <div class="flex-1 flex-shrink-0 flex flex-col card overflow-hidden animate-fade-in-up min-w-[260px] md:min-w-[300px]" style="animation-delay: 0.1s">
     <!-- Header with mode toggle -->
-    <div class="px-6 py-3 border-b border-navy-100/50">
-      <div class="flex items-center justify-between">
-        <!-- Mode tabs -->
-        <div class="flex items-center gap-1 bg-navy-50/60 rounded-lg p-0.5">
-          <button
-            class="px-3 py-1.5 rounded-md text-xs font-medium transition-all"
-            :class="mode === 'assistant' ? 'bg-white text-navy-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
-            @click="switchMode('assistant')"
-          >AI 学习助手</button>
-          <button
-            class="px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5"
-            :class="mode === 'tutor' ? 'bg-white text-purple-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
-            @click="switchMode('tutor')"
-          >
-            <img :src="tutorGif" alt="" class="w-3.5 h-3.5 rounded" />
-            智能辅导
-          </button>
-        </div>
+    <div class="px-4 py-3 border-b border-navy-100/50">
+      <div class="flex items-center justify-between gap-3">
+        <!-- Mode Toggler (Merged Sliding Button) -->
+        <button
+          class="relative px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all duration-300 border shadow-sm select-none group flex-shrink-0"
+          :class="mode === 'assistant' 
+            ? 'bg-navy-50 hover:bg-navy-100 border-navy-200/80 text-navy-700' 
+            : 'bg-purple-50 hover:bg-purple-100 border-purple-200/80 text-purple-700'"
+          @click="switchMode(mode === 'assistant' ? 'tutor' : 'assistant')"
+          title="切换工作模式"
+        >
+          <!-- Dynamic transition inside the button -->
+          <transition name="mode-icon-fade" mode="out-in">
+            <span :key="mode" class="flex items-center gap-1.5">
+              <template v-if="mode === 'assistant'">
+                <svg class="w-3.5 h-3.5 text-navy-600 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
+                </svg>
+                <span>AI 学习助手</span>
+              </template>
+              <template v-else>
+                <img :src="tutorGif" alt="" class="w-3.5 h-3.5 rounded flex-shrink-0" />
+                <span>智能辅导</span>
+              </template>
+            </span>
+          </transition>
+          
+          <!-- Swap arrows with hover rotation -->
+          <svg class="w-3.5 h-3.5 opacity-40 group-hover:opacity-80 transition-all duration-500 transform group-hover:rotate-180 ml-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 17H4M4 17l4 4M4 17l4-4M4 7h16m0 0l-4-4m4 4l-4 4" />
+          </svg>
+        </button>
 
         <!-- Actions -->
-        <div class="flex items-center gap-2 flex-shrink-0">
+        <div class="flex items-center gap-1.5 flex-shrink-0">
           <button
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+            class="p-2 rounded-lg transition-colors relative"
             :class="showSessionList ? 'bg-navy-100 text-navy-700' : 'bg-navy-50 text-navy-500 hover:bg-navy-100'"
             @click="showSessionList = !showSessionList"
             title="会话历史"
           >
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
             </svg>
-            会话 ({{ currentSessions.length }})
+            <span v-if="currentSessions.length" class="absolute -top-1 -right-1 bg-navy-600 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center border border-white">
+              {{ currentSessions.length }}
+            </span>
           </button>
           <button
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-navy-50 text-navy-500 hover:bg-navy-100 transition-colors"
+            class="p-2 rounded-lg bg-navy-50 text-navy-500 hover:bg-navy-100 transition-colors"
             @click="handleNewSession()"
             title="新建会话"
           >
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
             </svg>
-            新会话
           </button>
           <button
             v-if="isStreaming"
@@ -101,8 +116,16 @@
     </transition>
 
     <!-- Messages area -->
-    <div ref="messagesContainer" class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-      <!-- ═══ Assistant mode messages ═══ -->
+    <div
+      ref="messagesContainer"
+      class="flex-1 overflow-y-auto px-6 py-4"
+      @click="handleCitationClick"
+      @mouseover="handleCitationMouseOver"
+      @mouseout="handleCitationMouseOut"
+    >
+      <transition name="chat-fade" mode="out-in">
+        <div :key="mode" class="space-y-4">
+          <!-- ═══ Assistant mode messages ═══ -->
       <template v-if="mode === 'assistant'">
         <!-- Welcome -->
         <div v-if="chatStore.messages.length === 0" class="flex items-start gap-3">
@@ -284,6 +307,8 @@
           <div class="tutor-followup-bubble">{{ currentFollowUp }}</div>
         </div>
       </template>
+        </div>
+      </transition>
     </div>
 
     <!-- Input bar -->
@@ -315,6 +340,60 @@
         </button>
       </form>
     </div>
+
+    <!-- 引用悬浮预览卡片 -->
+    <Teleport to="body">
+      <transition name="fade">
+        <div
+          v-if="hoveredCitation"
+          class="fixed z-50 p-3.5 rounded-xl border border-navy-100/50 bg-white/80 backdrop-blur-md shadow-[0_8px_30px_rgb(0,0,0,0.04)] max-w-xs text-left pointer-events-auto transition-all duration-150"
+          :style="popoverStyle"
+          @mouseenter="clearPopoverTimeout"
+          @mouseleave="handleCitationMouseOut"
+        >
+          <div class="flex items-start gap-2.5">
+            <div class="w-7 h-7 rounded-lg bg-navy-50 flex items-center justify-center flex-shrink-0 mt-0.5 text-navy-400">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                <path d="M2 17l10 5 10-5" />
+                <path d="M2 12l10 5 10-5" />
+              </svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-xs font-semibold text-navy-800 line-clamp-2 leading-snug">
+                {{ hoveredCitation.title }}
+              </p>
+              <p class="text-[10px] text-navy-400 font-mono tracking-tight mt-1.5 flex items-center gap-1">
+                <svg class="w-3 h-3 text-navy-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
+                </svg>
+                {{ hoveredCitation.domain }}
+              </p>
+              <div class="flex items-center justify-between mt-3 pt-2 border-t border-navy-100/30">
+                <span class="text-[9px] px-1.5 py-0.5 rounded bg-navy-50 text-navy-500 font-medium font-sans">
+                  来源 [{{ hoveredCitation.id }}]
+                </span>
+                <a
+                  :href="hoveredCitation.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-[10px] text-navy-500 hover:text-purple-600 flex items-center gap-1 font-medium transition-colors"
+                >
+                  查看原文
+                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+                    <polyline points="15 3 21 3 21 9" />
+                    <line x1="10" y1="14" x2="21" y2="3" />
+                  </svg>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </Teleport>
   </div>
 </template>
 
@@ -398,15 +477,17 @@ const quickQuestions = [
 ]
 
 const resourceOptions = [
-  { type: 'quiz', label: '生成测验' },
-  { type: 'mindmap', label: '生成思维导图' },
-  { type: 'code', label: '生成代码示例' },
-  { type: 'summary', label: '生成总结' },
-  { type: 'video', label: '生成教学视频' },
+  { type: 'quiz', label: '测验' },
+  { type: 'mindmap', label: '思维导图' },
+  { type: 'code', label: '代码示例' },
+  { type: 'summary', label: '总结' },
+  { type: 'video', label: '教学视频' },
+  { type: 'animation', label: '动画' },
+  { type: 'podcast', label: '播客' },
 ]
 
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表',
+  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客',
 }
 
 const moduleContextMessage = computed(() => chatStore.selectedModuleContext ? { title: chatStore.selectedModuleContext.title } : null)
@@ -441,6 +522,11 @@ function handleSendAssistant(text?: string) {
       return
     }
   }
+  // 确认状态下，底部输入也走 confirmBreakdown 以携带 task_breakdown 上下文
+  if (chatStore.awaitingConfirmation && chatStore.pendingTaskBreakdown) {
+    chatStore.confirmBreakdown(props.planId, msg)
+    return
+  }
   chatStore.sendMessage(msg, props.planId)
 }
 
@@ -456,7 +542,6 @@ function handleNewSession() {
   if (props.mode === 'tutor') {
     tutor.newSession()
     currentFollowUp.value = pickFollowUp()
-    lastFollowUpContent = ''
   } else {
     chatStore.newSession()
     chatStore.loadSessions(props.planId)
@@ -489,15 +574,29 @@ function handleStop() {
 // ─── Scroll ───
 function scrollBottom() {
   if (messagesContainer.value) {
-    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+    const el = messagesContainer.value
+    el.scrollTop = el.scrollHeight
+    // Double-check after a short delay for images/transitions
+    setTimeout(() => {
+      if (el) el.scrollTop = el.scrollHeight
+    }, 150)
+    setTimeout(() => {
+      if (el) el.scrollTop = el.scrollHeight
+    }, 400)
   }
 }
+
+import { onMounted } from 'vue'
+
+onMounted(() => {
+  nextTick(() => scrollBottom())
+})
 
 // Auto-scroll on new messages
 watch(() => {
   if (props.mode === 'tutor') return tutor.messages.value.length + (tutor.loading.value ? 1 : 0)
   return chatStore.messages.length + chatStore.streamBuffer.length
-}, () => nextTick(() => scrollBottom()))
+}, () => nextTick(() => scrollBottom()), { immediate: true })
 
 // Load assistant sessions on mount and when planId changes
 watch(() => props.planId, (planId) => {
@@ -528,7 +627,7 @@ function formatTime(time?: string) {
 }
 
 function badgeClass(type: string) {
-  return { text: 'bg-blue-50 text-blue-500', document: 'bg-blue-50 text-blue-500', mindmap: 'bg-purple-50 text-purple-500', quiz: 'bg-amber-50 text-amber-500', code: 'bg-emerald-50 text-emerald-500', reading: 'bg-rose-50 text-rose-500', video: 'bg-red-50 text-red-500', summary: 'bg-sky-50 text-sky-500', image: 'bg-pink-50 text-pink-500', diagram: 'bg-indigo-50 text-indigo-500' }[type] || 'bg-navy-50 text-navy-500'
+  return { text: 'bg-blue-50 text-blue-500', document: 'bg-blue-50 text-blue-500', mindmap: 'bg-purple-50 text-purple-500', quiz: 'bg-amber-50 text-amber-500', code: 'bg-emerald-50 text-emerald-500', reading: 'bg-rose-50 text-rose-500', video: 'bg-red-50 text-red-500', summary: 'bg-sky-50 text-sky-500', image: 'bg-pink-50 text-pink-500', diagram: 'bg-indigo-50 text-indigo-500', animation: 'bg-orange-50 text-orange-500', podcast: 'bg-emerald-50 text-emerald-500' }[type] || 'bg-navy-50 text-navy-500'
 }
 
 function detectResourceType(msg: string): string | null {
@@ -538,6 +637,8 @@ function detectResourceType(msg: string): string | null {
   if (/代码|code|示例代码|编程/.test(lower)) return 'code'
   if (/总结|摘要|summary|复习|要点/.test(lower)) return 'summary'
   if (/视频|video|教程|教学视频/.test(lower)) return 'video'
+  if (/动画|animation|动效/.test(lower)) return 'animation'
+  if (/播客|电台|podcast|博客|文章|blog|网页/.test(lower)) return 'podcast'
   return null
 }
 
@@ -548,6 +649,87 @@ watch(() => props.mode, (newMode) => {
     nextTick(() => scrollBottom())
   }
 })
+
+// === 引用源（Citation）悬浮与点击交互 ===
+const hoveredCitation = ref<{ id: string; title: string; url: string; domain: string } | null>(null)
+const popoverX = ref(0)
+const popoverY = ref(0)
+const popoverPlacement = ref<'top' | 'bottom'>('top')
+let popoverTimeout: ReturnType<typeof setTimeout> | null = null
+
+const popoverStyle = computed(() => {
+  return {
+    left: `${popoverX.value}px`,
+    top: `${popoverY.value}px`,
+    transform: popoverPlacement.value === 'top' ? 'translate(-50%, -100%) translateY(-8px)' : 'translate(-50%, 8px)'
+  }
+})
+
+function getDomainName(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
+}
+
+function handleCitationMouseOver(e: MouseEvent) {
+  const target = (e.target as HTMLElement).closest('.citation-ref') as HTMLElement
+  if (!target) return
+
+  if (popoverTimeout) clearTimeout(popoverTimeout)
+
+  const refId = target.getAttribute('data-ref') || ''
+  const url = target.getAttribute('data-url') || ''
+  const title = target.getAttribute('data-title') || `网页来源 [${refId}]`
+  if (!url) return
+
+  const rect = target.getBoundingClientRect()
+  popoverX.value = rect.left + rect.width / 2
+  
+  if (rect.top < 150) {
+    popoverPlacement.value = 'bottom'
+    popoverY.value = rect.bottom
+  } else {
+    popoverPlacement.value = 'top'
+    popoverY.value = rect.top
+  }
+
+  hoveredCitation.value = {
+    id: refId,
+    title,
+    url,
+    domain: getDomainName(url)
+  }
+}
+
+function handleCitationMouseOut(e: MouseEvent) {
+  if (popoverTimeout) clearTimeout(popoverTimeout)
+  const target = (e.target as HTMLElement).closest('.citation-ref') as HTMLElement
+  const related = e.relatedTarget as HTMLElement
+  // 如果离开后进入的元素依然属于当前 citation-ref，则忽略，避免抖动
+  if (target && related && target.contains(related)) {
+    return
+  }
+  
+  popoverTimeout = setTimeout(() => {
+    hoveredCitation.value = null
+  }, 250)
+}
+
+function clearPopoverTimeout() {
+  if (popoverTimeout) clearTimeout(popoverTimeout)
+}
+
+function handleCitationClick(e: MouseEvent) {
+  const target = (e.target as HTMLElement).closest('.citation-ref') as HTMLElement
+  if (!target) return
+  
+  const url = target.getAttribute('data-url')
+  if (url) {
+    window.open(url, '_blank')
+  }
+}
 
 // Expose for parent
 defineExpose({ updateResourceTitle, updateResourceType, scrollBottom })
@@ -567,6 +749,19 @@ defineExpose({ updateResourceTitle, updateResourceType, scrollBottom })
 .slide-down-enter-to,
 .slide-down-leave-from {
   max-height: 240px;
+}
+
+.chat-fade-enter-active,
+.chat-fade-leave-active {
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.chat-fade-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.chat-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
 }
 
 /* Tutor message styles */
@@ -761,5 +956,28 @@ defineExpose({ updateResourceTitle, updateResourceType, scrollBottom })
 }
 .tutor-md-content :deep(img:hover) {
   transform: scale(1.02);
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.15s ease-out;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* Mode Switcher Micro-animations */
+.mode-icon-fade-enter-active,
+.mode-icon-fade-leave-active {
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.mode-icon-fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px) scale(0.9);
+}
+.mode-icon-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.9);
 }
 </style>

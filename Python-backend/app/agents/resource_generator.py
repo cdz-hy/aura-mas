@@ -1,6 +1,6 @@
 """
-多模态资源自主生成智能体 - 结合 Tavily 网络搜索自主生成高质量学习内容
-支持并行生成多个模块
+多模态资源自主生成智能体 - 结合增强版 ReAct 搜索循环自主生成高质量学习内容
+支持并行生成多个模块，支持自主搜索和网页提取
 """
 import logging
 import json
@@ -9,10 +9,18 @@ import concurrent.futures
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_resource_generator_llm
-from app.agents.search_utils import search_tavily, execute_searches
-from app.prompts import RESOURCE_GENERATOR_PROMPT, SEARCH_PLANNING_PROMPT
+from app.agents.enhanced_search import (
+    SearchHistoryTracker,
+    execute_actions_parallel,
+    format_action_results_for_llm
+)
+from app.prompts.enhanced_search_prompts import (
+    REACT_SEARCH_SYSTEM_PROMPT,
+    CONTENT_GENERATION_WITH_SOURCES_PROMPT
+)
 from app.core.config import settings
 from app.utils.token_recorder import record_from_mimo
+from app.utils import stream_registry
 
 
 def _emit(state: dict, event_type: str, content: str):
@@ -27,35 +35,8 @@ def _emit(state: dict, event_type: str, content: str):
 logger = logging.getLogger("agents.resource_generator")
 
 
-def _format_search_results(results: List[Dict[str, str]]) -> str:
-    """格式化搜索结果为 LLM 可读文本（带编号，供正文引用）"""
-    lines = []
-    for i, r in enumerate(results):
-        title = r.get("title", "无标题")
-        snippet = r.get("snippet", "")
-        url = r.get("url", "")
-        line = f"[{i + 1}] {title}\n    {snippet}"
-        if url:
-            line += f"\n    来源: {url}"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def _format_image_results(images: List[Dict[str, str]], max_images: int = 6) -> str:
-    """格式化图片列表为 LLM 可读文本，供 LLM 选择最相关的嵌入正文"""
-    if not images:
-        return ""
-    lines = []
-    for i, img in enumerate(images[:max_images]):
-        desc = img.get("description", "") or "相关图片"
-        url = img.get("url", "")
-        if url:
-            lines.append(f"[img{i + 1}] {desc}\n    URL: {url}")
-    return "\n".join(lines)
-
-
 def _summarize_existing_results(results: List[Dict[str, str]], max_items: int = 15) -> str:
-    """简要摘要已有搜索结果，供 LLM 判断是否需要补充搜索"""
+    """简要摘要已有搜索结果（保留用于向后兼容，但 ReAct 模式下不再使用）"""
     if not results:
         return "暂无搜索结果"
     lines = []
@@ -76,6 +57,8 @@ def _generate_single_module(
     user_profile: Dict[str, Any],
     sse_callback=None,
     resource_id: int = 0,
+    user_id: int = 0,
+    task_id: int = None,
 ) -> Dict[str, Any]:
     """
     为单个模块执行搜索 + 内容生成流程
@@ -100,102 +83,214 @@ def _generate_single_module(
 
     # 用户画像风格提示
     behavior = user_profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
-    style_hints = []
-    if fs.get("visual_verbal", 0) < -0.3:
-        style_hints.append("多使用图表、流程图描述")
-    if fs.get("sensing_intuitive", 0) < -0.3:
-        style_hints.append("多给出具体实例和实际案例")
-    if fs.get("sequential_global", 0) < -0.3:
-        style_hints.append("按照步骤顺序逐步讲解")
-    style_text = "用户偏好: " + "; ".join(style_hints) if style_hints else ""
+    vv = behavior.get("visual_vs_verbal", 0.0)
+    si = behavior.get("sensing_vs_intuitive", 0.0)
+    sg = behavior.get("sequential_vs_global", 0.0)
+    
+    # 1. 详细度与文本长度偏好
+    if si < -0.3:
+        detail_pref = "详细度极高！必须尽可能输出极长且内容极度丰富的文本。提供极其详尽、具体的概念深度剖析、海量实例应用和事无巨细的步骤拆解，切勿精简任何细节，字数越多越好！"
+    elif si > 0.3:
+        detail_pref = "偏好高层概念和原理解释。核心理论讲解需尽量丰富透彻，输出较长的篇幅以确保原理解释的深度，但在举例说明时可适当保持精炼，避免过于碎片化的细节，但总体篇幅仍需保持较长且充实。"
+    else:
+        detail_pref = "详细度高，需要输出较长篇幅的文本。提供丰富的理论说明与充实的实例分析，请放开字数限制，尽可能详尽地展开讲解。"
+        
+    # 2. 图片使用偏好 (Visual vs Verbal)
+    if vv <= -0.8:
+        image_pref = "极度偏好视觉学习。1. 必须积极从可用图片列表中挑选多张相关的真实图片嵌入内容中。2. 请极其频繁地自主生成能够提纲挈领的 Mermaid 各种图表（flowchart、sequenceDiagram等）来直观展现知识点逻辑。注意：必须确保内容有意义需要时才生成，严禁胡编乱造事实，必须基于提供的文本或网络资源生成，且必须严格遵循 Mermaid 语法。"
+    elif vv <= -0.4:
+        image_pref = "强偏好视觉。1. 必须积极挑选相关的真实图片嵌入内容中。2. 对于关键且复杂的概念，请较常地自主生成一些 Mermaid 图表（如 flowchart）来辅助说明。注意：必须有必要且有意义时才生成，严禁胡编乱造，必须基于检索资源生成，严格遵循 Mermaid 语法。"
+    elif vv < 0:
+        image_pref = "轻微偏好视觉。自然搭配真实图片。当内容极度复杂且确有必要时，偶尔可以选择性地自主生成少量的 Mermaid 流程图（flowchart）辅助说明。严禁胡编乱造，严格遵循 Mermaid 语法。"
+    elif vv > 0.3:
+        image_pref = "强偏好纯文字与逻辑表述。尽量少用图片（最多插入 1 张最核心的图片）。严禁自主生成任何 Mermaid 图表。"
+    else:
+        image_pref = "图文平衡。自然搭配图片（1-2 张）。除非极度必要，否则不要自主生成 Mermaid 图表。"
+        
+    # 3. 结构偏好
+    if sg < -0.3:
+        struct_pref = "按严格的逻辑步骤顺序逐步讲解"
+    elif sg > 0.3:
+        struct_pref = "先给出全局宏观图景和最终结论，再填充细节"
+    else:
+        struct_pref = "结构自然，按常规逻辑推进"
 
-    # ==================== 多轮搜索 ====================
-    search_context = ""
-    search_result_count = 0
-    all_search_results: List[Dict[str, str]] = []
-    all_images: List[Dict[str, str]] = []
-    MAX_SEARCH_ROUNDS = 3
+    style_text = (
+        "用户个性化内容偏好要求（生成时必须严格遵守）:\n"
+        f"1. 详细度与篇幅：{detail_pref}\n"
+        f"2. 图文配比与图片数量：{image_pref}\n"
+        f"3. 结构化讲解顺序：{struct_pref}"
+    )
+    logger.info(f"  [资源生成] 模块{module_order} 个性化偏好约束:\n{style_text}")
+
+    # ==================== ReAct 自主搜索循环 ====================
+    MAX_REACT_ROUNDS = 6  # 最多 6 轮 ReAct 循环
+    history_tracker = SearchHistoryTracker()
 
     try:
-        for round_num in range(1, MAX_SEARCH_ROUNDS + 1):
+        system_prompt = REACT_SEARCH_SYSTEM_PROMPT.format(max_rounds=MAX_REACT_ROUNDS)
+
+        for round_num in range(1, MAX_REACT_ROUNDS + 1):
+            logger.info(f"  [ReAct] 模块{module_order} - 第 {round_num} 轮思考")
+
+            # 构建本轮 prompt
             if round_num == 1:
-                context_prompt = f"学习主题: {topic}\n\n目标: {learning_goal}\n\n请规划首次搜索策略，输出 JSON:"
+                user_prompt = f"""## 研究任务
+学习主题: {topic}
+学习目标: {learning_goal}
+
+这是第 1 轮，请开始规划你的搜索策略。"""
             else:
-                prev_summary = f"已完成 {round_num - 1} 轮搜索，共 {len(all_search_results)} 条结果"
-                context_prompt = f"""学习主题: {topic}
-目标: {learning_goal}
+                history_summary = history_tracker.get_summary_for_llm(max_recent_snippets=15)
+                user_prompt = f"""## 研究任务
+学习主题: {topic}
+学习目标: {learning_goal}
 
-{prev_summary}
-{_summarize_existing_results(all_search_results, max_items=15)}
+{history_summary}
 
-请审视现有资料是否充分。如果还有信息缺口，规划补充搜索；如果充足，输出 decision=sufficient。输出 JSON:"""
+这是第 {round_num} 轮，请基于已有信息判断是否需要继续搜索。"""
 
-            plan_messages = [
-                {"role": "system", "content": SEARCH_PLANNING_PROMPT},
-                {"role": "user", "content": context_prompt}
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            plan_result = llm.chat_json(plan_messages, max_tokens=4096)
-            decision = plan_result.get("decision", "search")
 
-            if decision == "sufficient":
+            # LLM 思考并决策（使用 chat_json_stream 而非 chat_json，避免 response_format 兼容问题）
+            react_result = llm.chat_json_stream(messages, max_tokens=4096)
+            logger.debug(f"  [ReAct] LLM 原始返回: {str(react_result)[:300]}")
+
+            # 确保 react_result 是字典
+            if not isinstance(react_result, dict):
+                logger.warning(f"  [ReAct] LLM 返回非字典类型: {type(react_result)}，结束搜索")
                 break
 
-            searches = plan_result.get("searches", [])
-            if not searches:
+            thought = str(react_result.get("thought", ""))
+            decision = str(react_result.get("decision", "continue")).lower().strip()
+            actions = react_result.get("actions", [])
+
+            # 确保 actions 是列表
+            if not isinstance(actions, list):
+                actions = []
+
+            logger.info(f"  [ReAct] 思考: {thought[:100]}...")
+            logger.info(f"  [ReAct] 决策: {decision}, 动作数: {len(actions)}")
+
+            # 如果决定结束
+            if decision == "finish":
+                logger.info(f"  [ReAct] 模块{module_order} 自主决定搜索结束")
                 break
 
-            if searches and isinstance(searches[0], dict):
-                queries = [s.get("query", "") for s in searches if s.get("query")]
-            else:
-                queries = [q for q in searches if isinstance(q, str) and q]
-
-            if not queries:
+            # 如果没有动作，视为结束
+            if not actions:
+                logger.info(f"  [ReAct] 模块{module_order} 无动作，结束搜索")
                 break
 
-            round_results, round_images = execute_searches(queries)
+            # 验证动作格式
+            valid_actions = []
+            for action in actions:
+                if isinstance(action, dict):
+                    action_type = action.get("action", "")
+                    if action_type in ["search", "extract"]:
+                        valid_actions.append(action)
+            if not valid_actions:
+                logger.warning(f"  [ReAct] 无有效动作，结束搜索")
+                break
 
-            existing_urls = {r.get("url", "") for r in all_search_results}
-            new_items = [item for item in round_results if item.get("url", "") not in existing_urls]
-            all_search_results.extend(new_items)
+            # 并发执行所有有效动作
+            action_results = execute_actions_parallel(valid_actions)
 
-            existing_img_urls = {img.get("url", "") for img in all_images}
-            new_imgs = [img for img in round_images if img.get("url", "") not in existing_img_urls]
-            all_images.extend(new_imgs)
+            # 更新历史记录
+            for result in action_results:
+                action_type = result.get("action_type", "")
 
-        search_result_count = len(all_search_results)
-        if all_search_results:
-            search_context = _format_search_results(all_search_results)
-        logger.info(f"  [资源生成] 模块{module_order} 搜索完成: {search_result_count} 条结果")
+                if action_type == "search":
+                    query = result.get("query", "")
+                    results = result.get("results", [])
+                    images = result.get("images", [])
+                    if results or images:
+                        history_tracker.add_search_result(query, results, images)
+
+                elif action_type == "extract":
+                    url = result.get("url", "")
+                    title = result.get("title", "")
+                    content = result.get("content", "")
+                    success = result.get("success", False)
+                    if success and content:
+                        history_tracker.add_extracted_page(url, title, content)
+
+            # 格式化结果供 LLM 观察（实际不会再次调用，但记录日志）
+            observation = format_action_results_for_llm(action_results)
+            logger.debug(f"  [ReAct] 观察:\n{observation[:300]}...")
+
+        logger.info(f"  [资源生成] 模块{module_order} ReAct 搜索完成: {len(history_tracker.all_snippets)} 条片段, {len(history_tracker.extracted_pages)} 个完整网页")
+        record_from_mimo(llm, user_id, "resource_react_search", task_id)
 
     except Exception as e:
-        logger.warning(f"  [资源生成] 模块{module_order} 搜索异常: {str(e)[:120]}，降级为无搜索生成")
+        import traceback
+        logger.warning(f"  [资源生成] 模块{module_order} ReAct 搜索异常: {str(e)[:200]}，降级为无搜索生成")
+        logger.debug(f"  [资源生成] 异常详情:\n{traceback.format_exc()}")
 
     # ==================== 内容生成 ====================
-    if search_context:
-        image_context = _format_image_results(all_images, max_images=6)
-        image_section = ""
-        if image_context:
-            image_section = f"""
+    all_content = history_tracker.get_all_content_for_generation()
+    snippets = all_content["snippets"]
+    extracted_pages = all_content["extracted_pages"]
+    images = all_content["images"]
 
-## 可用图片（从中选择最多 3 张最相关的，用 ![描述](URL) 嵌入正文中对应段落旁）
-{image_context}"""
+    # 限制传给生成阶段的资源数量（模型上下文 128K，可容纳较丰富的内容）
+    MAX_SNIPPETS = 40      # 最多 35 条片段
+    MAX_PAGES = 5          # 最多 5 个完整网页
+    PAGE_PREVIEW = 4000    # 每个网页预览 2000 字
+    SNIPPET_TEXT_LEN = 500 # 每条片段摘要 300 字
+    MAX_IMAGES = 20        # 最多 20 张图片
 
-        gen_user_prompt = f"""请基于以下搜索结果生成学习内容（必须以搜索结果为主要依据，用自己的知识补充细节）。
+    # 如果有搜索结果，基于搜索结果生成
+    if snippets or extracted_pages:
+        # 格式化搜索片段（按 score 降序，取 top N）
+        sorted_snippets = sorted(snippets, key=lambda x: x.get("score", 0), reverse=True)[:MAX_SNIPPETS]
+        snippet_lines = []
+        for i, snippet in enumerate(sorted_snippets, 1):
+            title = snippet.get("title", "无标题")
+            text = (snippet.get("snippet", "") or "")[:SNIPPET_TEXT_LEN]
+            url = snippet.get("url", "")
+            snippet_lines.append(f"[{i}] {title}\n    {text}\n    URL: {url}")
+        snippet_context = "\n\n".join(snippet_lines) if snippet_lines else "（无搜索片段）"
 
+        # 格式化完整网页（取前 N 个）
+        page_lines = []
+        for i, (url, content) in enumerate(list(extracted_pages.items())[:MAX_PAGES], 1):
+            page_lines.append(f"[page{i}] {url} ({len(content)} 字)")
+            page_lines.append(f"{content[:PAGE_PREVIEW]}...")
+        page_context = "\n\n".join(page_lines) if page_lines else "（无完整网页）"
+
+        # 格式化图片
+        image_lines = []
+        for i, img in enumerate(images[:MAX_IMAGES], 1):
+            desc = img.get("description", "") or "相关图片"
+            url = img.get("url", "")
+            image_lines.append(f"[img{i}] {desc}\n    URL: {url}")
+        image_context = "\n\n".join(image_lines) if image_lines else "（无可用图片）"
+        logger.info(f"  [资源生成] 模块{module_order} 传递给生成: {len(sorted_snippets)}/{len(snippets)} 条片段, {min(len(extracted_pages), MAX_PAGES)}/{len(extracted_pages)} 个网页, {min(len(images), MAX_IMAGES)}/{len(images)} 张图片")
+
+        gen_user_prompt = f"""请基于以下搜索资源生成高质量学习内容。
+
+## 研究主题
 主题: {topic}
 学习目标: {learning_goal}
 {style_text}
 
-## 搜索结果（共 {len(all_search_results)} 条，请按编号 [1] [2] ... 在正文中引用）
-{search_context}{image_section}
+## 搜索结果片段（共 {len(sorted_snippets)} 条，按相关度排序）
+{snippet_context}
 
-## 生成要求
-1. 正文中必须用 [编号] 标注信息来源，例如："深度学习是机器学习的分支 [1]，其核心是神经网络 [2][3]"
-2. references 字段列出你实际引用的搜索结果编号和标题
-3. 如果搜索结果覆盖不足，可以用自己的知识补充，但需标注 "[综合知识]"
-4. 输出 JSON:"""
+## 提取的完整网页（共 {min(len(extracted_pages), MAX_PAGES)} 个）
+{page_context}
+
+## 可用图片（共 {min(len(images), MAX_IMAGES)} 张）
+{image_context}
+
+请生成完整的学习内容，输出 JSON。"""
+
     else:
+        # 降级：无搜索结果，基于 LLM 知识生成
         gen_user_prompt = f"""请生成以下主题的学习内容:
 
 主题: {topic}
@@ -205,7 +300,7 @@ def _generate_single_module(
 请基于你的知识生成详细的学习内容，输出 JSON:"""
 
     gen_messages = [
-        {"role": "system", "content": RESOURCE_GENERATOR_PROMPT},
+        {"role": "system", "content": CONTENT_GENERATION_WITH_SOURCES_PROMPT},
         {"role": "user", "content": gen_user_prompt}
     ]
 
@@ -217,18 +312,18 @@ def _generate_single_module(
                 except Exception:
                     pass
 
-        result = llm.chat_json_stream(gen_messages, on_chunk=_on_chunk, max_tokens=6144, stream_field="content")
+        result = llm.chat_json_stream(gen_messages, on_chunk=_on_chunk, max_tokens=8192, stream_field="content")
 
-        # 图片处理
+        # 图片处理（如果生成结果没有嵌入图片，附加在结果中）
         content_text = result.get("content", "")
-        if all_images and "![" not in content_text:
-            result["images"] = all_images[:3]
+        if images and "![" not in content_text and "<img" not in content_text:
+            result["images"] = images[:3]
 
         result["module_order"] = module_order
         result["module_id"] = module_info.get("module_id", module_order)
 
         logger.info(f"  [资源生成] 模块{module_order} 生成完成: {result.get('title', '')}")
-        record_from_mimo(llm, 0, "resource_generation", None)
+        record_from_mimo(llm, user_id, "resource_generation", task_id)
 
         return result
 
@@ -246,15 +341,19 @@ def _generate_single_module(
 
 # ==================== 节点函数 ====================
 
-def resource_generator_node(state: AgentState) -> Dict[str, Any]:
+async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
     """多模态资源自主生成智能体节点 - 并行生成所有模块"""
     user_message = state.get("user_message", "")
     learning_goal = state.get("learning_goal", user_message)
-    task_breakdown = state.get("task_breakdown", {})
+    task_breakdown = state.get("task_breakdown") or {}
     user_profile = state.get("user_profile", {})
     rag_chunks = state.get("rag_context_chunks", [])
-    sse_callback = state.get("sse_callback")
-    placeholder_map = state.get("placeholder_resource_map", {})
+    session_id = state.get("session_id", "")
+    user_id = state.get("user_id", 0)
+    task_id = state.get("task_id")
+    # 优先从 state 获取回调；回退到 stream_registry（checkpointer 序列化会丢失 callable）
+    sse_callback = state.get("sse_callback") or stream_registry.get_sse_callback(session_id)
+    placeholder_map = state.get("placeholder_resource_map") or stream_registry.get_placeholder_map(session_id)
 
     logger.info(f"{'='*60}")
     logger.info(f"  [资源生成智能体] 开始处理")
@@ -291,58 +390,61 @@ def resource_generator_node(state: AgentState) -> Dict[str, Any]:
 
     # 单模块场景：通过回调创建占位记录
     if not placeholder_map and target_modules:
-        create_placeholder_cb = state.get("create_placeholder_callback")
+        create_placeholder_cb = state.get("create_placeholder_callback") or stream_registry.get_create_placeholder_callback(session_id)
         if create_placeholder_cb:
             try:
                 placeholder_map = create_placeholder_cb(target_modules)
+                stream_registry.update_placeholder_map(session_id, placeholder_map)
             except Exception as e:
                 logger.warning(f"  [资源生成智能体] 创建占位资源失败: {e}")
 
     # 通知前端创建侧栏占位条目
     if placeholder_map:
+        logger.info(f"  [资源生成智能体] 发送 resource_stream_start，共 {len(placeholder_map)} 个占位")
         _emit(state, "resource_stream_start", json.dumps(list(placeholder_map.values()), ensure_ascii=False))
+        # 若 state 中无 sse_callback，直接通过 sse_callback 推送
+        if not state.get("sse_callback") and sse_callback:
+            try:
+                sse_callback(f'data: {json.dumps({"type": "resource_stream_start", "content": json.dumps(list(placeholder_map.values()), ensure_ascii=False)}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
 
     # ==================== 并行生成所有模块 ====================
     if len(target_modules) == 1:
-        # 单模块：直接生成（不启动线程池）
+        # 单模块：直接异步线程生成
         module = target_modules[0]
         placeholder = placeholder_map.get(1, {})
         res_id = placeholder.get("id", 0)
-        result = _generate_single_module(
+        result = await asyncio.to_thread(
+            _generate_single_module,
             module, 1, learning_goal, user_profile,
-            sse_callback, res_id,
+            sse_callback, res_id, user_id, task_id,
         )
         module_list = [result]
     else:
         # 多模块：并行生成
         logger.info(f"  [资源生成智能体] 使用并行模式，共 {len(target_modules)} 个模块")
 
-        async def run_parallel():
-            loop = asyncio.get_event_loop()
-            tasks = []
-            for i, module in enumerate(target_modules):
-                module_order = i + 1
-                placeholder = placeholder_map.get(module_order, {})
-                res_id = placeholder.get("id", 0)
-                task = loop.run_in_executor(
-                    None,
-                    _generate_single_module,
-                    module,
-                    module_order,
-                    learning_goal,
-                    user_profile,
-                    sse_callback,
-                    res_id,
-                )
-                tasks.append(task)
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            return results
+        tasks = []
+        for i, module in enumerate(target_modules):
+            module_order = i + 1
+            placeholder = placeholder_map.get(module_order, {})
+            res_id = placeholder.get("id", 0)
+            task = asyncio.to_thread(
+                _generate_single_module,
+                module,
+                module_order,
+                learning_goal,
+                user_profile,
+                sse_callback,
+                res_id,
+                user_id,
+                task_id,
+            )
+            tasks.append(task)
 
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            raw_results = loop.run_until_complete(run_parallel())
-            loop.close()
+            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
 
             module_list = []
             for i, res in enumerate(raw_results):
@@ -390,22 +492,23 @@ def resource_generator_node(state: AgentState) -> Dict[str, Any]:
     if error_count == len(module_list) and len(module_list) > 0:
         anomaly_summary += " (警告: 所有模块生成均失败)"
 
-    from app.agents.anomaly_checker import check_content_alignment
-    is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary)
-    if not is_aligned:
-        logger.warning(f"  [资源生成智能体] 自主检测到内容偏离: {anomaly_reason}")
-        return {
-            "agent_anomaly": True,
-            "anomaly_reason": anomaly_reason,
-            "module_list": module_list,
-            "current_step": f"资源生成智能体: 检测到生成内容偏离 - {anomaly_reason}",
-            "stream_events": [{
-                "event_type": "thinking",
-                "agent": "resource_generator",
-                "data": {"message": f"检测到生成内容与目标偏离: {anomaly_reason}"},
-                "step_description": f"异常中断: {anomaly_reason}"
-            }],
-        }
+    if not state.get("background_generation"):
+        from app.agents.anomaly_checker import check_content_alignment
+        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary, user_id, task_id)
+        if not is_aligned:
+            logger.warning(f"  [资源生成智能体] 自主检测到内容偏离: {anomaly_reason}")
+            return {
+                "agent_anomaly": True,
+                "anomaly_reason": anomaly_reason,
+                "module_list": module_list,
+                "current_step": f"资源生成智能体: 检测到生成内容偏离 - {anomaly_reason}",
+                "stream_events": [{
+                    "event_type": "thinking",
+                    "agent": "resource_generator",
+                    "data": {"message": f"检测到生成内容与目标偏离: {anomaly_reason}"},
+                    "step_description": f"异常中断: {anomaly_reason}"
+                }],
+            }
 
     logger.info(f"{'='*60}")
 

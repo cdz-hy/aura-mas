@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS `user_profile` (
     `update_reason` VARCHAR(255) DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_user_current` (`user_id`, `is_current`),
+    KEY `idx_user_current` (`user_id`, `is_current`),
     KEY `idx_user_version` (`user_id`, `version`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户画像表';
 
@@ -119,6 +119,8 @@ CREATE TABLE IF NOT EXISTS `note` (
     `user_id` BIGINT UNSIGNED NOT NULL,
     `note_name` VARCHAR(255) NOT NULL,
     `content` LONGTEXT NOT NULL,
+    `tags` JSON DEFAULT NULL COMMENT '标签数组',
+    `is_pinned` TINYINT DEFAULT 0 COMMENT '是否置顶',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     `is_deleted` TINYINT DEFAULT 0,
@@ -131,10 +133,40 @@ CREATE TABLE IF NOT EXISTS `note_resource_rel` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `note_id` BIGINT UNSIGNED NOT NULL,
     `resource_id` BIGINT UNSIGNED NOT NULL,
+    `selected_text` TEXT DEFAULT NULL COMMENT '选中的原文',
+    `position_info` VARCHAR(255) DEFAULT NULL COMMENT '选区位置信息',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_note_resource` (`note_id`, `resource_id`),
     KEY `idx_resource_id` (`resource_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='笔记学习资源关联表';
+
+-- 如果表已存在，执行以下 ALTER 语句：
+-- ALTER TABLE note_resource_rel ADD COLUMN selected_text TEXT DEFAULT NULL COMMENT '选中的原文';
+-- ALTER TABLE note_resource_rel ADD COLUMN position_info VARCHAR(255) DEFAULT NULL COMMENT '选区位置信息';
+-- ALTER TABLE note_resource_rel ADD COLUMN plan_id BIGINT UNSIGNED DEFAULT NULL COMMENT '学习计划ID';
+-- ALTER TABLE note_resource_rel ADD COLUMN module_name VARCHAR(255) DEFAULT NULL COMMENT '模块名称';
+-- ALTER TABLE note_resource_rel ADD COLUMN resource_title VARCHAR(255) DEFAULT NULL COMMENT '资源标题';
+
+-- 笔记标签和置顶功能：
+-- ALTER TABLE note ADD COLUMN tags JSON DEFAULT NULL COMMENT '标签数组' AFTER content;
+-- ALTER TABLE note ADD COLUMN is_pinned TINYINT DEFAULT 0 COMMENT '是否置顶' AFTER tags;
+
+CREATE TABLE IF NOT EXISTS `flashcard` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `note_id` BIGINT UNSIGNED NOT NULL COMMENT '所属笔记ID',
+    `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
+    `question` TEXT NOT NULL COMMENT '问题（正面）',
+    `answer` TEXT NOT NULL COMMENT '答案（背面）',
+    `difficulty` TINYINT DEFAULT 1 COMMENT '初始难度 1-简单 2-中等 3-困难',
+    `ease_factor` DOUBLE DEFAULT 2.5 COMMENT 'SM-2 简易因子',
+    `review_interval` INT DEFAULT 0 COMMENT '当前复习间隔（天）',
+    `review_count` INT DEFAULT 0 COMMENT '已复习次数',
+    `next_review_at` DATETIME DEFAULT NULL COMMENT '下次复习时间',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_note_id` (`note_id`),
+    KEY `idx_user_next_review` (`user_id`, `next_review_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='闪卡表';
 
 CREATE TABLE IF NOT EXISTS `knowledge_base` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -188,7 +220,8 @@ CREATE TABLE IF NOT EXISTS `ai_token_usage` (
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     KEY `idx_user_id` (`user_id`),
-    KEY `idx_task_id` (`task_id`)
+    KEY `idx_task_id` (`task_id`),
+    KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI Token消耗表';
 
 CREATE TABLE IF NOT EXISTS `learning_duration` (
@@ -277,3 +310,15 @@ CREATE TABLE IF NOT EXISTS `role_menu` (
     UNIQUE KEY `uk_role_menu` (`role`, `menu_id`),
     KEY `idx_role` (`role`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='角色菜单关联表';
+
+CREATE TABLE IF NOT EXISTS `daily_study_time` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `study_date` DATE NOT NULL,
+    `duration_seconds` INT NOT NULL DEFAULT 0,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_user_date` (`user_id`, `study_date`),
+    KEY `idx_user_date` (`user_id`, `study_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日学习时长表';

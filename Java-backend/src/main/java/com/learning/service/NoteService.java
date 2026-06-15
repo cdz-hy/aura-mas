@@ -2,6 +2,8 @@ package com.learning.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.learning.common.ErrorCode;
 import com.learning.common.PageResult;
 import com.learning.dto.NoteCreateRequest;
@@ -23,6 +25,7 @@ public class NoteService {
 
     private final NoteMapper noteMapper;
     private final NoteResourceRelMapper noteResourceRelMapper;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Transactional
     public Note createNote(Long userId, NoteCreateRequest request) {
@@ -30,6 +33,8 @@ public class NoteService {
         note.setUserId(userId);
         note.setNoteName(request.getNoteName());
         note.setContent(request.getContent());
+        note.setTags(serializeTags(request.getTags()));
+        note.setIsPinned(request.getIsPinned() != null ? request.getIsPinned() : 0);
         note.setCreatedAt(LocalDateTime.now());
         note.setUpdatedAt(LocalDateTime.now());
         noteMapper.insert(note);
@@ -44,10 +49,27 @@ public class NoteService {
         return note;
     }
 
-    public PageResult<Note> getUserNotes(Long userId, int page, int size) {
+    public Note getNoteById(Long noteId) {
+        Note note = noteMapper.selectById(noteId);
+        if (note == null) {
+            throw new BusinessException(ErrorCode.NOTE_NOT_FOUND);
+        }
+        return note;
+    }
+
+    public PageResult<Note> getUserNotes(Long userId, int page, int size, String keyword) {
         Page<Note> pageParam = new Page<>(page, size);
         LambdaQueryWrapper<Note> wrapper = new LambdaQueryWrapper<Note>()
-                .eq(Note::getUserId, userId)
+                .eq(Note::getUserId, userId);
+
+        if (keyword != null && !keyword.isBlank()) {
+            wrapper.and(w -> w
+                    .like(Note::getNoteName, keyword)
+                    .or()
+                    .like(Note::getContent, keyword));
+        }
+
+        wrapper.orderByDesc(Note::getIsPinned)
                 .orderByDesc(Note::getUpdatedAt);
 
         Page<Note> result = noteMapper.selectPage(pageParam, wrapper);
@@ -59,6 +81,12 @@ public class NoteService {
         Note note = getNoteById(noteId, userId);
         note.setNoteName(request.getNoteName());
         note.setContent(request.getContent());
+        if (request.getTags() != null) {
+            note.setTags(serializeTags(request.getTags()));
+        }
+        if (request.getIsPinned() != null) {
+            note.setIsPinned(request.getIsPinned());
+        }
         note.setUpdatedAt(LocalDateTime.now());
         noteMapper.updateById(note);
         return note;
@@ -73,10 +101,30 @@ public class NoteService {
     }
 
     @Transactional
-    public void linkResource(Long noteId, Long resourceId) {
+    public void linkResource(Long noteId, Long resourceId, String selectedText, String positionInfo,
+                             Long planId, String moduleName, String resourceTitle) {
+        // 检查是否已存在关联
+        NoteResourceRel existing = noteResourceRelMapper.selectOne(
+                new LambdaQueryWrapper<NoteResourceRel>()
+                        .eq(NoteResourceRel::getNoteId, noteId)
+                        .eq(NoteResourceRel::getResourceId, resourceId));
+        if (existing != null) {
+            existing.setSelectedText(selectedText);
+            existing.setPositionInfo(positionInfo);
+            existing.setPlanId(planId);
+            existing.setModuleName(moduleName);
+            existing.setResourceTitle(resourceTitle);
+            noteResourceRelMapper.updateById(existing);
+            return;
+        }
         NoteResourceRel rel = new NoteResourceRel();
         rel.setNoteId(noteId);
         rel.setResourceId(resourceId);
+        rel.setSelectedText(selectedText);
+        rel.setPositionInfo(positionInfo);
+        rel.setPlanId(planId);
+        rel.setModuleName(moduleName);
+        rel.setResourceTitle(resourceTitle);
         noteResourceRelMapper.insert(rel);
     }
 
@@ -91,5 +139,14 @@ public class NoteService {
     public List<NoteResourceRel> getNoteResourceRels(Long noteId) {
         return noteResourceRelMapper.selectList(
                 new LambdaQueryWrapper<NoteResourceRel>().eq(NoteResourceRel::getNoteId, noteId));
+    }
+
+    private String serializeTags(List<String> tags) {
+        if (tags == null) return null;
+        try {
+            return objectMapper.writeValueAsString(tags);
+        } catch (JsonProcessingException e) {
+            return "[]";
+        }
     }
 }

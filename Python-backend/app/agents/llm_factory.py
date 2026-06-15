@@ -7,6 +7,13 @@ import json
 from typing import Generator, Optional, Dict, Any
 from app.core.config import settings
 
+# 全局共享的 requests.Session，配置连接池复用，解决高并发端口耗尽问题
+_llm_session = requests.Session()
+_adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=50)
+_llm_session.mount('https://', _adapter)
+_llm_session.mount('http://', _adapter)
+
+
 
 class MIMOClient:
     """小米 MIMO 模型客户端 (OpenAI 兼容接口)"""
@@ -14,12 +21,14 @@ class MIMOClient:
     # 模型配置：编排智能体用标准模型，其余用 pro 模型
     MODEL_STANDARD = settings.MIMO_MODEL_NAME        # 编排智能体
     MODEL_PRO = settings.MIMO_MODEL_PRO_NAME         # 其余智能体
+    MODEL_PRO_SPEED = settings.MIMO_MODEL_PRO_SPEED_NAME  # 动画生成专用（高速）
     MODEL_FLASH = settings.MIMO_MODEL_FLASH_NAME     # 轻量快速模型（异常检测等）
 
     # 各模型的上下文窗口上限（max_completion_tokens 上限）
     CONTEXT_WINDOWS = {
         settings.MIMO_MODEL_NAME: settings.MIMO_CONTEXT_WINDOW,
         settings.MIMO_MODEL_PRO_NAME: settings.MIMO_CONTEXT_WINDOW,
+        settings.MIMO_MODEL_PRO_SPEED_NAME: settings.MIMO_CONTEXT_WINDOW,
         settings.MIMO_MODEL_FLASH_NAME: settings.MIMO_CONTEXT_WINDOW,
     }
 
@@ -30,12 +39,14 @@ class MIMOClient:
     SAFETY_MARGIN = 1024
 
     def __init__(self, model: str = MODEL_PRO, temperature: float = 0.7, max_tokens: int = 4096,
-                 thinking: Optional[Dict[str, str]] = None):
-        self.api_key = settings.MIMO_API_KEY
-        self.base_url = settings.MIMO_BASE_URL
+                 thinking: Optional[Dict[str, str]] = None, request_timeout: int = 120,
+                 base_url: Optional[str] = None, api_key: Optional[str] = None):
+        self.api_key = api_key or settings.MIMO_API_KEY
+        self.base_url = base_url or settings.MIMO_BASE_URL
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.request_timeout = request_timeout
         # 思维链配置：None 表示使用模型默认值（mimo-v2.5-pro 默认 enabled）
         self.thinking = thinking
         # Token 消耗记录
@@ -138,9 +149,9 @@ class MIMOClient:
         url = f"{self.base_url.rstrip('/')}/chat/completions"
         
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=120)
+            resp = _llm_session.post(url, headers=headers, json=payload, timeout=self.request_timeout)
         except requests.exceptions.Timeout:
-            raise Exception("MIMO API 请求超时（120秒），可能是网络问题或服务繁忙")
+            raise Exception(f"MIMO API 请求超时（{self.request_timeout}秒），可能是网络问题或服务繁忙")
         except requests.exceptions.RequestException as e:
             raise Exception(f"MIMO API 网络请求失败: {str(e)[:200]}")
 
@@ -224,7 +235,7 @@ class MIMOClient:
         }
 
         url = f"{self.base_url.rstrip('/')}/chat/completions"
-        resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=120)
+        resp = _llm_session.post(url, headers=headers, json=payload, stream=True, timeout=self.request_timeout)
 
         if resp.status_code != 200:
             raise Exception(f"MIMO API 流式调用失败 ({resp.status_code}): {resp.text}")
@@ -497,10 +508,11 @@ class MIMOClient:
         content = rest[1:]  # 跳过开头的 "
         new_buf = ""
         i = 0
+        esc = False
         while i < len(content):
             ch = content[i]
-            if field_escaped:
-                field_escaped = False
+            if esc:
+                esc = False
                 # 处理转义字符
                 if ch == 'n':
                     new_buf += '\n'
@@ -517,7 +529,7 @@ class MIMOClient:
                 i += 1
                 continue
             if ch == '\\':
-                field_escaped = True
+                esc = True
                 i += 1
                 continue
             if ch == '"':
@@ -529,9 +541,9 @@ class MIMOClient:
         # 只返回新增的文本
         if len(new_buf) > len(field_buf):
             delta = new_buf[len(field_buf):]
-            return (delta, True, field_escaped, new_buf)
+            return (delta, True, esc, new_buf)
 
-        return ("", in_field, field_escaped, field_buf)
+        return ("", in_field, esc, field_buf)
 
     @staticmethod
     def _fix_common_json_errors(s: str) -> str:
@@ -594,6 +606,12 @@ def get_simple_answer_llm() -> MIMOClient:
                       thinking=THINKING_DISABLED)
 
 
+def get_note_format_llm() -> MIMOClient:
+    """笔记整理智能体 - pro 模型，较大输出空间（含批注标记 + 思维导图）"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=16384,
+                      thinking=THINKING_DISABLED)
+
+
 def get_rag_retriever_llm() -> MIMOClient:
     """RAG 检索智能体 - pro 模型，关闭思维链，只需生成检索词"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=1536,
@@ -644,7 +662,7 @@ def get_profile_maintainer_llm() -> MIMOClient:
 
 def get_compressor_llm() -> MIMOClient:
     """会话压缩智能体 - pro 模型，关闭思维链，快速压缩"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=1024,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=2048,
                       thinking=THINKING_DISABLED)
 
 
@@ -652,3 +670,15 @@ def get_tutor_llm() -> MIMOClient:
     """智能辅导智能体 - pro 模型，关闭思维链，中等温度"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=2048,
                       thinking=THINKING_DISABLED)
+
+def get_video_search_llm() -> MIMOClient:
+    """视频搜索智能体 - pro 模型，关闭思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=8192,
+                      thinking=THINKING_DISABLED)
+
+
+def get_animation_skill_generator_llm() -> MIMOClient:
+    """动画技能生成智能体 - pro-speed 模型（高速），专用端点，关闭思维链"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO_SPEED, temperature=0.5, max_tokens=8192,
+                      thinking=THINKING_DISABLED, base_url=settings.MIMO_BASE_URL_SPEED,
+                      api_key=settings.MIMO_API_KEY_SPEED)

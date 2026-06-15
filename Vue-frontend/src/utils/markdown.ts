@@ -20,10 +20,14 @@ function protectLatex(md: string): { text: string; placeholders: Map<string, str
   }
 
   let text = md
-  // 保护 $$...$$ 块级公式（不匹配不完整的公式）
-  text = text.replace(/\$\$([^$]+?)\$\$/g, replacer)
-  // 保护 $...$ 行内公式（不匹配不完整的公式）
-  text = text.replace(/(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)/g, replacer)
+  // 1. 保护 $$...$$ 块级公式
+  text = text.replace(/\$\$([\s\S]+?)\$\$/g, replacer)
+  // 2. 保护 \[...\] 块级公式
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, replacer)
+  // 3. 保护 \(...\) 行内公式
+  text = text.replace(/\\\(([\s\S]+?)\\\)/g, replacer)
+  // 4. 保护 $...$ 行内公式
+  text = text.replace(/(?<!\$)\$(?!\$)([\s\S]+?)(?<!\$)\$(?!\$)/g, replacer)
 
   return { text, placeholders }
 }
@@ -31,8 +35,24 @@ function protectLatex(md: string): { text: string; placeholders: Map<string, str
 // 还原占位符为 KaTeX HTML
 function restoreLatex(html: string, placeholders: Map<string, string>): string {
   for (const [key, latex] of Array.from(placeholders.entries())) {
-    const isBlock = latex.startsWith('$$')
-    const content = isBlock ? latex.slice(2, -2).trim() : latex.slice(1, -1).trim()
+    let isBlock = false
+    let content = ''
+    if (latex.startsWith('$$')) {
+      isBlock = true
+      content = latex.slice(2, -2).trim()
+    } else if (latex.startsWith('\\[')) {
+      isBlock = true
+      content = latex.slice(2, -2).trim()
+    } else if (latex.startsWith('\\(')) {
+      isBlock = false
+      content = latex.slice(2, -2).trim()
+    } else if (latex.startsWith('$')) {
+      isBlock = false
+      content = latex.slice(1, -1).trim()
+    } else {
+      content = latex.trim()
+    }
+
     if (!content) continue
 
     try {
@@ -41,7 +61,17 @@ function restoreLatex(html: string, placeholders: Map<string, string>): string {
         throwOnError: false,
         trust: true,
       })
-      html = html.replace(key, rendered)
+      if (isBlock) {
+        // If the block placeholder is wrapped in a paragraph tag by marked, remove the wrapper
+        const pRegex = new RegExp(`<p>\\s*${key}\\s*</p>`, 'g')
+        if (pRegex.test(html)) {
+          html = html.replace(pRegex, rendered)
+        } else {
+          html = html.replace(key, rendered)
+        }
+      } else {
+        html = html.replace(key, rendered)
+      }
     } catch {
       // KaTeX 渲染失败，保留原始文本
       html = html.replace(key, `<code>${content}</code>`)
@@ -50,69 +80,288 @@ function restoreLatex(html: string, placeholders: Map<string, string>): string {
   return html
 }
 
-// 处理流式输出中的不完整 LaTeX（等待更多内容）
-function stripIncompleteLatex(md: string): string {
-  // 移除不完整的 $$ 块级公式（没有闭合的）
-  const blockOpen = md.lastIndexOf('$$')
-  if (blockOpen !== -1) {
-    const after = md.slice(blockOpen + 2)
-    if (!after.includes('$$')) {
-      // 不完整的块级公式，截断到 $$ 之前
-      md = md.slice(0, blockOpen)
-    }
+// 保护完整的 Mermaid 块，防止 marked 解析破坏
+function protectMermaid(md: string): { text: string; placeholders: Map<string, string> } {
+  const placeholders = new Map<string, string>()
+  let counter = 0
+
+  function replacer(match: string, code: string): string {
+    const key = `%%MERMAID_${counter++}%%`
+    placeholders.set(key, code)
+    return key
   }
 
-  // 移除不完整的 $ 行内公式（没有闭合的）
-  // 从后往前查找未闭合的 $
-  let lastDollar = -1
-  let inBlock = false
-  for (let i = 0; i < md.length; i++) {
-    if (md[i] === '$') {
-      if (i + 1 < md.length && md[i + 1] === '$') {
-        inBlock = !inBlock
-        i++ // 跳过第二个 $
-        continue
-      }
-      if (!inBlock) {
-        lastDollar = i
-      }
+  let text = md
+  // 只保护完整的 mermaid 块（已闭合）
+  text = text.replace(/```mermaid\s*\n([\s\S]*?)```/g, replacer)
+
+  return { text, placeholders }
+}
+
+// 将 Mermaid 占位符还原为图表挂载容器
+function restoreMermaid(html: string, placeholders: Map<string, string>): string {
+  for (const [key, code] of Array.from(placeholders.entries())) {
+    const encoded = encodeURIComponent(code.trim())
+    // 渲染为一个包裹了原始代码的预留占位 div，等待前端组件懒加载 mermaid 渲染
+    const wrapper = `<div class="gv-mermaid-wrapper" data-mermaid-code="${encoded}">
+      <div class="flex items-center justify-center p-8 bg-navy-50/50 rounded-xl border border-navy-100/50 animate-pulse">
+        <span class="text-sm text-navy-400">正在渲染图表...</span>
+      </div>
+    </div>`
+    
+    const pRegex = new RegExp(`<p>\\s*${key}\\s*</p>`, 'g')
+    if (pRegex.test(html)) {
+      html = html.replace(pRegex, wrapper)
+    } else {
+      html = html.replace(key, wrapper)
     }
   }
-  // 如果最后有一个未闭合的行内公式，截断
-  if (lastDollar !== -1) {
-    const before = md.slice(0, lastDollar)
-    const after = md.slice(lastDollar + 1)
-    // 检查是否有闭合的 $
-    if (!after.includes('$') || after.indexOf('$') === after.lastIndexOf('$')) {
-      // 可能不完整，检查是否在公式中间
-      const openCount = (before.match(/(?<!\$)\$(?!\$)/g) || []).length
-      if (openCount % 2 !== 0) {
-        md = md.slice(0, lastDollar)
+  return html
+}
+
+// 处理流式输出中的不完整 LaTeX（等待更多内容）
+function stripIncompleteLatex(md: string): string {
+  let i = 0
+  const len = md.length
+
+  let lastDoubleDollar = -1
+  let lastSingleDollar = -1
+  let lastBackslashSquare = -1
+  let lastBackslashRound = -1
+
+  let inDoubleDollar = false
+  let inSingleDollar = false
+  let inBackslashSquare = false
+  let inBackslashRound = false
+
+  while (i < len) {
+    if (md[i] === '\\') {
+      if (i + 1 < len) {
+        const next = md[i + 1]
+        if (next === '\\') {
+          // Escaped backslash, skip both
+          i += 2
+          continue
+        } else if (next === '$') {
+          // Escaped dollar, skip both
+          i += 2
+          continue
+        } else if (next === '[') {
+          if (!inDoubleDollar && !inSingleDollar && !inBackslashSquare && !inBackslashRound) {
+            inBackslashSquare = true
+            lastBackslashSquare = i
+          }
+          i += 2
+          continue
+        } else if (next === ']') {
+          if (inBackslashSquare) {
+            inBackslashSquare = false
+            lastBackslashSquare = -1
+          }
+          i += 2
+          continue
+        } else if (next === '(') {
+          if (!inDoubleDollar && !inSingleDollar && !inBackslashSquare && !inBackslashRound) {
+            inBackslashRound = true
+            lastBackslashRound = i
+          }
+          i += 2
+          continue
+        } else if (next === ')') {
+          if (inBackslashRound) {
+            inBackslashRound = false
+            lastBackslashRound = -1
+          }
+          i += 2
+          continue
+        }
       }
+      i++
+      continue
+    }
+
+    if (md[i] === '$') {
+      if (i + 1 < len && md[i + 1] === '$') {
+        if (!inSingleDollar && !inBackslashSquare && !inBackslashRound) {
+          if (inDoubleDollar) {
+            inDoubleDollar = false
+            lastDoubleDollar = -1
+          } else {
+            inDoubleDollar = true
+            lastDoubleDollar = i
+          }
+        }
+        i += 2
+        continue
+      } else {
+        if (!inDoubleDollar && !inBackslashSquare && !inBackslashRound) {
+          if (inSingleDollar) {
+            inSingleDollar = false
+            lastSingleDollar = -1
+          } else {
+            inSingleDollar = true
+            lastSingleDollar = i
+          }
+        }
+        i++
+        continue
+      }
+    }
+
+    i++
+  }
+
+  const unclosedIndices = [
+    inDoubleDollar ? lastDoubleDollar : -1,
+    inSingleDollar ? lastSingleDollar : -1,
+    inBackslashSquare ? lastBackslashSquare : -1,
+    inBackslashRound ? lastBackslashRound : -1
+  ].filter(idx => idx !== -1)
+
+  if (unclosedIndices.length > 0) {
+    const truncateIndex = Math.min(...unclosedIndices)
+    if (truncateIndex !== -1) {
+      return md.substring(0, truncateIndex)
     }
   }
 
   return md
 }
 
+export interface ParsedCitation {
+  id: string
+  title: string
+  url: string
+}
+
+export function extractCitations(md: string): ParsedCitation[] {
+  if (!md) return []
+  const citations: ParsedCitation[] = []
+  const seenIds = new Set<string>()
+
+  // 匹配模式如：
+  // - [1] 标题 - http://...
+  // - [page1] 标题 - http://...
+  // - [1] 标题: http://...
+  // - [1] 来源: http://...
+  const lines = md.split('\n')
+  const refRegex = /^\[(\d+|page\d+)\]\s*(.*?)\s*(?:-|:|来源:)\s*(https?:\/\/[^\s\)]+)/i
+  const simpleRefRegex = /^\[(\d+|page\d+)\]\s*(https?:\/\/[^\s\)]+)/i
+  const colonRefRegex = /^\[(\d+|page\d+)\]:\s*(https?:\/\/[^\s\)]+)/i
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    let match = trimmed.match(refRegex)
+    if (match) {
+      const id = match[1]
+      if (!seenIds.has(id)) {
+        seenIds.add(id)
+        citations.push({
+          id,
+          title: match[2].trim() || `来源 [${id}]`,
+          url: match[3].trim()
+        })
+      }
+      continue
+    }
+
+    match = trimmed.match(colonRefRegex) || trimmed.match(simpleRefRegex)
+    if (match) {
+      const id = match[1]
+      if (!seenIds.has(id)) {
+        seenIds.add(id)
+        citations.push({
+          id,
+          title: `网页来源 [${id}]`,
+          url: match[2].trim()
+        })
+      }
+    }
+  }
+
+  // 兜底策略：提取文中所有唯一的 URL，按顺序映射到 [1], [2] 等引用标记（防止大模型没有在末尾写引用列表）
+  const urlRegex = /(?<!["'])(https?:\/\/[^\s\)\u4e00-\u9fa5]+)/g
+  let matchUrl
+  let counter = 1
+  while ((matchUrl = urlRegex.exec(md)) !== null) {
+    const url = matchUrl[1].trim()
+    // 过滤掉 markdown 图片语法中的 URL
+    const idx = md.lastIndexOf('![', matchUrl.index)
+    if (idx !== -1 && md.indexOf(')', idx) > matchUrl.index) {
+      continue
+    }
+    const id = String(counter)
+    if (!seenIds.has(id)) {
+      // 避免把已解析到的参考列表中的 URL 当作独立引用
+      const isAlreadyListed = citations.some(c => c.url === url)
+      if (!isAlreadyListed) {
+        seenIds.add(id)
+        citations.push({
+          id,
+          title: `参考链接 [${id}]`,
+          url
+        })
+        counter++
+      }
+    }
+  }
+
+  return citations
+}
+
 export function parseMarkdown(md: string): string {
   if (!md) return ''
 
-  // 剥离流式输出中的不完整内容
-  let cleaned = stripIncompleteLatex(md)
+  // 1. 剥离流式输出中的不完整内容
+  const cleaned = stripIncompleteLatex(md)
   // Strip incomplete image markdown during streaming to prevent layout jumps
-  cleaned = cleaned.replace(/!\[[^\]]*\]\([^)]*$/, '')
+  const cleanedImage = cleaned.replace(/!\[[^\]]*\]\([^)]*$/, '')
 
-  // 保护 LaTeX 公式
-  const { text, placeholders } = protectLatex(cleaned)
+  // 2. 提取文中所有的引用链接，生成引用字典
+  const citations = extractCitations(cleanedImage)
+  const citMap = new Map<string, { url: string; title: string }>()
+  citations.forEach(c => citMap.set(c.id, { url: c.url, title: c.title }))
 
-  // marked 解析
-  let html = marked.parse(text) as string
+  // 3. 保护 LaTeX 公式（公式内部的内容包括 \n、\r、\t 等将保持原样，免受外部替换和 marked 影响）
+  const latexProt = protectLatex(cleanedImage)
+  
+  // 3.5 保护完整闭合的 Mermaid 图表代码块
+  const mermaidProt = protectMermaid(latexProt.text)
 
-  // 还原 LaTeX 为 KaTeX HTML
-  if (placeholders.size > 0) {
-    html = restoreLatex(html, placeholders)
+  // 4. 兜底处理外围文本的转义字符：将字面 \n（反斜杠+n）转为实际换行
+  let fixed = mermaidProt.text.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+
+  // 5. 替换正文中的引用标识 [1]、[page1] 为交互式的 HTML Span
+  // 仅匹配不在感叹号后面、且不紧跟 ( 的引用标识，防止破坏图片和正常 markdown 链接
+  const citationPattern = /\[(\d+|page\d+)\](?!\()/g
+  fixed = fixed.replace(citationPattern, (match, id) => {
+    const cit = citMap.get(id)
+    const url = cit ? cit.url : ''
+    const title = cit ? cit.title : `网页来源 [${id}]`
+    const displayText = id.startsWith('page') ? `p${id.replace('page', '')}` : id
+    return `<span class="citation-ref inline-flex items-center justify-center bg-navy-50/50 hover:bg-purple-50 text-navy-500 hover:text-purple-600 border border-navy-100/20 hover:border-purple-200/30 text-[9px] font-sans font-semibold rounded-full min-w-[14px] h-3.5 px-0.5 select-none cursor-pointer relative -top-[0.3em] mx-0.5 transition-all duration-200" data-ref="${id}" data-url="${url}" data-title="${title}">${displayText}</span>`
+  })
+
+  // 6. marked 解析
+  let html = marked.parse(fixed) as string
+
+  // 7. 还原 LaTeX 为 KaTeX HTML
+  if (latexProt.placeholders.size > 0) {
+    html = restoreLatex(html, latexProt.placeholders)
   }
+
+  // 7.5 还原 Mermaid 占位符为挂载容器
+  if (mermaidProt.placeholders.size > 0) {
+    html = restoreMermaid(html, mermaidProt.placeholders)
+  }
+
+  // 8. 处理图片：防防盗链 + 加载失败降级
+  html = html.replace(/<img\s/g, '<img referrerpolicy="no-referrer" loading="lazy" ')
+  html = html.replace(/<img([^>]*?)>/g, (match, attrs) => {
+    // 如果已经有 onerror 就不重复添加
+    if (attrs.includes('onerror')) return match
+    return `<img${attrs} onerror="this.onerror=null;this.style.display='none';this.insertAdjacentHTML('afterend','<span style=\\'color:#999;font-size:12px\\'>[图片加载失败]</span>');">`
+  })
 
   return html
 }

@@ -44,8 +44,15 @@ public class LearningResourceController {
                                                @RequestBody java.util.Map<String, Object> body) throws Exception {
         String moduleData = null;
         if (body.get("moduleData") != null) {
-            ObjectMapper mapper = new ObjectMapper();
-            moduleData = mapper.writeValueAsString(body.get("moduleData"));
+            Object raw = body.get("moduleData");
+            if (raw instanceof String) {
+                // 已经是 JSON 字符串（如 Python 后端调用），直接使用
+                moduleData = (String) raw;
+            } else {
+                // 前端传入的是对象，需要序列化为 JSON 字符串
+                ObjectMapper mapper = new ObjectMapper();
+                moduleData = mapper.writeValueAsString(raw);
+            }
         }
         Integer status = body.get("status") != null ? Integer.valueOf(body.get("status").toString()) : null;
         resourceService.updateContent(resourceId, moduleData, status);

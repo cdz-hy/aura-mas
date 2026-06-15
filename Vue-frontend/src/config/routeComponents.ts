@@ -8,9 +8,11 @@ const componentMap: Record<string, () => Promise<Component>> = {
   'plan-list':         () => import('@/views/PlanListView.vue'),
   'note-list':         () => import('@/views/NoteListView.vue'),
   'profile':           () => import('@/views/ProfileView.vue'),
+  'analytics':         () => import('@/views/AnalyticsDashboard.vue'),
   'admin-dashboard':   () => import('@/views/admin/AdminDashboard.vue'),
   'kb-management':     () => import('@/views/admin/KBManagement.vue'),
   'user-management':   () => import('@/views/admin/UserManagement.vue'),
+  'token-analysis':    () => import('@/views/admin/TokenAnalysis.vue'),
 }
 
 function collectCodes(menus: MenuItem[]): Set<string> {
@@ -44,6 +46,7 @@ function buildImplicitRoutes(menuCodes: Set<string>): RouteRecordRaw[] {
       name: 'PlanDetail',
       component: () => import('@/views/PlanDetailView.vue'),
       props: true,
+      meta: { fullWidth: true },
     })
   }
 

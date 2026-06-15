@@ -29,7 +29,7 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
     llm = get_quiz_generator_llm()
 
     behavior = user_profile.get("learning_behavior", {})
-    weak_points = behavior.get("weak_points", [])
+    weak_points = behavior.get("weak_areas", [])
     pref_types = behavior.get("preferred_quiz_types", [])
 
     if weak_points:

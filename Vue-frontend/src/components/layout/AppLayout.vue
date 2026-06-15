@@ -11,14 +11,16 @@
       <AppHeader />
 
       <!-- Page content -->
-      <main class="flex-1 overflow-y-auto bg-paper">
-        <div class="max-w-7xl mx-auto px-6 py-8">
-          <router-view v-slot="{ Component }">
-            <transition name="page-fade" mode="out-in">
-              <component :is="Component" />
-            </transition>
-          </router-view>
-        </div>
+      <main class="flex-1 bg-paper relative flex flex-col overflow-hidden">
+        <router-view v-slot="{ Component, route }">
+          <transition name="page-fade" mode="out-in">
+            <div :key="String(route.name)" class="w-full h-full" :class="route.meta.fullWidth ? 'flex flex-col p-4 overflow-hidden' : 'overflow-y-auto'">
+              <div :class="route.meta.fullWidth ? 'w-full h-full flex flex-col' : 'max-w-7xl mx-auto px-6 py-8 w-full min-h-full'">
+                <component :is="Component" />
+              </div>
+            </div>
+          </transition>
+        </router-view>
       </main>
     </div>
 
@@ -33,27 +35,33 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
 import NoteSidebar from '@/components/note/NoteSidebar.vue'
 import Toast from '@/components/common/Toast.vue'
 import { useUiStore } from '@/stores/ui'
 
+const route = useRoute()
 const uiStore = useUiStore()
+
 </script>
 
 <style scoped>
 .page-fade-enter-active,
 .page-fade-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition: opacity 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .page-fade-enter-from {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(12px) scale(0.995);
+  filter: blur(4px);
 }
 .page-fade-leave-to {
   opacity: 0;
-  transform: translateY(-4px);
+  transform: translateY(-8px) scale(0.995);
+  filter: blur(4px);
 }
 
 .slide-right-enter-active,

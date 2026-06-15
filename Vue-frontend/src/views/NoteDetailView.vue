@@ -11,13 +11,31 @@
             <polyline points="15 18 9 12 15 6" />
           </svg>
         </button>
-        <div>
+        <div class="flex-1 min-w-0">
           <input
             v-model="noteName"
             class="text-xl font-display font-semibold text-navy-800 bg-transparent border-none outline-none w-full placeholder:text-navy-300"
             placeholder="笔记标题"
             @blur="autoSave"
           />
+          <!-- Tags -->
+          <div class="flex items-center flex-wrap gap-1.5 mt-1">
+            <span
+              v-for="tag in noteTags"
+              :key="tag"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-navy-50 text-navy-500"
+            >
+              {{ tag }}
+              <button class="text-navy-300 hover:text-navy-600 ml-0.5" @click="removeTag(tag)">&times;</button>
+            </span>
+            <input
+              v-model="tagInput"
+              class="text-xs bg-transparent border-none outline-none w-20 placeholder:text-navy-300 text-navy-400"
+              placeholder="+ 标签"
+              @keydown.enter.prevent="addTag"
+              @keydown.,.prevent="addTag"
+            />
+          </div>
           <p class="text-xs text-navy-300 mt-0.5">
             {{ note ? `最后编辑于 ${formatDate(note.updatedAt)}` : '新建笔记' }}
             <span v-if="saving" class="ml-2 text-sage-500">保存中...</span>
@@ -27,16 +45,67 @@
       </div>
       <div class="flex items-center gap-2">
         <button
-          class="px-3 py-1.5 rounded-lg text-sm transition-all duration-200"
-          :class="previewMode ? 'bg-navy-100 text-navy-700' : 'text-navy-400 hover:bg-navy-50 hover:text-navy-600'"
-          @click="previewMode = !previewMode"
+          v-if="viewMode === 'preview' && note?.id"
+          class="px-3 py-1.5 rounded-lg text-sm text-amber-600 bg-amber-50 hover:bg-amber-100 transition-colors"
+          @click="openFlashcardPanel"
         >
           <svg class="w-4 h-4 inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+            <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
           </svg>
-          {{ previewMode ? '编辑' : '预览' }}
+          {{ dueCount > 0 ? `复习闪卡 (${dueCount})` : '闪卡' }}
+        </button>
+        <!-- View mode switch: edit / split / preview -->
+        <div v-if="!showFormatPreview" class="flex items-center bg-navy-50 rounded-lg p-0.5">
+          <button
+            class="px-2.5 py-1 rounded-md text-xs transition-all duration-200"
+            :class="viewMode === 'edit' ? 'bg-white text-navy-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
+            @click="viewMode = 'edit'"
+          >
+            <svg class="w-3.5 h-3.5 inline mr-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            编辑
+          </button>
+          <button
+            class="px-2.5 py-1 rounded-md text-xs transition-all duration-200"
+            :class="viewMode === 'split' ? 'bg-white text-navy-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
+            @click="viewMode = 'split'"
+          >
+            <svg class="w-3.5 h-3.5 inline mr-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/>
+            </svg>
+            分屏
+          </button>
+          <button
+            class="px-2.5 py-1 rounded-md text-xs transition-all duration-200"
+            :class="viewMode === 'preview' ? 'bg-white text-navy-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
+            @click="viewMode = 'preview'"
+          >
+            <svg class="w-3.5 h-3.5 inline mr-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+            </svg>
+            预览
+          </button>
+        </div>
+        <button
+          v-if="!showFormatPreview && viewMode !== 'preview' && content.trim().length > 0"
+          class="px-3 py-1.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-1.5"
+          :class="formatting
+            ? 'bg-indigo-50 text-indigo-600 cursor-wait'
+            : 'text-indigo-600 hover:bg-indigo-50 border border-indigo-200'"
+          :disabled="formatting"
+          @click="handleFormat"
+        >
+          <svg v-if="formatting" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12a9 9 0 11-6.219-8.56" />
+          </svg>
+          <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+          {{ formatting ? formatStatus || '整理中...' : '整理笔记' }}
         </button>
         <button
+          v-if="!showFormatPreview"
           class="px-4 py-1.5 rounded-lg text-sm text-white bg-navy-600 hover:bg-navy-700 transition-colors"
           @click="saveNote"
         >
@@ -45,35 +114,250 @@
       </div>
     </div>
 
+    <!-- Source tags -->
+    <div v-if="noteResources.length > 0" class="flex flex-wrap gap-2 mb-4">
+      <button
+        v-for="res in noteResources"
+        :key="res.id"
+        class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-navy-50 text-navy-600 hover:bg-navy-100 transition-colors cursor-pointer"
+        @click="res.planId && router.push(`/plan/${res.planId}?resource=${res.resourceId}`)"
+      >
+        <svg class="w-3.5 h-3.5 text-navy-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+        </svg>
+        <span v-if="res.moduleName" class="text-navy-400">{{ res.moduleName }} ·</span>
+        {{ res.resourceTitle || `资源 #${res.resourceId}` }}
+      </button>
+    </div>
+
+    <!-- Format comparison preview (streaming or done) -->
+    <div v-if="showFormatPreview" class="format-compare-container" style="height: calc(100vh - 220px)">
+      <div class="format-compare-header">
+        <h3 class="text-lg font-semibold text-navy-800">整理对比预览</h3>
+        <p class="text-sm text-navy-400 mt-1">
+          <span v-if="formatting" class="inline-flex items-center gap-1.5">
+            <span class="inline-block w-3.5 h-3.5 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
+            AI 正在整理中，可以随时放弃...
+          </span>
+          <span v-else>整理完成，请确认是否接受</span>
+        </p>
+      </div>
+      <div class="format-compare-panels">
+        <div class="format-compare-panel original">
+          <div class="panel-label">原始笔记</div>
+          <div class="panel-content markdown-body" v-html="renderedOriginalContent" />
+        </div>
+        <div class="format-compare-panel formatted">
+          <div class="panel-label">
+            整理后笔记
+            <span v-if="formatting" class="text-indigo-400 text-xs font-normal ml-2">生成中...</span>
+          </div>
+          <div ref="streamingContentRef" class="panel-content markdown-body" v-html="renderedFormattedContent" />
+        </div>
+      </div>
+      <div class="format-compare-actions">
+        <button class="btn-accept" @click="acceptFormat">
+          {{ formatting ? '接受当前结果' : '接受整理' }}
+        </button>
+        <button class="btn-reject" @click="rejectFormat">放弃</button>
+      </div>
+    </div>
+
     <!-- Editor / Preview area -->
-    <div class="card overflow-hidden" style="height: calc(100vh - 220px)">
+    <div v-else class="card overflow-hidden flex flex-col" style="height: calc(100vh - 220px)">
+      <!-- Toolbar (edit & split modes) -->
+      <div v-if="viewMode !== 'preview'" class="flex items-center gap-0.5 px-4 py-2 border-b border-navy-100/50 bg-navy-50/30 shrink-0 flex-wrap">
+        <button class="toolbar-btn" title="撤销 (Ctrl+Z)" :disabled="undoStack.length === 0" @click="undo">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        </button>
+        <button class="toolbar-btn" title="恢复 (Ctrl+Y)" :disabled="redoStack.length === 0" @click="redo">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/></svg>
+        </button>
+        <div class="w-px h-4 bg-navy-200/50 mx-1"></div>
+        <button v-for="btn in toolbarButtons" :key="btn.label" class="toolbar-btn" :title="btn.label" @click="insertMarkdown(btn.prefix, btn.suffix, btn.placeholder)">
+          <span class="text-xs font-medium">{{ btn.display }}</span>
+        </button>
+      </div>
+
       <!-- Edit mode -->
-      <div v-if="!previewMode" class="flex h-full">
+      <div v-if="viewMode === 'edit'" class="flex-1 min-h-0">
         <textarea
+          ref="textareaRef"
           v-model="content"
-          class="flex-1 p-8 text-navy-700 leading-relaxed resize-none outline-none font-body text-base"
+          class="w-full h-full p-8 text-navy-700 leading-relaxed resize-none outline-none font-body text-base"
           placeholder="开始书写你的笔记...&#10;&#10;支持 Markdown 语法：&#10;# 标题&#10;**粗体** *斜体*&#10;- 列表&#10;> 引用&#10;`代码`"
           @input="onInput"
           @keydown.ctrl.s.prevent="saveNote"
           @keydown.meta.s.prevent="saveNote"
+          @keydown.ctrl.z.prevent="undo"
+          @keydown.ctrl.y.prevent="redo"
+          @keydown.meta.z.prevent="undo"
+          @keydown.meta.y.prevent="redo"
         ></textarea>
       </div>
 
+      <!-- Split mode -->
+      <div v-else-if="viewMode === 'split'" class="flex-1 min-h-0 flex">
+        <textarea
+          ref="textareaRef"
+          v-model="content"
+          class="flex-1 p-6 text-navy-700 leading-relaxed resize-none outline-none font-body text-base border-r border-navy-100/50"
+          placeholder="开始书写你的笔记..."
+          @input="onInput"
+          @keydown.ctrl.s.prevent="saveNote"
+          @keydown.meta.s.prevent="saveNote"
+          @keydown.ctrl.z.prevent="undo"
+          @keydown.ctrl.y.prevent="redo"
+          @keydown.meta.z.prevent="undo"
+          @keydown.meta.y.prevent="redo"
+        ></textarea>
+        <div class="flex-1 overflow-y-auto p-6" @mouseup="onPreviewMouseUp">
+          <div class="markdown-body" v-html="renderedContent" @click="onPreviewClick"></div>
+        </div>
+      </div>
+
       <!-- Preview mode -->
-      <div v-else class="h-full overflow-y-auto p-8">
-        <div class="markdown-body max-w-3xl mx-auto" v-html="renderedContent"></div>
+      <div v-else class="flex-1 min-h-0 overflow-y-auto" @mouseup="onPreviewMouseUp">
+        <!-- Annotated two-column layout -->
+        <div v-if="isAnnotated" class="annotated-layout">
+          <aside class="annotation-sidebar">
+            <p class="text-xs font-medium text-navy-400 mb-3 px-1">批注 ({{ annotations.length }})</p>
+            <div
+              v-for="ann in annotations"
+              :key="ann.id"
+              :data-ann-id="ann.id"
+              :class="['annotation-card', `ann-type-${ann.type}`, { 'ann-active': activeAnnotation === ann.id }]"
+              @mouseenter="activeAnnotation = ann.id"
+              @mouseleave="activeAnnotation = null"
+              @click="scrollToContent(ann.id)"
+            >
+              <span class="ann-type-badge">{{ ann.type }}</span>
+              <p class="ann-text">{{ ann.text }}</p>
+            </div>
+          </aside>
+          <div
+            ref="annotatedContentRef"
+            class="annotation-content markdown-body"
+            v-html="annotatedHtml"
+            @click="onAnnotatedContentClick"
+          ></div>
+        </div>
+        <!-- Regular single-column preview -->
+        <div v-else class="p-8">
+          <div class="markdown-body max-w-3xl mx-auto" v-html="renderedContent" @click="onPreviewClick"></div>
+        </div>
       </div>
     </div>
+
+    <!-- Mindmap section -->
+    <div v-if="viewMode === 'preview' && mindmapData" class="mt-4 card overflow-hidden" style="height: 450px">
+      <MindmapPlayer :data="mindmapData" :title="noteName || '思维导图'" />
+    </div>
+
+    <!-- Format complete - flashcard prompt -->
+    <transition name="fade">
+      <div v-if="showFormatFlashcardPrompt" class="mt-4 p-4 rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center">
+            <svg class="w-5 h-5 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <div>
+            <p class="text-sm font-medium text-emerald-800">笔记整理完成</p>
+            <p class="text-xs text-emerald-600">是否从整理后的笔记中生成闪卡？</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            class="px-3 py-1.5 text-xs text-emerald-600 hover:bg-emerald-100 rounded-lg transition-colors"
+            @click="showFormatFlashcardPrompt = false"
+          >
+            稍后再说
+          </button>
+          <button
+            class="px-4 py-1.5 text-xs text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors"
+            @click="generateFlashcardsAfterFormat"
+          >
+            生成闪卡
+          </button>
+        </div>
+      </div>
+    </transition>
+
+    <!-- Selection popup -->
+    <Teleport to="body">
+      <div
+        v-if="selectionPopup.show"
+        class="selection-popup"
+        :style="{ left: selectionPopup.x + 'px', top: selectionPopup.y + 'px' }"
+      >
+        <button class="selection-popup-btn" @click="generateFromSelection">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+          </svg>
+          用选中内容生成闪卡
+        </button>
+      </div>
+    </Teleport>
+
+    <!-- Flashcard overlay -->
+    <Teleport to="body">
+      <div v-if="showFlashcardPanel" class="flashcard-overlay" @click.self="closeFlashcardPanel">
+        <div class="flashcard-modal">
+          <!-- Generation in progress -->
+          <div v-if="generating" class="text-center py-12">
+            <div class="inline-block w-8 h-8 border-2 border-amber-300 border-t-amber-600 rounded-full animate-spin mb-4" />
+            <p class="text-navy-600">{{ generateStatus }}</p>
+          </div>
+
+          <!-- Player -->
+          <template v-else-if="reviewCards.length > 0">
+            <!-- Stale warning -->
+            <div v-if="isFlashcardStale" class="stale-warning">
+              <p class="text-sm text-amber-700">笔记内容已更新，闪卡可能过期</p>
+              <button class="stale-regenerate-btn" @click="startGenerate">
+                重新生成
+              </button>
+            </div>
+            <FlashcardPlayer
+              :cards="reviewCards"
+              @close="closeFlashcardPanel"
+              @reviewed="onCardReviewed"
+            />
+          </template>
+
+          <!-- No cards: offer to generate -->
+          <div v-else class="text-center py-12">
+            <div class="text-4xl mb-4"> </div>
+            <p class="text-navy-600 mb-2">还没有闪卡</p>
+            <p class="text-sm text-navy-400 mb-6">从笔记内容中自动生成知识点闪卡</p>
+            <button
+              class="px-6 py-2.5 rounded-xl text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 transition-colors"
+              @click="startGenerate"
+            >
+              生成闪卡
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
-import hljs from 'highlight.js'
-import { getNotes, createNote, updateNote } from '@/api/note'
-import type { Note } from '@/types/note'
+import { getNoteById, createNote, updateNote, getNoteResources } from '@/api/note'
+import { getFlashcardsByNote, generateFlashcardsSSE } from '@/api/flashcard'
+import { issueTicket } from '@/api/auth'
+import { formatNoteSSE } from '@/api/noteAgent'
+import type { NoteAnnotation } from '@/api/noteAgent'
+import type { Note, NoteResourceRel } from '@/types/note'
+import type { Flashcard } from '@/types/flashcard'
+import FlashcardPlayer from '@/components/flashcard/FlashcardPlayer.vue'
+import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -81,19 +365,254 @@ const router = useRouter()
 const note = ref<Note | null>(null)
 const noteName = ref('')
 const content = ref('')
-const previewMode = ref(false)
+const viewMode = ref<'edit' | 'split' | 'preview'>(route.query.mode === 'preview' ? 'preview' : 'edit')
 const saving = ref(false)
 const saved = ref(false)
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+
+// Tags
+const noteTags = ref<string[]>([])
+const tagInput = ref('')
+
+// Toolbar
+const toolbarButtons = [
+  { label: '一级标题', display: 'H1', prefix: '# ', suffix: '', placeholder: '标题' },
+  { label: '二级标题', display: 'H2', prefix: '## ', suffix: '', placeholder: '标题' },
+  { label: '三级标题', display: 'H3', prefix: '### ', suffix: '', placeholder: '标题' },
+  { label: '粗体', display: 'B', prefix: '**', suffix: '**', placeholder: '粗体文本' },
+  { label: '斜体', display: 'I', prefix: '*', suffix: '*', placeholder: '斜体文本' },
+  { label: '删除线', display: 'S', prefix: '~~', suffix: '~~', placeholder: '删除文本' },
+  { label: '无序列表', display: '•', prefix: '- ', suffix: '', placeholder: '列表项' },
+  { label: '有序列表', display: '1.', prefix: '1. ', suffix: '', placeholder: '列表项' },
+  { label: '代码块', display: '<>', prefix: '```\n', suffix: '\n```', placeholder: '代码' },
+  { label: '引用', display: '❝', prefix: '> ', suffix: '', placeholder: '引用内容' },
+  { label: '链接', display: '🔗', prefix: '[', suffix: '](url)', placeholder: '链接文本' },
+  { label: '分割线', display: '—', prefix: '\n---\n', suffix: '', placeholder: '' },
+]
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let savedTimer: ReturnType<typeof setTimeout> | null = null
+
+// Undo / Redo history
+const undoStack: Array<{ text: string; selStart: number; selEnd: number }> = []
+const redoStack: Array<{ text: string; selStart: number; selEnd: number }> = []
+const MAX_HISTORY = 100
+let historySaveTimer: ReturnType<typeof setTimeout> | null = null
+let skipHistorySave = false
+
+function saveSnapshot() {
+  const ta = textareaRef.value
+  const snap = {
+    text: content.value,
+    selStart: ta?.selectionStart ?? 0,
+    selEnd: ta?.selectionEnd ?? 0,
+  }
+  undoStack.push(snap)
+  if (undoStack.length > MAX_HISTORY) undoStack.shift()
+  redoStack.length = 0
+}
+
+function saveSnapshotDebounced() {
+  if (skipHistorySave) return
+  if (historySaveTimer) clearTimeout(historySaveTimer)
+  historySaveTimer = setTimeout(() => {
+    if (!skipHistorySave) saveSnapshot()
+  }, 500)
+}
+
+function undo() {
+  if (undoStack.length === 0) return
+  const ta = textareaRef.value
+  const scrollTop = ta?.scrollTop ?? 0
+  redoStack.push({
+    text: content.value,
+    selStart: ta?.selectionStart ?? 0,
+    selEnd: ta?.selectionEnd ?? 0,
+  })
+  const snap = undoStack.pop()!
+  content.value = snap.text
+  requestAnimationFrame(() => {
+    if (textareaRef.value) {
+      textareaRef.value.scrollTop = scrollTop
+      textareaRef.value.focus()
+      textareaRef.value.setSelectionRange(snap.selStart, snap.selEnd)
+    }
+  })
+}
+
+function redo() {
+  if (redoStack.length === 0) return
+  const ta = textareaRef.value
+  const scrollTop = ta?.scrollTop ?? 0
+  undoStack.push({
+    text: content.value,
+    selStart: ta?.selectionStart ?? 0,
+    selEnd: ta?.selectionEnd ?? 0,
+  })
+  const snap = redoStack.pop()!
+  content.value = snap.text
+  requestAnimationFrame(() => {
+    if (textareaRef.value) {
+      textareaRef.value.scrollTop = scrollTop
+      textareaRef.value.focus()
+      textareaRef.value.setSelectionRange(snap.selStart, snap.selEnd)
+    }
+  })
+}
+
+// Flashcard state
+const showFlashcardPanel = ref(false)
+const generating = ref(false)
+const generateStatus = ref('')
+const reviewCards = ref<Flashcard[]>([])
+const dueCount = ref(0)
+const latestFlashcardAt = ref<string | null>(null)
+
+// Note resources (source links)
+const noteResources = ref<NoteResourceRel[]>([])
+
+// Selection popup state
+const selectionPopup = ref({ show: false, x: 0, y: 0, text: '' })
+
+// Note formatting state
+const formatting = ref(false)
+const formatStatus = ref('')
+const showFormatFlashcardPrompt = ref(false)
+
+// Format comparison preview state
+const showFormatPreview = ref(false)
+const originalBeforeFormat = ref('')
+const formattedResult = ref('')
+const formatStreamAbort = ref<(() => void) | null>(null)
+const streamingContentRef = ref<HTMLElement | null>(null)
+const acceptedDuringStream = ref(false)
+
+// Annotation state (for two-column layout after formatting)
+const annotations = ref<NoteAnnotation[]>([])
+const activeAnnotation = ref<string | null>(null)
+const annotatedContentRef = ref<HTMLElement | null>(null)
+const isAnnotated = computed(() => annotations.value.length > 0)
+const annotationTypeColor: Record<string, string> = {
+  '易混淆': '#8b5cf6',
+  '易错点': '#ef4444',
+  '提醒': '#3b82f6',
+  '注意': '#f59e0b',
+  '技巧': '#10b981',
+}
+
+function parseAnnotations(raw: string): { cleanContent: string; annotations: NoteAnnotation[] } {
+  const anns: NoteAnnotation[] = []
+  const re = /<<A:(\d+)\|([^|]+)\|([^>]+)>>/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(raw)) !== null) {
+    anns.push({ id: match[1], type: match[2] as NoteAnnotation['type'], text: match[3].trim() })
+  }
+  const cleanContent = raw.replace(re, '').trim()
+  return { cleanContent, annotations: anns }
+}
+
+function processAnnotatedHtml(html: string): string {
+  const div = document.createElement('div')
+  div.innerHTML = html
+  const refRe = /&lt;&lt;A:(\d+)\|[^|]+\|[^&]+&gt;&gt;/g
+  for (const p of div.querySelectorAll('p, li, blockquote, td, h1, h2, h3, h4, h5, h6')) {
+    if (!refRe.test(p.innerHTML)) continue
+    refRe.lastIndex = 0
+    const ids: string[] = []
+    p.innerHTML = p.innerHTML.replace(refRe, (_, id) => { ids.push(id); return '' })
+    if (ids.length > 0) {
+      p.setAttribute('data-aids', ids.join(','))
+      p.classList.add('annotated-paragraph')
+    }
+  }
+  return div.innerHTML
+}
+
+function scrollToContent(id: string) {
+  const el = annotatedContentRef.value?.querySelector(`[data-aids*="${id}"]`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    activeAnnotation.value = id
+    setTimeout(() => { activeAnnotation.value = null }, 2000)
+  }
+}
+
+function scrollToAnnotation(id: string) {
+  const el = document.querySelector(`[data-ann-id="${id}"]`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    activeAnnotation.value = id
+    setTimeout(() => { activeAnnotation.value = null }, 2000)
+  }
+}
 
 marked.setOptions({
   breaks: true,
   gfm: true,
 } as any)
 
+const CALLOUT_MAP: Record<string, string> = {
+  '💡': 'tip',
+  '⚠️': 'warning',
+  '📌': 'important',
+  '🌰': 'example',
+  '🔑': 'key',
+  '✅': 'summary',
+  '📖': 'definition',
+}
+
+function classifyCallouts(html: string): string {
+  return html.replace(/<blockquote>([\s\S]*?)<\/blockquote>/g, (match, inner) => {
+    const text = inner.replace(/<[^>]+>/g, '').trim()
+    for (const [emoji, cls] of Object.entries(CALLOUT_MAP)) {
+      if (text.startsWith(emoji)) {
+        return `<blockquote class="${cls}">${inner}</blockquote>`
+      }
+    }
+    return match
+  })
+}
+
 const renderedContent = computed(() => {
-  return marked(content.value || '') as string
+  const raw = content.value || ''
+  const stripped = raw
+    .replace(/```mindmap\s*\n[\s\S]*?```/g, '')
+    .replace(/<<A:\d+\|[^|]+\|[^>]+>>/g, '')
+    .trim()
+  return classifyCallouts(marked(stripped) as string)
+})
+
+const annotatedHtml = computed(() => {
+  if (!isAnnotated.value) return ''
+  const raw = content.value || ''
+  const stripped = raw.replace(/```mindmap\s*\n[\s\S]*?```/g, '').trim()
+  const html = classifyCallouts(marked(stripped) as string)
+  return processAnnotatedHtml(html)
+})
+
+// Comparison preview rendered content
+const renderedOriginalContent = computed(() => {
+  return classifyCallouts(marked.parse(originalBeforeFormat.value || '') as string)
+})
+
+const renderedFormattedContent = computed(() => {
+  const { cleanContent } = parseAnnotations(formattedResult.value)
+  return classifyCallouts(marked.parse(cleanContent) as string)
+})
+
+const mindmapData = computed(() => {
+  const raw = content.value || ''
+  const match = raw.match(/```mindmap\s*\n([\s\S]*?)```/)
+  if (!match) return null
+  try {
+    return JSON.parse(match[1].trim())
+  } catch {
+    return null
+  }
+})
+
+const isFlashcardStale = computed(() => {
+  if (!note.value?.updatedAt || !latestFlashcardAt.value) return false
+  return new Date(note.value.updatedAt) > new Date(latestFlashcardAt.value)
 })
 
 function formatDate(date: string) {
@@ -108,8 +627,46 @@ function formatDate(date: string) {
 
 function onInput() {
   saved.value = false
+  saveSnapshotDebounced()
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(autoSave, 3000)
+}
+
+function insertMarkdown(prefix: string, suffix: string, placeholder: string) {
+  const ta = textareaRef.value
+  if (!ta) return
+  saveSnapshot()
+  skipHistorySave = true
+  const start = ta.selectionStart
+  const end = ta.selectionEnd
+  const scrollTop = ta.scrollTop
+  const selected = content.value.substring(start, end) || placeholder
+  const before = content.value.substring(0, start)
+  const after = content.value.substring(end)
+  content.value = before + prefix + selected + suffix + after
+  nextTick(() => {
+    ta.focus()
+    ta.scrollTop = scrollTop
+    const cursorPos = start + prefix.length
+    ta.setSelectionRange(cursorPos, cursorPos + selected.length)
+    skipHistorySave = false
+  })
+}
+
+function addTag() {
+  const tag = tagInput.value.trim().replace(/,/g, '')
+  if (!tag || noteTags.value.includes(tag)) {
+    tagInput.value = ''
+    return
+  }
+  noteTags.value.push(tag)
+  tagInput.value = ''
+  autoSave()
+}
+
+function removeTag(tag: string) {
+  noteTags.value = noteTags.value.filter(t => t !== tag)
+  autoSave()
 }
 
 async function autoSave() {
@@ -123,11 +680,11 @@ async function saveNote() {
   try {
     const name = noteName.value.trim() || '无标题笔记'
     const body = content.value.trim() || ' '
+    const tags = noteTags.value.length > 0 ? noteTags.value : undefined
     if (note.value?.id) {
-      await updateNote(note.value.id, { noteName: name, content: body })
+      await updateNote(note.value.id, { noteName: name, content: body, tags })
     } else {
-      const res = await createNote({ noteName: name, content: body })
-      // Reload to get the note with ID
+      const res = await createNote({ noteName: name, content: body, tags })
       const id = (res as any)?.data?.id
       if (id) {
         router.replace(`/notes/${id}`)
@@ -150,16 +707,28 @@ async function loadNote() {
     note.value = null
     noteName.value = ''
     content.value = ''
+    noteTags.value = []
+    noteResources.value = []
+    annotations.value = []
+    undoStack.length = 0
+    redoStack.length = 0
     return
   }
   try {
-    const res = await getNotes({ page: 1, size: 100 })
-    const notes = res.data?.records || []
-    const found = notes.find((n: Note) => n.id === Number(id))
+    const res = await getNoteById(Number(id))
+    const found = res.data
     if (found) {
       note.value = found
       noteName.value = found.noteName
       content.value = found.content
+      noteTags.value = parseTags(found.tags)
+      loadNoteResources(found.id)
+      // Parse annotations from saved content (if it was previously formatted)
+      const { annotations: anns } = parseAnnotations(found.content || '')
+      annotations.value = anns
+      // Reset undo/redo history for newly loaded note
+      undoStack.length = 0
+      redoStack.length = 0
     } else {
       router.push('/notes')
     }
@@ -168,9 +737,652 @@ async function loadNote() {
   }
 }
 
-onMounted(loadNote)
+function parseTags(tags: Note['tags']): string[] {
+  if (!tags) return []
+  if (Array.isArray(tags)) return tags
+  try {
+    return JSON.parse(tags as string)
+  } catch {
+    return []
+  }
+}
+
+async function loadNoteResources(noteId: number) {
+  try {
+    const res = await getNoteResources(noteId)
+    noteResources.value = res.data ?? []
+  } catch {
+    noteResources.value = []
+  }
+}
+
+async function loadDueCount() {
+  if (!note.value?.id) {
+    dueCount.value = 0
+    return
+  }
+  try {
+    const res = await getFlashcardsByNote(note.value.id)
+    const cards = res.data ?? []
+    const now = new Date()
+    dueCount.value = cards.filter(c => !c.nextReviewAt || new Date(c.nextReviewAt) <= now).length
+    // Track latest flashcard creation time for stale detection
+    if (cards.length > 0) {
+      const sorted = [...cards].sort((a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )
+      latestFlashcardAt.value = sorted[0].createdAt
+    } else {
+      latestFlashcardAt.value = null
+    }
+  } catch {
+    dueCount.value = 0
+    latestFlashcardAt.value = null
+  }
+}
+
+async function openFlashcardPanel() {
+  showFlashcardPanel.value = true
+  if (!note.value?.id) return
+
+  try {
+    const res = await getFlashcardsByNote(note.value.id)
+    const cards = res.data ?? []
+    if (cards.length > 0) {
+      const now = new Date()
+      const due = cards.filter(c => !c.nextReviewAt || new Date(c.nextReviewAt) <= now)
+      reviewCards.value = due.length > 0 ? due : cards
+      // Track latest flashcard creation time
+      const sorted = [...cards].sort((a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )
+      latestFlashcardAt.value = sorted[0].createdAt
+    } else {
+      reviewCards.value = []
+      latestFlashcardAt.value = null
+    }
+  } catch {
+    reviewCards.value = []
+  }
+}
+
+function closeFlashcardPanel() {
+  showFlashcardPanel.value = false
+  generating.value = false
+  reviewCards.value = []
+  loadDueCount()
+}
+
+async function startGenerate() {
+  if (!note.value?.id) return
+  showFlashcardPanel.value = true
+  generating.value = true
+  generateStatus.value = '正在获取认证...'
+
+  try {
+    const ticketRes = await issueTicket()
+    const ticket = ticketRes.data.ticket
+
+    generateStatus.value = '正在分析笔记内容...'
+
+    generateFlashcardsSSE(ticket, note.value.id, {
+      onProgress(content) {
+        generateStatus.value = content
+      },
+      onFlashcard(index, total, question, answer, difficulty) {
+        generateStatus.value = `已生成 ${index + 1}/${total} 张闪卡...`
+      },
+      onDone(message) {
+        generating.value = false
+        reviewCards.value = []
+        openFlashcardPanel()
+      },
+      onError(error) {
+        generating.value = false
+        generateStatus.value = `生成失败: ${error}`
+        console.error('Flashcard generation error:', error)
+      },
+    })
+  } catch (e) {
+    generating.value = false
+    console.error('Failed to start flashcard generation:', e)
+  }
+}
+
+// === Note formatting ===
+
+async function handleFormat() {
+  if (!content.value.trim()) return
+  formatting.value = true
+  formatStatus.value = ''
+  showFormatFlashcardPrompt.value = false
+  annotations.value = []
+  originalBeforeFormat.value = content.value
+  formattedResult.value = ''
+  acceptedDuringStream.value = false
+  showFormatPreview.value = true
+
+  try {
+    const ticketRes = await issueTicket()
+    const ticket = ticketRes.data.ticket
+
+    formatStatus.value = '正在整理笔记...'
+
+    const { abort } = formatNoteSSE(ticket, originalBeforeFormat.value, {
+      onProgress(message) {
+        formatStatus.value = message
+      },
+      onChunk(chunk) {
+        formattedResult.value += chunk
+        // If already accepted, keep updating content.value in editor
+        if (acceptedDuringStream.value) {
+          content.value = formattedResult.value
+        }
+        // Auto-scroll the streaming panel to bottom
+        nextTick(() => {
+          const el = streamingContentRef.value
+          if (el) el.scrollTop = el.scrollHeight
+        })
+      },
+      onDone(formatted) {
+        formattedResult.value = formatted
+        formatting.value = false
+        formatStatus.value = ''
+        formatStreamAbort.value = null
+        // If accepted mid-stream, save the final complete result now
+        if (acceptedDuringStream.value) {
+          const { annotations: anns } = parseAnnotations(formatted)
+          content.value = formatted
+          annotations.value = anns
+          saveNote()
+          showFormatFlashcardPrompt.value = true
+        }
+      },
+      onError(error) {
+        formatting.value = false
+        formatStatus.value = ''
+        formatStreamAbort.value = null
+        console.error('Note format error:', error)
+      },
+    })
+    formatStreamAbort.value = abort
+  } catch (e) {
+    formatting.value = false
+    formatStatus.value = ''
+    formatStreamAbort.value = null
+    console.error('Failed to start note formatting:', e)
+  }
+}
+
+function acceptFormat() {
+  if (!formattedResult.value.trim()) return
+  acceptedDuringStream.value = true
+  const { annotations: anns } = parseAnnotations(formattedResult.value)
+  content.value = formattedResult.value
+  annotations.value = anns
+  showFormatPreview.value = false
+  // If stream already finished, save now; otherwise onDone will save
+  if (!formatting.value) {
+    saveNote()
+    showFormatFlashcardPrompt.value = true
+    formattedResult.value = ''
+    originalBeforeFormat.value = ''
+  }
+}
+
+function rejectFormat() {
+  if (formatStreamAbort.value) {
+    formatStreamAbort.value()
+    formatStreamAbort.value = null
+  }
+  content.value = originalBeforeFormat.value
+  annotations.value = []
+  formatting.value = false
+  showFormatPreview.value = false
+  formattedResult.value = ''
+  originalBeforeFormat.value = ''
+}
+
+function generateFlashcardsAfterFormat() {
+  showFormatFlashcardPrompt.value = false
+  startGenerate()
+}
+
+// === Preview link navigation ===
+
+function onPreviewClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  const anchor = target.closest('a') as HTMLAnchorElement | null
+  if (!anchor) return
+  const href = anchor.getAttribute('href')
+  if (href && href.startsWith('/')) {
+    e.preventDefault()
+    router.push(href)
+  }
+}
+
+function onAnnotatedContentClick(e: MouseEvent) {
+  onPreviewClick(e)
+  const target = e.target as HTMLElement
+  const paragraph = target.closest('.annotated-paragraph') as HTMLElement | null
+  if (!paragraph) return
+  const aids = paragraph.dataset.aids
+  if (!aids) return
+  const firstId = aids.split(',')[0]
+  scrollToAnnotation(firstId)
+}
+
+// === Selection popup ===
+
+function onPreviewMouseUp(e: MouseEvent) {
+  const selection = window.getSelection()
+  const text = selection?.toString().trim() || ''
+
+  if (text.length < 10) {
+    selectionPopup.value.show = false
+    return
+  }
+
+  // Position popup near the end of selection
+  const range = selection?.getRangeAt(0)
+  if (!range) return
+  const rect = range.getBoundingClientRect()
+  selectionPopup.value = {
+    show: true,
+    x: rect.right + 8,
+    y: rect.top - 10,
+    text,
+  }
+}
+
+function hideSelectionPopup() {
+  selectionPopup.value.show = false
+}
+
+async function generateFromSelection() {
+  const text = selectionPopup.value.text
+  selectionPopup.value.show = false
+  if (!note.value?.id || !text) return
+
+  showFlashcardPanel.value = true
+  generating.value = true
+  generateStatus.value = '正在获取认证...'
+
+  try {
+    const ticketRes = await issueTicket()
+    const ticket = ticketRes.data.ticket
+
+    generateStatus.value = '正在分析选中内容...'
+
+    generateFlashcardsSSE(ticket, note.value.id, {
+      onProgress(content) {
+        generateStatus.value = content
+      },
+      onFlashcard(index, total, question, answer, difficulty) {
+        generateStatus.value = `已生成 ${index + 1}/${total} 张闪卡...`
+      },
+      onDone(message) {
+        generating.value = false
+        reviewCards.value = []
+        openFlashcardPanel()
+      },
+      onError(error) {
+        generating.value = false
+        generateStatus.value = `生成失败: ${error}`
+      },
+    }, text)
+  } catch (e) {
+    generating.value = false
+    console.error('Failed to generate from selection:', e)
+  }
+}
+
+function onCardReviewed(_cardId: number, _quality: number) {
+  // Card reviewed, player will advance automatically
+}
+
+// Hide selection popup when clicking elsewhere
+function onDocumentMouseDown(e: MouseEvent) {
+  const popup = document.querySelector('.selection-popup')
+  if (popup && !popup.contains(e.target as Node)) {
+    selectionPopup.value.show = false
+  }
+}
+
+onMounted(() => {
+  loadNote()
+  loadDueCount()
+  document.addEventListener('mousedown', onDocumentMouseDown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('mousedown', onDocumentMouseDown)
+})
 
 watch(() => route.params.id, (newId) => {
-  if (newId) loadNote()
+  if (newId) {
+    loadNote()
+    loadDueCount()
+  }
+})
+
+watch(activeAnnotation, (id) => {
+  if (!annotatedContentRef.value) return
+  annotatedContentRef.value.querySelectorAll('.annotated-paragraph').forEach(el => {
+    el.classList.toggle('ann-highlight', id !== null && (el as HTMLElement).dataset.aids?.includes(id))
+  })
 })
 </script>
+
+<style scoped>
+.flashcard-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease;
+}
+
+.flashcard-modal {
+  background: white;
+  border-radius: 20px;
+  padding: 32px;
+  width: 90%;
+  max-width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  animation: slideUp 0.25s ease;
+}
+
+.stale-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 10px;
+}
+
+.stale-regenerate-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.stale-regenerate-btn:hover {
+  background: #fde68a;
+}
+
+.selection-popup {
+  position: fixed;
+  z-index: 1100;
+  animation: fadeIn 0.15s ease;
+}
+
+.selection-popup-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transition: all 0.15s;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.selection-popup-btn:hover {
+  background: #fef3c7;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  border-radius: 6px;
+  color: #6b7a99;
+  transition: all 0.15s;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+.toolbar-btn:hover {
+  background: rgba(26, 40, 71, 0.08);
+  color: #1a2847;
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.toolbar-btn:disabled:hover {
+  background: none;
+  color: #6b7a99;
+}
+
+/* === Annotated two-column layout === */
+
+.annotated-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  height: 100%;
+}
+
+.annotation-sidebar {
+  overflow-y: auto;
+  padding: 16px 12px;
+  border-right: 1px solid #e5e7eb;
+  background: #fafbfc;
+}
+
+.annotation-content {
+  overflow-y: auto;
+  padding: 24px 32px;
+}
+
+.annotation-card {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border-left: 3px solid;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: white;
+}
+
+.annotation-card:hover {
+  transform: translateX(2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.ann-active {
+  transform: translateX(2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.ann-type-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+
+.ann-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #374151;
+  margin: 0;
+}
+
+/* Type colors */
+.ann-type-易混淆 { border-color: #8b5cf6; }
+.ann-type-易混淆 .ann-type-badge { color: #7c3aed; background: #f5f3ff; }
+
+.ann-type-易错点 { border-color: #ef4444; }
+.ann-type-易错点 .ann-type-badge { color: #dc2626; background: #fef2f2; }
+
+.ann-type-提醒 { border-color: #3b82f6; }
+.ann-type-提醒 .ann-type-badge { color: #2563eb; background: #eff6ff; }
+
+.ann-type-注意 { border-color: #f59e0b; }
+.ann-type-注意 .ann-type-badge { color: #d97706; background: #fffbeb; }
+
+.ann-type-技巧 { border-color: #10b981; }
+.ann-type-技巧 .ann-type-badge { color: #059669; background: #ecfdf5; }
+
+/* Annotated paragraphs in right column */
+:deep(.annotated-paragraph) {
+  border-left: 3px solid #cbd5e1;
+  padding-left: 12px;
+  margin-left: -15px;
+  border-radius: 4px;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: #94a3b8;
+  text-underline-offset: 4px;
+  cursor: pointer;
+  transition: background 0.3s ease, border-color 0.3s ease;
+}
+
+:deep(.annotated-paragraph):hover {
+  background: rgba(59, 130, 246, 0.05);
+}
+
+:deep(.annotated-paragraph.ann-highlight) {
+  background: rgba(255, 230, 0, 0.08);
+  border-left-color: #f59e0b;
+}
+
+/* === Format comparison preview === */
+
+.format-compare-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.format-compare-header {
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.format-compare-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.format-compare-panel {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.format-compare-panel.original {
+  opacity: 0.75;
+}
+
+.panel-label {
+  padding: 10px 14px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #374151;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.format-compare-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 12px 0;
+}
+
+.btn-accept {
+  padding: 10px 36px;
+  background: #10b981;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-accept:hover {
+  background: #059669;
+}
+
+.btn-reject {
+  padding: 10px 36px;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-reject:hover {
+  background: #dc2626;
+}
+</style>

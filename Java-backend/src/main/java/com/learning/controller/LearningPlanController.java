@@ -87,4 +87,19 @@ public class LearningPlanController {
     public Result<LearningPlan> getPlanInternal(@PathVariable Long planId) {
         return Result.success(planService.getPlanByIdInternal(planId));
     }
+
+    @Operation(summary = "内部接口：会话级 learning_goal 增量更新（保留演进历史）")
+    @PatchMapping("/internal/{planId}/learning-goal")
+    public Result<Void> upsertSessionLearningGoal(@PathVariable Long planId,
+                                                   @RequestBody java.util.Map<String, Object> body) {
+        String sessionId = (String) body.get("sessionId");
+        String goal = (String) body.get("goal");
+        String action = body.get("action") != null ? body.get("action").toString() : "update";
+        String reasoning = body.get("reasoning") != null ? body.get("reasoning").toString() : "";
+        if (sessionId == null || sessionId.isEmpty() || goal == null || goal.isEmpty()) {
+            return Result.success();
+        }
+        planService.upsertSessionLearningGoal(planId, sessionId, goal, action, reasoning);
+        return Result.success();
+    }
 }

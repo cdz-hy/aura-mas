@@ -1,5 +1,18 @@
 import { PYTHON_AI_BASE } from '@/api/request'
 
+export interface GeneratedResourceRef {
+  id: number
+  type: string
+  title: string
+  content?: string
+  html?: string
+  nodeData?: Record<string, any>
+  moduleData?: Record<string, any>
+  generated_content?: Record<string, any>
+  data?: Record<string, any>
+  status?: number
+}
+
 export interface SSEHandlers {
   onProgress?: (content: string) => void
   onChunk?: (content: string) => void
@@ -14,7 +27,8 @@ export interface SSEHandlers {
   onPlan?: (plan: any) => void
   onResource?: (resource: any) => void
   onResourceTrigger?: (resourceType: string, moduleId: number) => void
-  onResourceGenerated?: (resources: Array<{ id: number; type: string; title: string }>) => void
+  onResourceGenerated?: (resources: GeneratedResourceRef[]) => void
+  onResourceTypeGenerated?: (resource: GeneratedResourceRef) => void
   onStreamingResource?: (resource: { id: number; type: string; title: string }, content: string) => void
   onRecommendations?: (data: any[]) => void
   onNeedConfirmation?: (message: string, taskBreakdown: any) => void
@@ -99,6 +113,9 @@ export function createSSEConnection(
         case 'resource_generated':
           handlers.onResourceGenerated?.(data.resources || [])
           break
+        case 'resource_type_generated':
+          handlers.onResourceTypeGenerated?.(normalizeResourceTypeGenerated(data))
+          break
         case 'resource_stream_update':
           handlers.onStreamingResource?.(data.resource, data.content)
           break
@@ -114,7 +131,7 @@ export function createSSEConnection(
   }
 
   // Listen for custom event types (question, progress, done, error, etc.)
-  const customEvents = ['question', 'progress', 'profile_update', 'profile_complete', 'done', 'error', 'chunk', 'format_chunk', 'resource', 'resource_trigger', 'plan', 'modules', 'resource_stream_start', 'resource_stream_text', 'resource_stream_failed']
+  const customEvents = ['question', 'progress', 'profile_update', 'profile_complete', 'done', 'error', 'chunk', 'format_chunk', 'resource', 'resource_trigger', 'resource_generated', 'resource_type_generated', 'resource_stream_update', 'plan', 'modules', 'resource_stream_start', 'resource_stream_text', 'resource_stream_failed']
   for (const eventType of customEvents) {
     source.addEventListener(eventType, (event: MessageEvent) => {
       handleSSEData(event.data)
@@ -127,6 +144,26 @@ export function createSSEConnection(
   }
 
   return source
+}
+
+function normalizeResourceTypeGenerated(data: Record<string, any>): GeneratedResourceRef {
+  const payload = data.generated_content || data.data || data.content || data
+  const moduleType = payload.module_type || payload.moduleType || data.resource_type || data.type || 'document'
+  const title = payload.title || data.title || '学习资源'
+  const idValue = data.id ?? data.resource_id ?? payload.id ?? payload.resource_id ?? 0
+
+  return {
+    id: Number(idValue) || 0,
+    type: moduleType,
+    title,
+    content: payload.content,
+    html: payload.html,
+    nodeData: payload.nodeData,
+    moduleData: payload.moduleData,
+    generated_content: payload,
+    data: payload,
+    status: data.status,
+  }
 }
 
 export function cancelSSE(source: EventSource | null) {

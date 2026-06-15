@@ -198,7 +198,7 @@ const quickQuestions = [
 const resourceTypeLabel = (type: string) => {
   const labels: Record<string, string> = {
     document: '文档', mindmap: '思维导图', quiz: '练习题',
-    code: '代码', video: '视频', reading: '阅读',
+    code: '代码', video: '视频', reading: '阅读', podcast: '播客',
   }
   return labels[type] || type
 }
@@ -222,6 +222,11 @@ function sendMessage() {
   if (!text) return
   inputText.value = ''
   showModifyInput.value = false
+  // 确认状态下，底部输入也走 confirmBreakdown 以携带 task_breakdown 上下文
+  if (store.awaitingConfirmation && store.pendingTaskBreakdown) {
+    store.confirmBreakdown(planId, text)
+    return
+  }
   store.sendMessage(text, planId)
 }
 

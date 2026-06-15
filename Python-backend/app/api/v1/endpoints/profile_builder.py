@@ -22,6 +22,7 @@ from app.graph.learning_graph import get_learning_graph
 from app.agents.schemas import AgentState
 from app.schemas.sse_bridge import graph_step_to_sse, _sse
 from app.services.stream_state import update_stream_text, mark_stream_done, mark_stream_error
+from app.agents.profile_maintainer import profile_maintainer_node
 
 logger = logging.getLogger("api.profile_builder")
 router = APIRouter()
@@ -38,9 +39,9 @@ async def profile_chat(
     """
     画像构建对话 - SSE 流式输出（background thread 模式）
     """
-    # 验证 ticket
+    # 验证 ticket（同步调用，放到线程池）
     try:
-        ticket_info = java_client.validate_ticket(ticket)
+        ticket_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
@@ -61,18 +62,20 @@ async def profile_chat(
         except Exception as e:
             logger.warning(f"[画像构建] 解析 task_breakdown 失败: {e}")
 
-    # 获取已有画像
+    # 获取已有画像（同步调用，放到线程池）
     user_profile = {}
     try:
-        user_profile = java_client.get_user_profile(user_id)
+        user_profile = await asyncio.to_thread(java_client.get_user_profile, user_id)
     except Exception:
         pass
 
-    # 获取对话历史（按计划隔离）
+    # 获取对话历史（按计划隔离，同步调用放到线程池）
     plan_id_int = int(plan_id) if plan_id and plan_id.isdigit() else None
     chat_history = []
     try:
-        history = java_client.get_dialogue_history(user_id=user_id, plan_id=plan_id_int, session_id=session_id, limit=30)
+        history = await asyncio.to_thread(
+            java_client.get_dialogue_history, user_id, plan_id=plan_id_int, session_id=session_id, limit=30
+        )
         for h in history:
             chat_history.append({
                 "role": "user" if h.get("dialogueType") == "USER" else "assistant",
@@ -81,14 +84,11 @@ async def profile_chat(
     except Exception:
         pass
 
-    # 记录用户消息
+    # 记录用户消息（同步调用，放到线程池）
     try:
-        java_client.create_dialogue(
-            user_id=user_id,
-            session_id=session_id,
-            conversation_text=message,
-            dialogue_type="USER",
-            intent_type="profile",
+        await asyncio.to_thread(
+            java_client.create_dialogue,
+            user_id, session_id, message, "USER", None, "profile",
         )
     except Exception as e:
         logger.warning(f"记录用户消息失败: {e}")
@@ -139,6 +139,7 @@ async def profile_chat(
         "finished": False,      # 图执行是否完成
         "error": None,          # 异常信息
         "ai_response_parts": [],  # AI 回复片段
+        "profile_update_needed": False,
     }
 
     def _sse_callback(data: str):
@@ -155,10 +156,13 @@ async def profile_chat(
             async def _run():
                 graph = get_learning_graph()
                 logger.info(f"[画像构建] 图执行开始 (线程: {threading.current_thread().name})")
-                async for event in graph.astream(initial_state, stream_mode="updates"):
+                config = {"configurable": {"thread_id": session_id}}
+                async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
                     for node_name, node_output in event.items():
                         if node_output is None:
                             continue
+                        if node_output.get("profile_update_needed"):
+                            bg_state["profile_update_needed"] = True
                         for sse_data in graph_step_to_sse(node_name, node_output):
                             bg_state["events"].append(sse_data)
                             _persist_profile_update(sse_data, user_id)
@@ -176,6 +180,14 @@ async def profile_chat(
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(_run())
+
+            # 简答智能体检测到画像信息时，后台执行画像维护
+            if bg_state["profile_update_needed"]:
+                threading.Thread(
+                    target=_bg_profile_maintenance,
+                    args=(user_id, message, chat_history, user_profile),
+                    daemon=True,
+                ).start()
 
             # 推送完成事件
             bg_state["events"].append(_sse({"type": "done"}))
@@ -235,6 +247,30 @@ async def profile_chat(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _bg_profile_maintenance(user_id: int, user_message: str, chat_history: list, user_profile: dict):
+    """后台画像维护：简答智能体检测到画像信息后触发"""
+    try:
+        logger.info(f"[画像维护] 开始更新用户 {user_id} 的画像")
+        state = {
+            "user_message": user_message,
+            "chat_history": chat_history,
+            "user_profile": user_profile,
+        }
+        result = profile_maintainer_node(state)
+        if result.get("stream_events"):
+            for event in result["stream_events"]:
+                if event.get("event_type") == "profile_update":
+                    updated_behavior = event.get("data", {}).get("updated_behavior", {})
+                    reason = event.get("data", {}).get("reason", "对话画像自动更新")
+                    if updated_behavior:
+                        java_client.save_user_profile(user_id, updated_behavior, reason)
+                        logger.info(f"[画像维护] 用户 {user_id} 画像更新成功")
+        else:
+            logger.info(f"[画像维护] 用户 {user_id} 无需更新画像")
+    except Exception as e:
+        logger.error(f"[画像维护] 更新失败: {str(e)}", exc_info=True)
 
 
 async def _error_stream(message: str) -> AsyncGenerator[str, None]:

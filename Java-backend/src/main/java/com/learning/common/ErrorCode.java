@@ -21,6 +21,7 @@ public enum ErrorCode {
     RESOURCE_NOT_FOUND(2002, "学习资源不存在"),
     TASK_NOT_FOUND(2003, "任务不存在"),
     NOTE_NOT_FOUND(2004, "笔记不存在"),
+    FLASHCARD_NOT_FOUND(2005, "闪卡不存在"),
 
     FILE_UPLOAD_ERROR(3001, "文件上传失败"),
     FILE_NOT_FOUND(3002, "文件不存在"),

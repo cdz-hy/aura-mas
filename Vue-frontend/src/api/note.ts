@@ -1,11 +1,15 @@
 import request from './request'
-import type { Note, NoteCreateRequest, NoteLinkRequest } from '@/types/note'
+import type { Note, NoteCreateRequest, NoteLinkRequest, NoteResourceRel } from '@/types/note'
 
 export function createNote(data: NoteCreateRequest) {
   return request.post<any, { data: Note }>('/note', data)
 }
 
-export function getNotes(params: { planId?: number; page?: number; size?: number }) {
+export function getNoteById(noteId: number) {
+  return request.get<any, { data: Note }>(`/note/${noteId}`)
+}
+
+export function getNotes(params: { planId?: number; page?: number; size?: number; keyword?: string }) {
   return request.get<any, { data: { records: Note[]; total: number } }>('/note/list', { params })
 }
 
@@ -19,4 +23,8 @@ export function deleteNote(noteId: number) {
 
 export function linkNoteToResource(noteId: number, data: NoteLinkRequest) {
   return request.post(`/note/${noteId}/link-resource`, data)
+}
+
+export function getNoteResources(noteId: number) {
+  return request.get<any, { data: NoteResourceRel[] }>(`/note/${noteId}/resources`)
 }

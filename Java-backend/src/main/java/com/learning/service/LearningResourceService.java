@@ -41,12 +41,20 @@ public class LearningResourceService {
         return resource;
     }
 
+    public LearningResource findResourceById(Long resourceId) {
+        return resourceMapper.selectById(resourceId);
+    }
+
     @Transactional
     public LearningResource createResource(LearningResource resource) {
         resource.setCreatedAt(LocalDateTime.now());
         resource.setUpdatedAt(LocalDateTime.now());
-        resource.setStatus(0);
-        resource.setVersion(1);
+        if (resource.getStatus() == null) {
+            resource.setStatus(0);
+        }
+        if (resource.getVersion() == null) {
+            resource.setVersion(1);
+        }
         resourceMapper.insert(resource);
         return resource;
     }
@@ -77,6 +85,19 @@ public class LearningResourceService {
             resourceMapper.updateById(resource);
         }
 
+        return task;
+    }
+
+    @Transactional
+    public ResourceGenerationTask createGenerationTask(Long planId, Long resourceId, String agentChain) {
+        ResourceGenerationTask task = new ResourceGenerationTask();
+        task.setPlanId(planId);
+        task.setResourceId(resourceId);
+        task.setTaskStatus(1);
+        task.setAgentChain(agentChain);
+        task.setRetryCount(0);
+        task.setCreatedAt(LocalDateTime.now());
+        taskMapper.insert(task);
         return task;
     }
 

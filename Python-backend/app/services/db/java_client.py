@@ -4,11 +4,18 @@ Java 后端 HTTP 客户端 - 用于多智能体系统与 Java 后端的数据交
 """
 import json
 import base64
+import asyncio
 import logging
 import requests
 import httpx
 from typing import Optional, List, Dict, Any
 from app.core.config import settings
+from app.services.cache import (
+    get_profile as cache_get_profile,
+    set_profile as cache_set_profile,
+    invalidate_profile as cache_invalidate,
+    publish_delayed_invalidation,
+)
 
 logger = logging.getLogger("java_client")
 
@@ -19,6 +26,11 @@ class JavaBackendClient:
     def __init__(self):
         self.base_url = settings.JAVA_BACKEND_URL.rstrip("/")
         self.timeout = 30
+        self.session = requests.Session()
+        # 配置连接池，支持与 Java 后端的高效长连接复用
+        adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=30)
+        self.session.mount('https://', adapter)
+        self.session.mount('http://', adapter)
 
     def validate_ticket(self, ticket: str) -> Dict[str, Any]:
         """
@@ -68,7 +80,7 @@ class JavaBackendClient:
         headers["X-Service-Secret"] = settings.JAVA_SERVICE_SECRET
         kwargs["headers"] = headers
         try:
-            resp = requests.request(method, url, **kwargs)
+            resp = self.session.request(method, url, **kwargs)
             if resp.status_code == 200:
                 result = resp.json()
                 code = result.get("code", 200)
@@ -184,6 +196,27 @@ class JavaBackendClient:
         """更新计划状态"""
         self._request("PUT", f"/api/plan/{plan_id}/status", params={"status": status})
 
+    def upsert_session_learning_goal(
+        self,
+        plan_id: int,
+        session_id: str,
+        goal: str,
+        action: str = "update",
+        reasoning: str = "",
+    ) -> None:
+        """
+        会话级 learning_goal 增量更新（保留演进历史）。
+        服务端会按 session_id 区分存储，并把每次变化追加到该会话的 history 中。
+        无变化时静默跳过。
+        """
+        body = {
+            "sessionId": session_id,
+            "goal": goal,
+            "action": action,
+            "reasoning": reasoning,
+        }
+        self._request("PATCH", f"/api/plan/internal/{plan_id}/learning-goal", json=body)
+
     # ==================== 学习资源 ====================
 
     def create_resource(
@@ -220,6 +253,10 @@ class JavaBackendClient:
     def get_plan_resources(self, plan_id: int) -> List[Dict[str, Any]]:
         """获取计划的所有资源"""
         return self._request("GET", f"/api/resource/internal/plan/{plan_id}")
+
+    def get_resources_by_module(self, plan_id: int, module_order: int) -> List[Dict[str, Any]]:
+        """获取同一模块下的所有资源"""
+        return self._request("GET", f"/api/resource/internal/plan/{plan_id}/module/{module_order}")
 
     def update_resource_content(self, resource_id: int, module_data: str, status: Optional[int] = None):
         """更新资源内容"""
@@ -275,7 +312,11 @@ class JavaBackendClient:
     # ==================== 用户画像 ====================
 
     def get_user_profile(self, user_id: int) -> Dict[str, Any]:
-        """获取用户当前画像"""
+        """获取用户当前画像（Redis 缓存优先）"""
+        cached = cache_get_profile(user_id)
+        if cached is not None:
+            return cached
+
         profile = self._request("GET", f"/api/internal/profile/current", params={"userId": user_id})
         # Java 返回 learningBehavior (camelCase, JSON 字符串)，统一转为 learning_behavior (snake_case, dict)
         if isinstance(profile, dict):
@@ -289,6 +330,7 @@ class JavaBackendClient:
                 profile["learning_behavior"] = lb
             elif "learning_behavior" not in profile:
                 profile["learning_behavior"] = {}
+            cache_set_profile(user_id, profile)
         return profile
 
     def get_resource_by_id(self, resource_id: int) -> Dict[str, Any]:
@@ -327,14 +369,19 @@ class JavaBackendClient:
         learning_behavior: Dict[str, Any],
         update_reason: str,
     ):
-        """保存用户画像（自动判断创建或更新）"""
-        try:
-            self.update_user_profile(user_id, learning_behavior, update_reason)
-        except Exception:
-            try:
-                self.create_user_profile(user_id, learning_behavior, update_reason)
-            except Exception as e:
-                logger.warning(f"保存用户画像失败: {e}")
+        """保存用户画像。
+
+        Java 端 PUT /api/internal/profile 已经支持无当前画像时创建新版本。
+        这里必须让异常抛给调用方，否则调用方会在 Java 500 后误记录"画像保存成功"。
+
+        延迟双删：HTTP PUT 成功后立即删除缓存，同时发 MQ 延迟消息执行第二次删除。
+        """
+        result = self.update_user_profile(user_id, learning_behavior, update_reason)
+        # 第一次删除（立即）
+        cache_invalidate(user_id)
+        # 第二次删除（延迟 2s，通过 MQ 死信队列）
+        publish_delayed_invalidation(user_id)
+        return result
 
     # ==================== 资源生成任务 ====================
 
@@ -357,11 +404,35 @@ class JavaBackendClient:
         self,
         task_id: int,
         task_status: int,
+        update_resource_status: bool = True,
     ) -> Dict[str, Any]:
         """更新资源生成任务状态"""
-        return self._request("PUT", f"/api/task/internal/{task_id}", json={
-            "taskStatus": task_status,
-        })
+        return self._request(
+            "PUT",
+            f"/api/task/internal/{task_id}",
+            json={
+                "taskStatus": task_status,
+                "updateResourceStatus": update_resource_status,
+            },
+        )
+
+    def complete_generation_task(self, task_id: int, module_data: str) -> Dict[str, Any]:
+        """原子性完成任务：保存资源内容 + 更新任务状态（同一事务）"""
+        return self._request(
+            "PUT",
+            f"/api/task/internal/{task_id}/complete",
+            json={"moduleData": module_data},
+        )
+
+    def get_stuck_tasks(self) -> list:
+        """获取所有卡死任务（task_status=1，resource_status=1）"""
+        try:
+            result = self._request("GET", "/api/task/internal/stuck")
+            # _request 已经提取了 data 字段，result 就是列表
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            logger.warning("获取卡死任务失败: %s", e)
+            return []
 
     # ==================== 知识库管理 ====================
 
@@ -417,6 +488,23 @@ class JavaBackendClient:
         if task_id is not None:
             body["taskId"] = task_id
         self._request("POST", "/api/token/internal/record", json=body)
+
+    # ==================== 异步包装（避免阻塞事件循环） ====================
+
+    async def async_validate_ticket(self, ticket: str) -> Dict[str, Any]:
+        return await asyncio.to_thread(self.validate_ticket, ticket)
+
+    async def async_get_user_profile(self, user_id: int) -> Dict[str, Any]:
+        return await asyncio.to_thread(self.get_user_profile, user_id)
+
+    async def async_get_dialogue_history(self, user_id: int, **kwargs) -> list:
+        return await asyncio.to_thread(self.get_dialogue_history, user_id, **kwargs)
+
+    async def async_save_user_profile(self, user_id: int, learning_behavior: dict, update_reason: str):
+        return await asyncio.to_thread(self.save_user_profile, user_id, learning_behavior, update_reason)
+
+    async def async_request(self, method: str, path: str, **kwargs):
+        return await asyncio.to_thread(self._request, method, path, **kwargs)
 
 
 # 全局单例

@@ -40,6 +40,8 @@ public class SecurityConfig {
                 .requestMatchers("/api/quiz/internal/**").hasAnyRole("admin", "service")
                 .requestMatchers("/api/task/internal/**").hasAnyRole("admin", "service")
                 .requestMatchers("/api/admin/kb/internal/**").hasAnyRole("admin", "service")
+                .requestMatchers("/api/note/internal/**").hasAnyRole("admin", "service")
+                .requestMatchers("/api/flashcard/internal/**").hasAnyRole("admin", "service")
                 // admin 端点：仅 admin
                 .requestMatchers("/api/admin/**").hasRole("admin")
                 // 其他端点：需要登录

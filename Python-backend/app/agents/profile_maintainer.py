@@ -65,7 +65,7 @@ def profile_maintainer_node(state: AgentState) -> Dict[str, Any]:
 - 感官-直觉: {current_behavior.get('sensing_vs_intuitive', 0.0)}
 - 序列-全局: {current_behavior.get('sequential_vs_global', 0.0)}
 - 偏好资源类型: {current_behavior.get('preferred_resource_types', [])}
-- 目标导向: {current_behavior.get('goal_orientation', 'career')}
+- 目标导向: {current_behavior.get('goal_orientation', 'exam')}
 
 对话历史:
 {history_text}

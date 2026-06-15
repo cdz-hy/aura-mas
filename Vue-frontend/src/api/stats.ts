@@ -2,19 +2,25 @@ import request from './request'
 
 export interface DashboardStats {
   totalPlans: number
+  activePlans: number
   completedPlans: number
   totalResources: number
+  totalNotes: number
+  totalQuizzes: number
+  correctQuizzes: number
+  todayDurationSeconds: number
+  totalDurationSeconds: number
+  completedResources: number
   totalStudyHours: number
   quizAccuracy: number
-  recentActivity: Array<{
-    type: string
-    description: string
-    time: string
+  weeklyMinutes: Array<{
+    label: string
+    minutes: number
   }>
-  weeklyProgress: Array<{
-    date: string
-    studyMinutes: number
-    resourcesViewed: number
+  recentActivity: Array<{
+    text: string
+    time: string
+    color: string
   }>
 }
 

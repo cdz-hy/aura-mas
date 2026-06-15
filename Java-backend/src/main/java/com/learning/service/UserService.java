@@ -11,9 +11,17 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -160,6 +168,7 @@ public class UserService {
                 .set(User::getDeletedAt, LocalDateTime.now()));
     }
 
+    @Transactional
     public void updateProfile(Long userId, UserProfile profile) {
         UserProfile existing = getCurrentProfile(userId);
         if (existing != null) {
@@ -170,6 +179,12 @@ public class UserService {
             if (profile.getAge() == null) profile.setAge(existing.getAge());
             if (profile.getGender() == null) profile.setGender(existing.getGender());
             if (profile.getDomain() == null) profile.setDomain(existing.getDomain());
+
+            // learningBehavior JSON 字段级合并（只增不删）
+            if (profile.getLearningBehavior() != null && existing.getLearningBehavior() != null) {
+                profile.setLearningBehavior(
+                        mergeLearningBehavior(existing.getLearningBehavior(), profile.getLearningBehavior()));
+            }
         }
 
         UserProfile latest = userProfileMapper.selectOne(
@@ -186,5 +201,49 @@ public class UserService {
         profile.setIsCurrent(1);
         profile.setCreatedAt(LocalDateTime.now());
         userProfileMapper.insert(profile);
+    }
+
+    private static final Set<String> LIST_FIELDS = new HashSet<>(
+            java.util.Arrays.asList("knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types", "preferred_quiz_types"));
+
+    /**
+     * 合并 learningBehavior JSON：列表字段只增不删，标量字段新值覆盖旧值
+     */
+    private String mergeLearningBehavior(String oldJson, String newJson) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode oldNode = mapper.readValue(oldJson, ObjectNode.class);
+            JsonNode newNode = mapper.readValue(newJson, JsonNode.class);
+
+            Iterator<String> fields = newNode.fieldNames();
+            while (fields.hasNext()) {
+                String key = fields.next();
+                JsonNode newValue = newNode.get(key);
+                if (newValue.isNull()) continue;
+
+                if (LIST_FIELDS.contains(key) && newValue.isArray()) {
+                    // 列表字段：合并，只增不删
+                    ArrayNode oldArray = oldNode.has(key) && oldNode.get(key).isArray()
+                            ? (ArrayNode) oldNode.get(key) : mapper.createArrayNode();
+                    Set<String> existing = new HashSet<>();
+                    for (JsonNode item : oldArray) existing.add(item.asText());
+                    for (JsonNode item : newValue) {
+                        String text = item.asText();
+                        if (!existing.contains(text)) {
+                            oldArray.add(text);
+                            existing.add(text);
+                        }
+                    }
+                    oldNode.set(key, oldArray);
+                } else {
+                    // 标量字段：直接覆盖
+                    oldNode.set(key, newValue);
+                }
+            }
+            return mapper.writeValueAsString(oldNode);
+        } catch (Exception e) {
+            // JSON 解析失败时返回新值（保守策略）
+            return newJson;
+        }
     }
 }

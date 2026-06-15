@@ -17,8 +17,8 @@
   --border-sketch: 2px solid rgba(26, 40, 71, 0.12);
   --radius-card: 12px;
   --radius-btn: 8px;
-  --shadow-paper: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.04);
-  --shadow-hover: 0 2px 8px rgba(0,0,0,0.12), 0 8px 24px rgba(0,0,0,0.06);
+  --shadow-paper: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.04);
+  --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.12), 0 8px 24px rgba(0, 0, 0, 0.06);
   --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -49,8 +49,16 @@
 
 /* Typewriter cursor blink */
 @keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
+
+  0%,
+  50% {
+    opacity: 1;
+  }
+
+  51%,
+  100% {
+    opacity: 0;
+  }
 }
 
 .cursor-blink::after {
@@ -66,6 +74,7 @@
     opacity: 0;
     transform: translateY(16px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -79,8 +88,17 @@
 
 /* Knowledge graph node pulse */
 @keyframes nodePulse {
-  0%, 100% { transform: scale(1); opacity: 0.6; }
-  50% { transform: scale(1.1); opacity: 1; }
+
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
 }
 
 .node-pulse {
@@ -91,7 +109,7 @@
 .drag-ghost {
   opacity: 0.7;
   transform: rotate(2deg) scale(1.02);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 
 /* Scrollbar styling */
@@ -120,27 +138,219 @@
 }
 
 /* Markdown content styling */
-.markdown-body h1 { font-family: 'Playfair Display', Georgia, serif; font-size: 1.75rem; font-weight: 700; margin: 1.5rem 0 0.75rem; color: var(--color-navy); }
-.markdown-body h2 { font-family: 'Playfair Display', Georgia, serif; font-size: 1.4rem; font-weight: 600; margin: 1.25rem 0 0.6rem; color: var(--color-navy); }
-.markdown-body h3 { font-size: 1.15rem; font-weight: 600; margin: 1rem 0 0.5rem; color: var(--color-navy); }
-.markdown-body p { margin: 0.5rem 0; line-height: 1.8; }
-.markdown-body ul, .markdown-body ol { padding-left: 1.5rem; margin: 0.5rem 0; }
-.markdown-body li { margin: 0.25rem 0; line-height: 1.7; }
-.markdown-body code { font-family: 'JetBrains Mono', monospace; background: rgba(26, 40, 71, 0.06); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.88em; }
-.markdown-body pre { background: var(--color-navy); color: #e8e8e8; padding: 1rem 1.25rem; border-radius: 8px; overflow-x: auto; margin: 0.75rem 0; }
-.markdown-body pre code { background: none; padding: 0; color: inherit; }
-.markdown-body blockquote { border-left: 3px solid var(--color-navy-lighter); padding-left: 1rem; margin: 0.75rem 0; color: rgba(26, 40, 71, 0.7); font-style: italic; }
-.markdown-body img { max-width: 100%; border-radius: 8px; margin: 0.75rem 0; cursor: pointer; transition: transform 0.2s; }
-.markdown-body img:hover { transform: scale(1.02); }
-.markdown-body table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; }
-.markdown-body th, .markdown-body td { border: 1px solid rgba(26, 40, 71, 0.12); padding: 0.5rem 0.75rem; text-align: left; }
-.markdown-body th { background: rgba(26, 40, 71, 0.04); font-weight: 600; }
-.markdown-body a { color: var(--color-navy-light); text-decoration: underline; text-underline-offset: 2px; }
-.markdown-body a:hover { color: var(--color-navy); }
-.markdown-body hr { border: none; border-top: 1px solid rgba(26, 40, 71, 0.12); margin: 1.5rem 0; }
+.markdown-body::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+.markdown-body h1 {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin: 1.5rem 0 0.75rem;
+  color: var(--color-navy);
+}
+
+.markdown-body h2 {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin: 1.25rem 0 0.6rem;
+  color: var(--color-navy);
+}
+
+.markdown-body h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 1rem 0 0.5rem;
+  color: var(--color-navy);
+}
+
+.markdown-body p {
+  margin: 0.5rem 0;
+  line-height: 1.8;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+}
+
+.markdown-body li {
+  margin: 0.25rem 0;
+  line-height: 1.7;
+}
+
+.markdown-body code {
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(26, 40, 71, 0.06);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.88em;
+}
+
+.markdown-body pre {
+  background: var(--color-navy);
+  color: #e8e8e8;
+  padding: 1rem 1.25rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid var(--color-navy-lighter);
+  padding-left: 1rem;
+  margin: 0.75rem 0;
+  color: rgba(26, 40, 71, 0.7);
+  font-style: italic;
+}
+
+/* Callout 信息卡片 — 通用基础样式 */
+.markdown-body blockquote.tip,
+.markdown-body blockquote.warning,
+.markdown-body blockquote.important,
+.markdown-body blockquote.example,
+.markdown-body blockquote.key,
+.markdown-body blockquote.summary,
+.markdown-body blockquote.definition {
+  font-style: normal;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  border-left-width: 4px;
+}
+
+.markdown-body blockquote > p:first-child {
+  margin-top: 0;
+}
+
+.markdown-body blockquote > p:last-child {
+  margin-bottom: 0;
+}
+
+/* 💡 小技巧 — 琥珀/暖黄 */
+.markdown-body blockquote.tip {
+  border-left-color: #f59e0b;
+  background: linear-gradient(135deg, #fffbeb, #fef3c7);
+  color: #92400e;
+}
+
+/* ⚠️ 注意 — 红色警告 */
+.markdown-body blockquote.warning {
+  border-left-color: #ef4444;
+  background: linear-gradient(135deg, #fef2f2, #fee2e2);
+  color: #991b1b;
+}
+
+/* 📌 重点 — 蓝色海军 */
+.markdown-body blockquote.important {
+  border-left-color: #3b82f6;
+  background: linear-gradient(135deg, #eff6ff, #dbeafe);
+  color: #1e3a5f;
+}
+
+/* 🌰 例子 — 绿色 sage */
+.markdown-body blockquote.example {
+  border-left-color: #22c55e;
+  background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+  color: #166534;
+}
+
+/* 🔑 核心概念 — 紫色 */
+.markdown-body blockquote.key {
+  border-left-color: #a855f7;
+  background: linear-gradient(135deg, #faf5ff, #f3e8ff);
+  color: #581c87;
+}
+
+/* ✅ 总结 — 青绿 */
+.markdown-body blockquote.summary {
+  border-left-color: #14b8a6;
+  background: linear-gradient(135deg, #f0fdfa, #ccfbf1);
+  color: #134e4a;
+}
+
+/* 📖 定义 — 灰色 */
+.markdown-body blockquote.definition {
+  border-left-color: #6b7280;
+  background: linear-gradient(135deg, #f9fafb, #f3f4f6);
+  color: #374151;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 0.75rem 0;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.markdown-body img:hover {
+  transform: scale(1.02);
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid rgba(26, 40, 71, 0.12);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: rgba(26, 40, 71, 0.04);
+  font-weight: 600;
+}
+
+.markdown-body a {
+  color: var(--color-navy-light);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-body a:hover {
+  color: var(--color-navy);
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid rgba(26, 40, 71, 0.12);
+  margin: 1.5rem 0;
+}
 
 /* KaTeX 公式样式 */
-.markdown-body .katex { font-size: 1.05em; }
-.markdown-body .katex-display { margin: 1rem 0; overflow-x: auto; overflow-y: hidden; padding: 0.5rem 0; }
-.markdown-body .katex-display > .katex { text-align: left; }
-.markdown-body .katex-error { color: #cc0000; font-size: 0.85em; background: rgba(204,0,0,0.05); padding: 0.2rem 0.4rem; border-radius: 4px; }
+.markdown-body .katex {
+  font-size: 1.05em;
+}
+
+.markdown-body .katex-display {
+  margin: 1rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5rem 0;
+}
+
+.markdown-body .katex-display>.katex {
+  text-align: left;
+}
+
+.markdown-body .katex-error {
+  color: #cc0000;
+  font-size: 0.85em;
+  background: rgba(204, 0, 0, 0.05);
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+}

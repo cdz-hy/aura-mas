@@ -1,12 +1,13 @@
 package com.learning.entity;
 
 import com.baomidou.mybatisplus.annotation.*;
+import com.learning.typehandler.JsonStringTypeHandler;
 import lombok.Data;
 
 import java.time.LocalDateTime;
 
 @Data
-@TableName("resource_generation_task")
+@TableName(value = "resource_generation_task", autoResultMap = true)
 public class ResourceGenerationTask {
 
     @TableId(type = IdType.AUTO)
@@ -18,6 +19,7 @@ public class ResourceGenerationTask {
 
     private Integer taskStatus;
 
+    @TableField(typeHandler = JsonStringTypeHandler.class)
     private String agentChain;
 
     private Integer retryCount;

@@ -15,6 +15,7 @@ from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_content_orchestrator_llm
 from app.prompts import CONTENT_ORCHESTRATOR_BATCH_PROMPT, CONTENT_ORCHESTRATOR_PARALLEL_PROMPT
 from app.utils.token_recorder import record
+from app.utils import stream_registry
 
 VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap"}
 
@@ -72,6 +73,36 @@ def _flush_module_usage(modules_list: list, user_id: int, scene: str, task_id=No
             task_id=task_id,
         )
 
+def _get_personalized_preferences(user_profile: Dict[str, Any]) -> str:
+    """根据用户画像中的 Felder-Silverman 学习风格计算个性化编排要求"""
+    behavior = user_profile.get("learning_behavior", {})
+    vv = behavior.get("visual_vs_verbal", 0.0)
+    si = behavior.get("sensing_vs_intuitive", 0.0)
+
+    # 1. 详细度与文本长度偏好 (Sensing vs Intuitive)
+    if si < -0.3:
+        detail_pref = "详细度极高！必须尽可能输出极长且内容极度丰富的文本。提供极其详尽、具体的概念深度剖析、海量实例应用和事无巨细的步骤拆解，切勿精简任何细节，字数越多越好！"
+    elif si > 0.3:
+        detail_pref = "偏好高层概念和原理解释。核心理论讲解需尽量丰富透彻，输出较长的篇幅以确保原理解释的深度，但在举例说明时可适当保持精炼，避免过于碎片化的细节，但总体篇幅仍需保持较长且充实。"
+    else:
+        detail_pref = "详细度高，需要输出较长篇幅的文本。提供丰富的理论说明与充实的实例分析，请放开字数限制，尽可能详尽地展开讲解。"
+
+    # 2. 图片数量与图文配比偏好 (Visual vs Verbal)
+    if vv <= -0.8:
+        image_pref = "极度偏好视觉学习。1. 必须积极且合理地将上下文中提供的所有相关的真实图片嵌入内容中。2. 请极其频繁地自主生成能够提纲挈领的 Mermaid 各种图表（flowchart、sequenceDiagram、mindmap等）来直观展现知识点逻辑。注意：必须确保内容有意义需要时才生成，严禁胡编乱造事实，必须基于提供的RAG文本或网络资源生成，且必须严格遵循 Mermaid 语法。"
+    elif vv <= -0.4:
+        image_pref = "强偏好视觉。1. 必须积极且合理地将上下文中提供的相关的真实图片嵌入内容中。2. 对于关键且复杂的概念，请较常地自主生成一些 Mermaid 图表（如 flowchart）来辅助说明。注意：必须有必要且有意义时才生成，严禁胡编乱造，必须基于检索资源生成，严格遵循 Mermaid 语法。"
+    elif vv < 0:
+        image_pref = "轻微偏好视觉。正常搭配真实图片。当内容极度复杂且确有必要时，偶尔可以选择性地自主生成少量的 Mermaid 流程图（flowchart）辅助说明。严禁胡编乱造，严格遵循 Mermaid 语法。"
+    elif vv > 0.3:
+        image_pref = "强偏好纯文字与逻辑表述。尽量少用图片（每个模块最多 1 张，无核心图则不用）。严禁自主生成任何 Mermaid 图表。"
+    else:
+        image_pref = "图文平衡。根据内容自然搭配图片（1-2 张）。除非极度必要，否则不要自主生成 Mermaid 图表。"
+
+    return (
+        f"1. 详细度与篇幅：{detail_pref}\n"
+        f"2. 图文配比与图片数量：{image_pref}"
+    )
 
 
 def _generate_single_module(
@@ -150,10 +181,9 @@ def _generate_single_module(
     content_text = "\n\n---\n\n".join(content_parts)
     
     # 用户偏好
-    behavior = user_profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
-    vv = fs.get("visual_verbal", 0)
-    pref_text = "视觉型" if vv < -0.3 else ("言语型" if vv > 0.3 else "均衡型")
+    user_pref_text = _get_personalized_preferences(user_profile)
+    logger.info(f"  [模块{module_order}] 编排个性化偏好约束:\n{user_pref_text}")
+
     
     # 构造对话历史上下文
     history_text = ""
@@ -189,7 +219,8 @@ def _generate_single_module(
 - 关键要点: {', '.join(key_points)}
 - 模块顺序: 第 {module_order} 个模块
 {type_hint}
-用户内容偏好: {pref_text}
+用户个性化内容偏好要求（必须严格遵守且在此模块中体现）:
+{user_pref_text}
 
 检索到的相关知识资料:
 {content_text}
@@ -219,7 +250,7 @@ def _generate_single_module(
         }
 
 
-def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
+async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     """
     内容编排智能体节点
     
@@ -239,16 +270,17 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     - 无 token 限制（每个模块独立生成）
     """
     rag_chunks = state.get("rag_context_chunks", [])
-    task_breakdown = state.get("task_breakdown", {})
+    task_breakdown = state.get("task_breakdown") or {}
     user_message = state.get("user_message", "")
     learning_goal = state.get("learning_goal", user_message)
     user_profile = state.get("user_profile", {})
     generated_content = state.get("generated_content")
     chat_history = state.get("chat_history", [])
-    
+    session_id = state.get("session_id", "")
+
     # 是否使用并行模式（默认开启）
     use_parallel = state.get("use_parallel_orchestration", True)
-    
+
     # 检查是否为重试模式（只重新生成指定模块）
     retry_mode = state.get("retry_mode", False)
     target_module_ids = state.get("target_module_ids", [])
@@ -294,19 +326,16 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             })
         
         # 并发重新生成未通过的模块
-        sse_cb = state.get("sse_callback")
-        placeholder_map = state.get("placeholder_resource_map", {})
+        # 优先从 state 获取回调；回退到 stream_registry（checkpointer 序列化会丢失 callable）
+        sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(session_id)
+        placeholder_map = state.get("placeholder_resource_map") or stream_registry.get_placeholder_map(session_id)
 
-        async def run_retry_orchestration():
-            """并发重新生成未通过的模块"""
-            loop = asyncio.get_event_loop()
-
+        try:
             tasks = []
             for module_id, module_info in target_modules_info:
                 placeholder = placeholder_map.get(module_id, {})
                 res_id = placeholder.get("id", 0)
-                task = loop.run_in_executor(
-                    None,
+                task = asyncio.to_thread(
                     _generate_single_module,
                     module_info,
                     module_id,
@@ -319,15 +348,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                 )
                 tasks.append(task)
             
-            # 并发执行所有任务
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            return results
-        
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            new_module_results = loop.run_until_complete(run_retry_orchestration())
-            loop.close()
+            # 并发执行所有任务 (直接 await)
+            new_module_results = await asyncio.gather(*tasks, return_exceptions=True)
             
             # 处理异常结果
             new_modules = []
@@ -383,7 +405,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             if content_previews:
                 from app.agents.anomaly_checker import check_content_alignment
                 is_aligned, anomaly_reason = check_content_alignment(
-                    learning_goal, "重试编排模块: " + "; ".join(content_previews)
+                    learning_goal, "重试编排模块: " + "; ".join(content_previews),
+                    state.get("user_id", 0), state.get("task_id")
                 )
                 if not is_aligned:
                     logger.warning(f"  [内容编排智能体] 重试编排检测到内容偏离: {anomaly_reason}")
@@ -439,33 +462,38 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     if use_parallel and modules:
         logger.info(f"  [内容编排智能体] 使用并行模式，共 {len(modules)} 个模块")
         _emit(state, "progress", f"正在并行编排 {len(modules)} 个学习模块...")
-        sse_cb = state.get("sse_callback")
-        placeholder_map = state.get("placeholder_resource_map", {})
+        # 优先从 state 获取回调；回退到 stream_registry（checkpointer 序列化会丢失 callable）
+        sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(session_id)
+        placeholder_map = state.get("placeholder_resource_map") or stream_registry.get_placeholder_map(session_id)
 
         # 单模块自动确认场景：placeholder_resource_map 为空，通过回调动态创建
         if not placeholder_map and modules:
-            create_placeholder_cb = state.get("create_placeholder_callback")
+            create_placeholder_cb = state.get("create_placeholder_callback") or stream_registry.get_create_placeholder_callback(session_id)
             if create_placeholder_cb:
                 try:
                     placeholder_map = create_placeholder_cb(modules)
+                    stream_registry.update_placeholder_map(session_id, placeholder_map)
                 except Exception as e:
                     logger.warning(f"  [内容编排智能体] 创建占位资源失败: {e}")
 
         # 通知前端创建侧栏占位条目
         if placeholder_map:
+            logger.info(f"  [内容编排智能体] 发送 resource_stream_start，共 {len(placeholder_map)} 个占位")
             _emit(state, "resource_stream_start", json.dumps(list(placeholder_map.values()), ensure_ascii=False))
+            # 若 state 中无 sse_callback，直接通过 sse_cb 推送（state._emit 依赖 state["sse_callback"]）
+            if not state.get("sse_callback") and sse_cb:
+                try:
+                    sse_cb(f'data: {json.dumps({"type": "resource_stream_start", "content": json.dumps(list(placeholder_map.values()), ensure_ascii=False)}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
 
-        async def run_parallel_orchestration():
-            """并发为每个模块生成内容"""
-            loop = asyncio.get_event_loop()
-
+        try:
             tasks = []
             for i, module in enumerate(modules):
                 module_order = i + 1
                 placeholder = placeholder_map.get(module_order, {})
                 res_id = placeholder.get("id", 0)
-                task = loop.run_in_executor(
-                    None,
+                task = asyncio.to_thread(
                     _generate_single_module,
                     module,
                     module_order,
@@ -478,15 +506,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                 )
                 tasks.append(task)
             
-            # 并发执行所有任务
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            return results
-        
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            module_results = loop.run_until_complete(run_parallel_orchestration())
-            loop.close()
+            # 并发执行所有任务 (直接 await)
+            module_results = await asyncio.gather(*tasks, return_exceptions=True)
             
             # 处理异常结果
             modules_list = []
@@ -541,7 +562,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             if content_previews:
                 from app.agents.anomaly_checker import check_content_alignment
                 is_aligned, anomaly_reason = check_content_alignment(
-                    learning_goal, "编排模块: " + "; ".join(content_previews)
+                    learning_goal, "编排模块: " + "; ".join(content_previews),
+                    state.get("user_id", 0), state.get("task_id")
                 )
                 if not is_aligned:
                     logger.warning(f"  [内容编排智能体] 检测到编排内容偏离: {anomaly_reason}")
@@ -602,7 +624,8 @@ def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
         if content_previews:
             from app.agents.anomaly_checker import check_content_alignment
             is_aligned, anomaly_reason = check_content_alignment(
-                learning_goal, "批量编排模块: " + "; ".join(content_previews)
+                learning_goal, "批量编排模块: " + "; ".join(content_previews),
+                state.get("user_id", 0), state.get("task_id")
             )
             if not is_aligned:
                 logger.warning(f"  [内容编排智能体] 批量编排检测到内容偏离: {anomaly_reason}")
@@ -676,10 +699,9 @@ def _batch_orchestration(
             desc_lines.append(line)
         modules_desc = "\n".join(desc_lines)
 
-    behavior = user_profile.get("learning_behavior", {})
-    fs = behavior.get("felder_silverman", {})
-    vv = fs.get("visual_verbal", 0)
-    pref_text = "视觉型" if vv < -0.3 else ("言语型" if vv > 0.3 else "均衡型")
+    user_pref_text = _get_personalized_preferences(user_profile)
+    logger.info(f"  [内容编排] 批量编排启动，用户画像偏好要求:\n{user_pref_text}")
+
 
     # 构造对话历史上下文
     history_text = ""
@@ -702,7 +724,8 @@ def _batch_orchestration(
 参考学习路径:
 {modules_desc}
 
-用户内容偏好: {pref_text}
+用户个性化内容偏好要求（必须严格遵守且在生成的各个模块中体现）:
+{user_pref_text}
 
 检索到的知识资料:
 {content_text}

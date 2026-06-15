@@ -18,6 +18,10 @@ public class Note {
 
     private String content;
 
+    private String tags;
+
+    private Integer isPinned;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 
