@@ -55,7 +55,7 @@
           {{ dueCount > 0 ? `复习闪卡 (${dueCount})` : '闪卡' }}
         </button>
         <!-- View mode switch: edit / split / preview -->
-        <div class="flex items-center bg-navy-50 rounded-lg p-0.5">
+        <div v-if="!showFormatPreview" class="flex items-center bg-navy-50 rounded-lg p-0.5">
           <button
             class="px-2.5 py-1 rounded-md text-xs transition-all duration-200"
             :class="viewMode === 'edit' ? 'bg-white text-navy-700 shadow-sm' : 'text-navy-400 hover:text-navy-600'"
@@ -88,7 +88,7 @@
           </button>
         </div>
         <button
-          v-if="viewMode !== 'preview' && content.trim().length > 0"
+          v-if="!showFormatPreview && viewMode !== 'preview' && content.trim().length > 0"
           class="px-3 py-1.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-1.5"
           :class="formatting
             ? 'bg-indigo-50 text-indigo-600 cursor-wait'
@@ -105,6 +105,7 @@
           {{ formatting ? formatStatus || '整理中...' : '整理笔记' }}
         </button>
         <button
+          v-if="!showFormatPreview"
           class="px-4 py-1.5 rounded-lg text-sm text-white bg-navy-600 hover:bg-navy-700 transition-colors"
           @click="saveNote"
         >
@@ -129,10 +130,50 @@
       </button>
     </div>
 
+    <!-- Format comparison preview (streaming or done) -->
+    <div v-if="showFormatPreview" class="format-compare-container" style="height: calc(100vh - 220px)">
+      <div class="format-compare-header">
+        <h3 class="text-lg font-semibold text-navy-800">整理对比预览</h3>
+        <p class="text-sm text-navy-400 mt-1">
+          <span v-if="formatting" class="inline-flex items-center gap-1.5">
+            <span class="inline-block w-3.5 h-3.5 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
+            AI 正在整理中，可以随时放弃...
+          </span>
+          <span v-else>整理完成，请确认是否接受</span>
+        </p>
+      </div>
+      <div class="format-compare-panels">
+        <div class="format-compare-panel original">
+          <div class="panel-label">原始笔记</div>
+          <div class="panel-content markdown-body" v-html="renderedOriginalContent" />
+        </div>
+        <div class="format-compare-panel formatted">
+          <div class="panel-label">
+            整理后笔记
+            <span v-if="formatting" class="text-indigo-400 text-xs font-normal ml-2">生成中...</span>
+          </div>
+          <div ref="streamingContentRef" class="panel-content markdown-body" v-html="renderedFormattedContent" />
+        </div>
+      </div>
+      <div class="format-compare-actions">
+        <button class="btn-accept" @click="acceptFormat">
+          {{ formatting ? '接受当前结果' : '接受整理' }}
+        </button>
+        <button class="btn-reject" @click="rejectFormat">放弃</button>
+      </div>
+    </div>
+
     <!-- Editor / Preview area -->
-    <div class="card overflow-hidden flex flex-col" style="height: calc(100vh - 220px)">
+    <div v-else class="card overflow-hidden flex flex-col" style="height: calc(100vh - 220px)">
       <!-- Toolbar (edit & split modes) -->
       <div v-if="viewMode !== 'preview'" class="flex items-center gap-0.5 px-4 py-2 border-b border-navy-100/50 bg-navy-50/30 shrink-0 flex-wrap">
+        <button class="toolbar-btn" title="撤销 (Ctrl+Z)" :disabled="undoStack.length === 0" @click="undo">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        </button>
+        <button class="toolbar-btn" title="恢复 (Ctrl+Y)" :disabled="redoStack.length === 0" @click="redo">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/></svg>
+        </button>
+        <div class="w-px h-4 bg-navy-200/50 mx-1"></div>
         <button v-for="btn in toolbarButtons" :key="btn.label" class="toolbar-btn" :title="btn.label" @click="insertMarkdown(btn.prefix, btn.suffix, btn.placeholder)">
           <span class="text-xs font-medium">{{ btn.display }}</span>
         </button>
@@ -148,6 +189,10 @@
           @input="onInput"
           @keydown.ctrl.s.prevent="saveNote"
           @keydown.meta.s.prevent="saveNote"
+          @keydown.ctrl.z.prevent="undo"
+          @keydown.ctrl.y.prevent="redo"
+          @keydown.meta.z.prevent="undo"
+          @keydown.meta.y.prevent="redo"
         ></textarea>
       </div>
 
@@ -161,6 +206,10 @@
           @input="onInput"
           @keydown.ctrl.s.prevent="saveNote"
           @keydown.meta.s.prevent="saveNote"
+          @keydown.ctrl.z.prevent="undo"
+          @keydown.ctrl.y.prevent="redo"
+          @keydown.meta.z.prevent="undo"
+          @keydown.meta.y.prevent="redo"
         ></textarea>
         <div class="flex-1 overflow-y-auto p-6" @mouseup="onPreviewMouseUp">
           <div class="markdown-body" v-html="renderedContent" @click="onPreviewClick"></div>
@@ -168,8 +217,35 @@
       </div>
 
       <!-- Preview mode -->
-      <div v-else class="flex-1 min-h-0 overflow-y-auto p-8" @mouseup="onPreviewMouseUp">
-        <div class="markdown-body max-w-3xl mx-auto" v-html="renderedContent" @click="onPreviewClick"></div>
+      <div v-else class="flex-1 min-h-0 overflow-y-auto" @mouseup="onPreviewMouseUp">
+        <!-- Annotated two-column layout -->
+        <div v-if="isAnnotated" class="annotated-layout">
+          <aside class="annotation-sidebar">
+            <p class="text-xs font-medium text-navy-400 mb-3 px-1">批注 ({{ annotations.length }})</p>
+            <div
+              v-for="ann in annotations"
+              :key="ann.id"
+              :data-ann-id="ann.id"
+              :class="['annotation-card', `ann-type-${ann.type}`, { 'ann-active': activeAnnotation === ann.id }]"
+              @mouseenter="activeAnnotation = ann.id"
+              @mouseleave="activeAnnotation = null"
+              @click="scrollToContent(ann.id)"
+            >
+              <span class="ann-type-badge">{{ ann.type }}</span>
+              <p class="ann-text">{{ ann.text }}</p>
+            </div>
+          </aside>
+          <div
+            ref="annotatedContentRef"
+            class="annotation-content markdown-body"
+            v-html="annotatedHtml"
+            @click="onAnnotatedContentClick"
+          ></div>
+        </div>
+        <!-- Regular single-column preview -->
+        <div v-else class="p-8">
+          <div class="markdown-body max-w-3xl mx-auto" v-html="renderedContent" @click="onPreviewClick"></div>
+        </div>
       </div>
     </div>
 
@@ -277,6 +353,7 @@ import { getNoteById, createNote, updateNote, getNoteResources } from '@/api/not
 import { getFlashcardsByNote, generateFlashcardsSSE } from '@/api/flashcard'
 import { issueTicket } from '@/api/auth'
 import { formatNoteSSE } from '@/api/noteAgent'
+import type { NoteAnnotation } from '@/api/noteAgent'
 import type { Note, NoteResourceRel } from '@/types/note'
 import type { Flashcard } from '@/types/flashcard'
 import FlashcardPlayer from '@/components/flashcard/FlashcardPlayer.vue'
@@ -315,6 +392,73 @@ const toolbarButtons = [
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let savedTimer: ReturnType<typeof setTimeout> | null = null
 
+// Undo / Redo history
+const undoStack: Array<{ text: string; selStart: number; selEnd: number }> = []
+const redoStack: Array<{ text: string; selStart: number; selEnd: number }> = []
+const MAX_HISTORY = 100
+let historySaveTimer: ReturnType<typeof setTimeout> | null = null
+let skipHistorySave = false
+
+function saveSnapshot() {
+  const ta = textareaRef.value
+  const snap = {
+    text: content.value,
+    selStart: ta?.selectionStart ?? 0,
+    selEnd: ta?.selectionEnd ?? 0,
+  }
+  undoStack.push(snap)
+  if (undoStack.length > MAX_HISTORY) undoStack.shift()
+  redoStack.length = 0
+}
+
+function saveSnapshotDebounced() {
+  if (skipHistorySave) return
+  if (historySaveTimer) clearTimeout(historySaveTimer)
+  historySaveTimer = setTimeout(() => {
+    if (!skipHistorySave) saveSnapshot()
+  }, 500)
+}
+
+function undo() {
+  if (undoStack.length === 0) return
+  const ta = textareaRef.value
+  const scrollTop = ta?.scrollTop ?? 0
+  redoStack.push({
+    text: content.value,
+    selStart: ta?.selectionStart ?? 0,
+    selEnd: ta?.selectionEnd ?? 0,
+  })
+  const snap = undoStack.pop()!
+  content.value = snap.text
+  requestAnimationFrame(() => {
+    if (textareaRef.value) {
+      textareaRef.value.scrollTop = scrollTop
+      textareaRef.value.focus()
+      textareaRef.value.setSelectionRange(snap.selStart, snap.selEnd)
+    }
+  })
+}
+
+function redo() {
+  if (redoStack.length === 0) return
+  const ta = textareaRef.value
+  const scrollTop = ta?.scrollTop ?? 0
+  undoStack.push({
+    text: content.value,
+    selStart: ta?.selectionStart ?? 0,
+    selEnd: ta?.selectionEnd ?? 0,
+  })
+  const snap = redoStack.pop()!
+  content.value = snap.text
+  requestAnimationFrame(() => {
+    if (textareaRef.value) {
+      textareaRef.value.scrollTop = scrollTop
+      textareaRef.value.focus()
+      textareaRef.value.setSelectionRange(snap.selStart, snap.selEnd)
+    }
+  })
+}
+
 // Flashcard state
 const showFlashcardPanel = ref(false)
 const generating = ref(false)
@@ -333,6 +477,73 @@ const selectionPopup = ref({ show: false, x: 0, y: 0, text: '' })
 const formatting = ref(false)
 const formatStatus = ref('')
 const showFormatFlashcardPrompt = ref(false)
+
+// Format comparison preview state
+const showFormatPreview = ref(false)
+const originalBeforeFormat = ref('')
+const formattedResult = ref('')
+const formatStreamAbort = ref<(() => void) | null>(null)
+const streamingContentRef = ref<HTMLElement | null>(null)
+const acceptedDuringStream = ref(false)
+
+// Annotation state (for two-column layout after formatting)
+const annotations = ref<NoteAnnotation[]>([])
+const activeAnnotation = ref<string | null>(null)
+const annotatedContentRef = ref<HTMLElement | null>(null)
+const isAnnotated = computed(() => annotations.value.length > 0)
+const annotationTypeColor: Record<string, string> = {
+  '易混淆': '#8b5cf6',
+  '易错点': '#ef4444',
+  '提醒': '#3b82f6',
+  '注意': '#f59e0b',
+  '技巧': '#10b981',
+}
+
+function parseAnnotations(raw: string): { cleanContent: string; annotations: NoteAnnotation[] } {
+  const anns: NoteAnnotation[] = []
+  const re = /<<A:(\d+)\|([^|]+)\|([^>]+)>>/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(raw)) !== null) {
+    anns.push({ id: match[1], type: match[2] as NoteAnnotation['type'], text: match[3].trim() })
+  }
+  const cleanContent = raw.replace(re, '').trim()
+  return { cleanContent, annotations: anns }
+}
+
+function processAnnotatedHtml(html: string): string {
+  const div = document.createElement('div')
+  div.innerHTML = html
+  const refRe = /&lt;&lt;A:(\d+)\|[^|]+\|[^&]+&gt;&gt;/g
+  for (const p of div.querySelectorAll('p, li, blockquote, td, h1, h2, h3, h4, h5, h6')) {
+    if (!refRe.test(p.innerHTML)) continue
+    refRe.lastIndex = 0
+    const ids: string[] = []
+    p.innerHTML = p.innerHTML.replace(refRe, (_, id) => { ids.push(id); return '' })
+    if (ids.length > 0) {
+      p.setAttribute('data-aids', ids.join(','))
+      p.classList.add('annotated-paragraph')
+    }
+  }
+  return div.innerHTML
+}
+
+function scrollToContent(id: string) {
+  const el = annotatedContentRef.value?.querySelector(`[data-aids*="${id}"]`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    activeAnnotation.value = id
+    setTimeout(() => { activeAnnotation.value = null }, 2000)
+  }
+}
+
+function scrollToAnnotation(id: string) {
+  const el = document.querySelector(`[data-ann-id="${id}"]`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    activeAnnotation.value = id
+    setTimeout(() => { activeAnnotation.value = null }, 2000)
+  }
+}
 
 marked.setOptions({
   breaks: true,
@@ -363,9 +574,29 @@ function classifyCallouts(html: string): string {
 
 const renderedContent = computed(() => {
   const raw = content.value || ''
-  // Strip ```mindmap code block before rendering markdown
-  const stripped = raw.replace(/```mindmap\s*\n[\s\S]*?```/g, '').trim()
+  const stripped = raw
+    .replace(/```mindmap\s*\n[\s\S]*?```/g, '')
+    .replace(/<<A:\d+\|[^|]+\|[^>]+>>/g, '')
+    .trim()
   return classifyCallouts(marked(stripped) as string)
+})
+
+const annotatedHtml = computed(() => {
+  if (!isAnnotated.value) return ''
+  const raw = content.value || ''
+  const stripped = raw.replace(/```mindmap\s*\n[\s\S]*?```/g, '').trim()
+  const html = classifyCallouts(marked(stripped) as string)
+  return processAnnotatedHtml(html)
+})
+
+// Comparison preview rendered content
+const renderedOriginalContent = computed(() => {
+  return classifyCallouts(marked.parse(originalBeforeFormat.value || '') as string)
+})
+
+const renderedFormattedContent = computed(() => {
+  const { cleanContent } = parseAnnotations(formattedResult.value)
+  return classifyCallouts(marked.parse(cleanContent) as string)
 })
 
 const mindmapData = computed(() => {
@@ -396,6 +627,7 @@ function formatDate(date: string) {
 
 function onInput() {
   saved.value = false
+  saveSnapshotDebounced()
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(autoSave, 3000)
 }
@@ -403,6 +635,8 @@ function onInput() {
 function insertMarkdown(prefix: string, suffix: string, placeholder: string) {
   const ta = textareaRef.value
   if (!ta) return
+  saveSnapshot()
+  skipHistorySave = true
   const start = ta.selectionStart
   const end = ta.selectionEnd
   const scrollTop = ta.scrollTop
@@ -415,6 +649,7 @@ function insertMarkdown(prefix: string, suffix: string, placeholder: string) {
     ta.scrollTop = scrollTop
     const cursorPos = start + prefix.length
     ta.setSelectionRange(cursorPos, cursorPos + selected.length)
+    skipHistorySave = false
   })
 }
 
@@ -474,6 +709,9 @@ async function loadNote() {
     content.value = ''
     noteTags.value = []
     noteResources.value = []
+    annotations.value = []
+    undoStack.length = 0
+    redoStack.length = 0
     return
   }
   try {
@@ -485,6 +723,12 @@ async function loadNote() {
       content.value = found.content
       noteTags.value = parseTags(found.tags)
       loadNoteResources(found.id)
+      // Parse annotations from saved content (if it was previously formatted)
+      const { annotations: anns } = parseAnnotations(found.content || '')
+      annotations.value = anns
+      // Reset undo/redo history for newly loaded note
+      undoStack.length = 0
+      redoStack.length = 0
     } else {
       router.push('/notes')
     }
@@ -612,42 +856,91 @@ async function handleFormat() {
   formatting.value = true
   formatStatus.value = ''
   showFormatFlashcardPrompt.value = false
-  const originalContent = content.value
+  annotations.value = []
+  originalBeforeFormat.value = content.value
+  formattedResult.value = ''
+  acceptedDuringStream.value = false
+  showFormatPreview.value = true
 
   try {
     const ticketRes = await issueTicket()
     const ticket = ticketRes.data.ticket
 
     formatStatus.value = '正在整理笔记...'
-    content.value = ''
 
-    formatNoteSSE(ticket, originalContent, {
+    const { abort } = formatNoteSSE(ticket, originalBeforeFormat.value, {
       onProgress(message) {
         formatStatus.value = message
       },
       onChunk(chunk) {
-        content.value += chunk
+        formattedResult.value += chunk
+        // If already accepted, keep updating content.value in editor
+        if (acceptedDuringStream.value) {
+          content.value = formattedResult.value
+        }
+        // Auto-scroll the streaming panel to bottom
+        nextTick(() => {
+          const el = streamingContentRef.value
+          if (el) el.scrollTop = el.scrollHeight
+        })
       },
       onDone(formatted) {
-        content.value = formatted
+        formattedResult.value = formatted
         formatting.value = false
         formatStatus.value = ''
-        saveNote()
-        showFormatFlashcardPrompt.value = true
+        formatStreamAbort.value = null
+        // If accepted mid-stream, save the final complete result now
+        if (acceptedDuringStream.value) {
+          const { annotations: anns } = parseAnnotations(formatted)
+          content.value = formatted
+          annotations.value = anns
+          saveNote()
+          showFormatFlashcardPrompt.value = true
+        }
       },
       onError(error) {
-        content.value = originalContent
         formatting.value = false
         formatStatus.value = ''
+        formatStreamAbort.value = null
         console.error('Note format error:', error)
       },
     })
+    formatStreamAbort.value = abort
   } catch (e) {
-    content.value = originalContent
     formatting.value = false
     formatStatus.value = ''
+    formatStreamAbort.value = null
     console.error('Failed to start note formatting:', e)
   }
+}
+
+function acceptFormat() {
+  if (!formattedResult.value.trim()) return
+  acceptedDuringStream.value = true
+  const { annotations: anns } = parseAnnotations(formattedResult.value)
+  content.value = formattedResult.value
+  annotations.value = anns
+  showFormatPreview.value = false
+  // If stream already finished, save now; otherwise onDone will save
+  if (!formatting.value) {
+    saveNote()
+    showFormatFlashcardPrompt.value = true
+    formattedResult.value = ''
+    originalBeforeFormat.value = ''
+  }
+}
+
+function rejectFormat() {
+  if (formatStreamAbort.value) {
+    formatStreamAbort.value()
+    formatStreamAbort.value = null
+  }
+  content.value = originalBeforeFormat.value
+  annotations.value = []
+  formatting.value = false
+  showFormatPreview.value = false
+  formattedResult.value = ''
+  originalBeforeFormat.value = ''
 }
 
 function generateFlashcardsAfterFormat() {
@@ -666,6 +959,17 @@ function onPreviewClick(e: MouseEvent) {
     e.preventDefault()
     router.push(href)
   }
+}
+
+function onAnnotatedContentClick(e: MouseEvent) {
+  onPreviewClick(e)
+  const target = e.target as HTMLElement
+  const paragraph = target.closest('.annotated-paragraph') as HTMLElement | null
+  if (!paragraph) return
+  const aids = paragraph.dataset.aids
+  if (!aids) return
+  const firstId = aids.split(',')[0]
+  scrollToAnnotation(firstId)
 }
 
 // === Selection popup ===
@@ -760,6 +1064,13 @@ watch(() => route.params.id, (newId) => {
     loadNote()
     loadDueCount()
   }
+})
+
+watch(activeAnnotation, (id) => {
+  if (!annotatedContentRef.value) return
+  annotatedContentRef.value.querySelectorAll('.annotated-paragraph').forEach(el => {
+    el.classList.toggle('ann-highlight', id !== null && (el as HTMLElement).dataset.aids?.includes(id))
+  })
 })
 </script>
 
@@ -879,5 +1190,199 @@ watch(() => route.params.id, (newId) => {
 .toolbar-btn:hover {
   background: rgba(26, 40, 71, 0.08);
   color: #1a2847;
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.toolbar-btn:disabled:hover {
+  background: none;
+  color: #6b7a99;
+}
+
+/* === Annotated two-column layout === */
+
+.annotated-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  height: 100%;
+}
+
+.annotation-sidebar {
+  overflow-y: auto;
+  padding: 16px 12px;
+  border-right: 1px solid #e5e7eb;
+  background: #fafbfc;
+}
+
+.annotation-content {
+  overflow-y: auto;
+  padding: 24px 32px;
+}
+
+.annotation-card {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border-left: 3px solid;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: white;
+}
+
+.annotation-card:hover {
+  transform: translateX(2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.ann-active {
+  transform: translateX(2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.ann-type-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+
+.ann-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #374151;
+  margin: 0;
+}
+
+/* Type colors */
+.ann-type-易混淆 { border-color: #8b5cf6; }
+.ann-type-易混淆 .ann-type-badge { color: #7c3aed; background: #f5f3ff; }
+
+.ann-type-易错点 { border-color: #ef4444; }
+.ann-type-易错点 .ann-type-badge { color: #dc2626; background: #fef2f2; }
+
+.ann-type-提醒 { border-color: #3b82f6; }
+.ann-type-提醒 .ann-type-badge { color: #2563eb; background: #eff6ff; }
+
+.ann-type-注意 { border-color: #f59e0b; }
+.ann-type-注意 .ann-type-badge { color: #d97706; background: #fffbeb; }
+
+.ann-type-技巧 { border-color: #10b981; }
+.ann-type-技巧 .ann-type-badge { color: #059669; background: #ecfdf5; }
+
+/* Annotated paragraphs in right column */
+:deep(.annotated-paragraph) {
+  border-left: 3px solid #cbd5e1;
+  padding-left: 12px;
+  margin-left: -15px;
+  border-radius: 4px;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: #94a3b8;
+  text-underline-offset: 4px;
+  cursor: pointer;
+  transition: background 0.3s ease, border-color 0.3s ease;
+}
+
+:deep(.annotated-paragraph):hover {
+  background: rgba(59, 130, 246, 0.05);
+}
+
+:deep(.annotated-paragraph.ann-highlight) {
+  background: rgba(255, 230, 0, 0.08);
+  border-left-color: #f59e0b;
+}
+
+/* === Format comparison preview === */
+
+.format-compare-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.format-compare-header {
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.format-compare-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.format-compare-panel {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.format-compare-panel.original {
+  opacity: 0.75;
+}
+
+.panel-label {
+  padding: 10px 14px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #374151;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.format-compare-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 12px 0;
+}
+
+.btn-accept {
+  padding: 10px 36px;
+  background: #10b981;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-accept:hover {
+  background: #059669;
+}
+
+.btn-reject {
+  padding: 10px 36px;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-reject:hover {
+  background: #dc2626;
 }
 </style>

@@ -66,12 +66,12 @@ async def generate_flashcards(
 
     selected_text: 如果提供，则只从选中文字生成闪卡
     """
-    user_info = java_client.validate_ticket(ticket)
+    user_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
     user_id = user_info["user_id"]
 
     # 获取笔记内容
     try:
-        note = java_client._request("GET", f"/api/note/internal/{note_id}")
+        note = await asyncio.to_thread(java_client._request, "GET", f"/api/note/internal/{note_id}")
     except Exception as e:
         async def error_stream():
             yield f"data: {json.dumps({'type': 'error', 'content': f'获取笔记失败: {str(e)}'}, ensure_ascii=False)}\n\n"

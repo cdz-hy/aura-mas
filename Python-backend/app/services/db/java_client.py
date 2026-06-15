@@ -4,11 +4,18 @@ Java 后端 HTTP 客户端 - 用于多智能体系统与 Java 后端的数据交
 """
 import json
 import base64
+import asyncio
 import logging
 import requests
 import httpx
 from typing import Optional, List, Dict, Any
 from app.core.config import settings
+from app.services.cache import (
+    get_profile as cache_get_profile,
+    set_profile as cache_set_profile,
+    invalidate_profile as cache_invalidate,
+    publish_delayed_invalidation,
+)
 
 logger = logging.getLogger("java_client")
 
@@ -305,7 +312,11 @@ class JavaBackendClient:
     # ==================== 用户画像 ====================
 
     def get_user_profile(self, user_id: int) -> Dict[str, Any]:
-        """获取用户当前画像"""
+        """获取用户当前画像（Redis 缓存优先）"""
+        cached = cache_get_profile(user_id)
+        if cached is not None:
+            return cached
+
         profile = self._request("GET", f"/api/internal/profile/current", params={"userId": user_id})
         # Java 返回 learningBehavior (camelCase, JSON 字符串)，统一转为 learning_behavior (snake_case, dict)
         if isinstance(profile, dict):
@@ -319,6 +330,7 @@ class JavaBackendClient:
                 profile["learning_behavior"] = lb
             elif "learning_behavior" not in profile:
                 profile["learning_behavior"] = {}
+            cache_set_profile(user_id, profile)
         return profile
 
     def get_resource_by_id(self, resource_id: int) -> Dict[str, Any]:
@@ -360,9 +372,16 @@ class JavaBackendClient:
         """保存用户画像。
 
         Java 端 PUT /api/internal/profile 已经支持无当前画像时创建新版本。
-        这里必须让异常抛给调用方，否则调用方会在 Java 500 后误记录“画像保存成功”。
+        这里必须让异常抛给调用方，否则调用方会在 Java 500 后误记录"画像保存成功"。
+
+        延迟双删：HTTP PUT 成功后立即删除缓存，同时发 MQ 延迟消息执行第二次删除。
         """
-        return self.update_user_profile(user_id, learning_behavior, update_reason)
+        result = self.update_user_profile(user_id, learning_behavior, update_reason)
+        # 第一次删除（立即）
+        cache_invalidate(user_id)
+        # 第二次删除（延迟 2s，通过 MQ 死信队列）
+        publish_delayed_invalidation(user_id)
+        return result
 
     # ==================== 资源生成任务 ====================
 
@@ -469,6 +488,23 @@ class JavaBackendClient:
         if task_id is not None:
             body["taskId"] = task_id
         self._request("POST", "/api/token/internal/record", json=body)
+
+    # ==================== 异步包装（避免阻塞事件循环） ====================
+
+    async def async_validate_ticket(self, ticket: str) -> Dict[str, Any]:
+        return await asyncio.to_thread(self.validate_ticket, ticket)
+
+    async def async_get_user_profile(self, user_id: int) -> Dict[str, Any]:
+        return await asyncio.to_thread(self.get_user_profile, user_id)
+
+    async def async_get_dialogue_history(self, user_id: int, **kwargs) -> list:
+        return await asyncio.to_thread(self.get_dialogue_history, user_id, **kwargs)
+
+    async def async_save_user_profile(self, user_id: int, learning_behavior: dict, update_reason: str):
+        return await asyncio.to_thread(self.save_user_profile, user_id, learning_behavior, update_reason)
+
+    async def async_request(self, method: str, path: str, **kwargs):
+        return await asyncio.to_thread(self._request, method, path, **kwargs)
 
 
 # 全局单例

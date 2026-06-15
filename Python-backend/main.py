@@ -14,6 +14,7 @@ from app.api.v1.endpoints import note_agent
 from app.core.config import settings
 from app.core.reload import get_reload_dirs
 from app.services.mq_consumer import mq_consumer
+from app.services.cache_consumer import cache_consumer
 import uvicorn
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -44,6 +45,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("正在启动 MQ 消费者...")
     await mq_consumer.start()
+    await cache_consumer.start()
 
     # 后台保活任务
     keepalive_task = None
@@ -63,6 +65,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
+    await cache_consumer.stop()
     await mq_consumer.stop()
     logger.info("MQ 消费者已关闭")
 

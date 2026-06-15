@@ -7,6 +7,12 @@ export interface NoteFormatHandlers {
   onError?: (error: string) => void
 }
 
+export interface NoteAnnotation {
+  id: string
+  type: '易混淆' | '易错点' | '提醒' | '注意' | '技巧'
+  text: string
+}
+
 /** SSE 流式整理笔记（POST 请求，避免 URL 长度限制） */
 export function formatNoteSSE(
   ticket: string,

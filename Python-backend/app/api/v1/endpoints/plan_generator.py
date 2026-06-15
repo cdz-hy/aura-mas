@@ -35,9 +35,9 @@ async def plan_generate(
     """
     学习计划生成 - SSE 流式输出（background thread 模式）
     """
-    # 验证 ticket
+    # 验证 ticket（同步调用，放到线程池）
     try:
-        ticket_info = java_client.validate_ticket(ticket)
+        ticket_info = await asyncio.to_thread(java_client.validate_ticket, ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
@@ -48,17 +48,17 @@ async def plan_generate(
 
     logger.info(f"[计划生成] 用户 {user_id}, 计划 {plan_id}, 目标: {goal[:50]}")
 
-    # 获取用户画像
+    # 获取用户画像（同步调用，放到线程池）
     user_profile = {}
     try:
-        user_profile = java_client.get_user_profile(user_id)
+        user_profile = await asyncio.to_thread(java_client.get_user_profile, user_id)
     except Exception:
         pass
 
-    # 获取对话历史
+    # 获取对话历史（同步调用，放到线程池）
     chat_history = []
     try:
-        history = java_client.get_dialogue_history(user_id=user_id, limit=10)
+        history = await asyncio.to_thread(java_client.get_dialogue_history, user_id, limit=10)
         for h in history:
             chat_history.append({
                 "role": "user" if h.get("dialogueType") == "USER" else "assistant",
@@ -67,9 +67,9 @@ async def plan_generate(
     except Exception:
         pass
 
-    # 更新计划状态为"生成中"
+    # 更新计划状态为"生成中"（同步调用，放到线程池）
     try:
-        java_client.update_plan_status(plan_id, 1)
+        await asyncio.to_thread(java_client.update_plan_status, plan_id, 1)
     except Exception as e:
         logger.warning(f"更新计划状态失败: {e}")
 
