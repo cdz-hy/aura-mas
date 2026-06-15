@@ -27,8 +27,11 @@ class Settings(BaseSettings):
     # 小米 MIMO 模型设置 (OpenAI 兼容接口)
     MIMO_API_KEY: str = ""
     MIMO_BASE_URL: str = "https://token-plan-cn.xiaomimimo.com/v1"
+    MIMO_API_KEY_SPEED: str = ""
+    MIMO_BASE_URL_SPEED: str = "https://api.xiaomimimo.com/v1"
     MIMO_MODEL_NAME: str = "mimo-v2.5"
     MIMO_MODEL_PRO_NAME: str = "mimo-v2.5-pro"
+    MIMO_MODEL_PRO_SPEED_NAME: str = "mimo-v2.5-pro-ultraspeed"
     MIMO_MODEL_FLASH_NAME: str = "mimo-v2-flash"
     MIMO_CONTEXT_WINDOW: int = 131072
 
