@@ -74,6 +74,13 @@ public class KnowledgeTreeController {
         return Result.success(treeService.createOrGetByPlan(planId, userId));
     }
 
+    @Operation(summary = "内部接口：按树 ID 获取知识树")
+    @GetMapping("/internal/trees/{treeId}")
+    public Result<KnowledgeTreeDtos.TreeResponse> getTreeInternal(@PathVariable String treeId,
+                                                                  @RequestParam Long userId) {
+        return Result.success(treeService.getTreeInternal(treeId, userId));
+    }
+
     @Operation(summary = "内部接口：创建知识树节点")
     @PostMapping("/internal/nodes")
     public Result<KnowledgeTreeDtos.NodeResponse> createNodeInternal(

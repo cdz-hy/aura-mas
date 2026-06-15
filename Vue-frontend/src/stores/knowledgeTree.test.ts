@@ -284,6 +284,7 @@ describe('useKnowledgeTreeStore', () => {
       'tree_1',
       'node_root',
       'angle',
+      'Lite',
       expect.any(Object),
     )
 
@@ -299,6 +300,7 @@ describe('useKnowledgeTreeStore', () => {
       'ticket_2',
       'tree_1',
       'node_root',
+      'Lite',
       expect.any(Object),
     )
 
@@ -348,7 +350,7 @@ describe('useKnowledgeTreeStore', () => {
     const options = await store.loadSubdivisionOptionsCurrent()
 
     expect(issueTicket).toHaveBeenCalled()
-    expect(getTreeSubdivisionOptions).toHaveBeenCalledWith('ticket_1', 'tree_1', 'node_root')
+    expect(getTreeSubdivisionOptions).toHaveBeenCalledWith('ticket_1', 'tree_1', 'node_root', 'Lite')
     expect(options).toEqual([{ angle: 'by_concept', label: '按概念拆', rationale: '先拆概念' }])
     expect(store.subdivisionOptionsLoading).toBe(false)
     expect(store.subdivisionOptionsError).toBe('')
@@ -383,7 +385,7 @@ describe('useKnowledgeTreeStore', () => {
   it('starts multi-angle split stream and merges created nodes', async () => {
     const source = new FakeEventSource() as unknown as EventSource
     let handlers: TreeSseHandlers | undefined
-    vi.mocked(streamTreeMultiAngleSubdivide).mockImplementation((_ticket, _treeId, _nodeId, _angles, h) => {
+    vi.mocked(streamTreeMultiAngleSubdivide).mockImplementation((_ticket, _treeId, _nodeId, _angles, _mode, h) => {
       handlers = h
       return source
     })
@@ -403,6 +405,7 @@ describe('useKnowledgeTreeStore', () => {
       'tree_1',
       'node_root',
       [{ angle: 'by_concept', label: '按概念拆', rationale: '先拆概念' }],
+      'Lite',
       expect.any(Object),
     )
     expect(store.nodes.some(node => node.id === 'group_1')).toBe(true)

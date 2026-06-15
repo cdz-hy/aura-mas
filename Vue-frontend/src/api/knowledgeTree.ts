@@ -2,6 +2,7 @@ import request, { PYTHON_AI_BASE } from '@/api/request'
 import type {
   KnowledgeNode,
   KnowledgeTreeResponse,
+  TreeSplitMode,
   TreeMessage,
   TreeSubdivisionOption,
   TreeSubdivisionOptionsResponse,
@@ -28,10 +29,11 @@ export function getTreeSubdivisionOptions(
   ticket: string,
   treeId: string,
   nodeId: string,
+  mode: TreeSplitMode = 'Lite',
 ) {
   return request.get<any, { data: TreeSubdivisionOptionsResponse }>(
     `${PYTHON_AI_BASE}/api/ai/tree/${treeId}/nodes/${nodeId}/subdivision-options`,
-    { params: { ticket } },
+    { params: { ticket, mode } },
   )
 }
 
@@ -54,11 +56,12 @@ export function streamTreeSubdivide(
   treeId: string,
   nodeId: string,
   angle: string,
+  mode: TreeSplitMode,
   handlers: TreeSseHandlers,
 ): EventSource {
   return createTreeSse(
     `/api/ai/tree/${treeId}/nodes/${nodeId}/subdivide`,
-    { ticket, angle },
+    { ticket, angle, mode },
     handlers,
   )
 }
@@ -68,11 +71,12 @@ export function streamTreeMultiAngleSubdivide(
   treeId: string,
   nodeId: string,
   angles: TreeSubdivisionOption[],
+  mode: TreeSplitMode,
   handlers: TreeSseHandlers,
 ): EventSource {
   return createTreeSse(
     `/api/ai/tree/${treeId}/nodes/${nodeId}/multi-angle-subdivide`,
-    { ticket, angles: JSON.stringify(angles) },
+    { ticket, angles: JSON.stringify(angles), mode },
     handlers,
   )
 }
@@ -81,11 +85,12 @@ export function streamTreeFirstPrinciples(
   ticket: string,
   treeId: string,
   nodeId: string,
+  mode: TreeSplitMode,
   handlers: TreeSseHandlers,
 ): EventSource {
   return createTreeSse(
     `/api/ai/tree/${treeId}/nodes/${nodeId}/first-principles`,
-    { ticket },
+    { ticket, mode },
     handlers,
   )
 }

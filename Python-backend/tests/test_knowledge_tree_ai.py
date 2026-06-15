@@ -24,6 +24,20 @@ class FakeJavaClient:
         self.created_resources = []
         self.requests = []
         self.plan_resources = []
+        self.tree_response = {
+            "tree": {
+                "id": "tree_a",
+                "planId": 42,
+                "title": "Learn Python",
+                "contextSummary": "计划目标：能用 Python 写小工具",
+            },
+            "nodes": [
+                {"id": "node_root", "treeId": "tree_a", "parentId": None, "title": "Root", "summary": "root summary"},
+                {"id": "node_a", "treeId": "tree_a", "parentId": "node_root", "title": "变量", "summary": "变量摘要", "content": "变量内容"},
+                {"id": "node_sibling", "treeId": "tree_a", "parentId": "node_root", "title": "函数", "summary": "函数摘要"},
+                {"id": "node_child", "treeId": "tree_a", "parentId": "node_a", "title": "赋值", "summary": "赋值摘要"},
+            ],
+        }
 
     def add_tree_message(self, node_id, payload):
         message = {"nodeId": node_id, **payload}
@@ -52,9 +66,18 @@ class FakeJavaClient:
     def get_plan_resources(self, plan_id):
         return self.plan_resources
 
+    def get_tree(self, tree_id, user_id):
+        return self.tree_response
+
     def _request(self, method, path, **kwargs):
         self.requests.append({"method": method, "path": path, **kwargs})
         return {"ok": True}
+
+    def get_tree_messages(self, node_id):
+        return [
+            {"role": "USER", "content": "想看例子"},
+            {"role": "ASSISTANT", "content": "可以从赋值开始"},
+        ]
 
 
 class FakeRetriever:
@@ -76,8 +99,16 @@ class FakeLlm:
 class FakeJsonLlm:
     def __init__(self, data):
         self.data = data
+        self.messages = []
+        self.calls = 0
 
     def chat_json(self, messages, **kwargs):
+        self.messages.append(messages)
+        if isinstance(self.data, list):
+            index = min(self.calls, len(self.data) - 1)
+            self.calls += 1
+            return self.data[index]
+        self.calls += 1
         return self.data
 
 
@@ -128,24 +159,39 @@ async def _test_explain_node_yields_chunks_before_sync_stream_finishes():
     assert remaining[-1]["type"] == "done"
 
 
-def test_subdivide_node_creates_children():
-    asyncio.run(_test_subdivide_node_creates_children())
+def test_subdivide_node_creates_group_node_with_enriched_context():
+    asyncio.run(_test_subdivide_node_creates_group_node_with_enriched_context())
 
 
-async def _test_subdivide_node_creates_children():
+async def _test_subdivide_node_creates_group_node_with_enriched_context():
     client = FakeJavaClient()
-    service = KnowledgeTreeAiService(java_client=client, retriever=FakeRetriever(), llm=FakeJsonLlm({
+    json_llm = FakeJsonLlm({
+        "middle_title": "按学习顺序拆变量",
         "children": [
             {"title": "基础概念", "summary": "先学定义", "importance": 3, "difficulty": 1},
             {"title": "实践应用", "summary": "再看例子", "importance": 2, "difficulty": 2}
         ]
-    }))
+    })
+    service = KnowledgeTreeAiService(java_client=client, retriever=FakeRetriever(), llm=json_llm)
 
     events = [event async for event in service.subdivide_node(user_id=7, tree_id="tree_a", node_id="node_a", angle="按学习顺序")]
 
-    assert len(client.created_nodes) == 2
+    assert len(client.created_nodes) == 3
+    group = client.created_nodes[0]
+    assert group["title"] == "按学习顺序拆变量"
+    assert group["parentId"] == "node_a"
+    assert client.created_nodes[1]["parentId"] == group["id"]
+    assert client.created_nodes[2]["parentId"] == group["id"]
     assert any(e["type"] == "nodes_created" for e in events)
     assert events[-1]["type"] == "done"
+    prompt = json_llm.messages[0][1]["content"]
+    assert "当前节点：变量" in prompt
+    assert "节点路径：Root > 变量" in prompt
+    assert "兄弟节点：函数" in prompt
+    assert "已有子节点：赋值" in prompt
+    assert "计划目标：Learn Python" in prompt
+    assert "最近对话" in prompt and "想看例子" in prompt
+    assert "目标数量：3-4" in prompt
 
 
 def test_suggest_subdivision_options_normalizes_llm_output():
@@ -154,26 +200,31 @@ def test_suggest_subdivision_options_normalizes_llm_output():
 
 async def _test_suggest_subdivision_options_normalizes_llm_output():
     client = FakeJavaClient()
-    service = KnowledgeTreeAiService(java_client=client, retriever=FakeRetriever(), llm=FakeJsonLlm({
+    json_llm = FakeJsonLlm({
         "options": [
             {"angle": "by_concept", "label": "按概念拆", "rationale": "先把核心概念分开"},
             {"angle": "by_flow", "label": "按流程拆", "rationale": "再按学习顺序推进"},
             {"label": "按错误拆", "rationale": "覆盖常见误区"},
             {"angle": "", "label": "", "rationale": "空项应被过滤"},
         ],
-        "caution": {"label": "先别拆", "rationale": "Aura UI 不使用这个分支"},
-    }))
+        "caution": {"label": "先别拆", "rationale": "节点已经足够细，继续拆会增加噪音"},
+    })
+    service = KnowledgeTreeAiService(java_client=client, retriever=FakeRetriever(), llm=json_llm)
 
     result = await service.suggest_subdivision_options(
         user_id=7,
         tree_id="tree_a",
         node_id="node_a",
+        mode="Medium",
     )
 
     assert result["node_id"] == "node_a"
     assert [option["label"] for option in result["options"]] == ["按概念拆", "按流程拆", "按错误拆"]
     assert [option["angle"] for option in result["options"]] == ["by_concept", "by_flow", "按错误拆"]
     assert all("caution" not in option for option in result["options"])
+    assert result["caution"] == {"label": "先别拆", "rationale": "节点已经足够细，继续拆会增加噪音"}
+    assert "Medium" in json_llm.messages[0][1]["content"]
+    assert "目标数量：5-7" in json_llm.messages[0][1]["content"]
 
 
 def test_multi_angle_subdivide_creates_group_nodes_and_children():
@@ -223,23 +274,38 @@ async def _test_multi_angle_subdivide_creates_group_nodes_and_children():
     assert events[-1]["type"] == "done"
 
 
-def test_first_principles_creates_children_and_finishes_with_done():
-    asyncio.run(_test_first_principles_creates_children_and_finishes_with_done())
+def test_first_principles_grows_layer_by_layer_and_finishes_with_done():
+    asyncio.run(_test_first_principles_grows_layer_by_layer_and_finishes_with_done())
 
 
-async def _test_first_principles_creates_children_and_finishes_with_done():
+async def _test_first_principles_grows_layer_by_layer_and_finishes_with_done():
     client = FakeJavaClient()
-    service = KnowledgeTreeAiService(java_client=client, retriever=FakeRetriever(), llm=FakeJsonLlm({
-        "children": [
-            {"title": "守恒关系", "summary": "找到不变量", "fpRelation": "foundation", "fpReason": "支撑推导"}
-        ]
-    }))
+    service = KnowledgeTreeAiService(java_client=client, retriever=FakeRetriever(), llm=FakeJsonLlm([
+        {
+            "children": [
+                {"title": "守恒关系", "summary": "找到不变量", "fpRelation": "foundation", "fpReason": "支撑推导", "isFundamental": False}
+            ]
+        },
+        {
+            "children": [
+                {"title": "等价变换", "summary": "守恒的数学表达", "fpRelation": "derives", "fpReason": "继续触底", "isFundamental": True}
+            ]
+        },
+    ]))
 
     events = [event async for event in service.first_principles(user_id=7, tree_id="tree_a", node_id="node_a")]
 
     assert client.created_nodes[0]["status"] == "pending"
-    assert client.created_nodes[0]["isFundamental"] is True
-    assert any(e["type"] == "nodes_created" for e in events)
+    assert client.created_nodes[0]["isFundamental"] is False
+    assert client.created_nodes[0]["fpRelation"] == "foundation"
+    assert client.created_nodes[0]["fpReason"] == "支撑推导"
+    assert client.created_nodes[1]["parentId"] == client.created_nodes[0]["id"]
+    assert client.created_nodes[1]["fpRelation"] == "derives"
+    assert client.created_nodes[1]["isFundamental"] is True
+    node_events = [event for event in events if event["type"] == "nodes_created"]
+    assert len(node_events) == 2
+    assert node_events[0]["nodes"][0]["title"] == "守恒关系"
+    assert node_events[1]["nodes"][0]["title"] == "等价变换"
     assert events[-1]["type"] == "done"
 
 

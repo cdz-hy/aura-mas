@@ -14,6 +14,19 @@
         </button>
       </header>
 
+      <div class="split-mode" role="group" aria-label="拆分粒度">
+        <button
+          v-for="modeOption in splitModes"
+          :key="modeOption.mode"
+          :class="{ active: splitMode === modeOption.mode }"
+          :title="modeOption.title"
+          @click="$emit('update:split-mode', modeOption.mode)"
+        >
+          <span>{{ modeOption.mode }}</span>
+          <small>{{ modeOption.range }}</small>
+        </button>
+      </div>
+
       <section v-if="step === 'choice'" class="split-body">
         <button class="split-choice" @click="loadOptions">
           <span class="split-choice-title">按知识点拆分</span>
@@ -40,6 +53,11 @@
       </section>
 
       <section v-else class="split-body">
+        <div v-if="caution" class="split-caution">
+          <span class="split-caution-label">{{ caution.label }}</span>
+          <span class="split-caution-text">{{ caution.rationale }}</span>
+        </div>
+
         <button v-if="options.length >= 2" class="split-multi" @click="$emit('multi-angle', options)">
           <span class="split-multi-title">按这 {{ options.length }} 个角度一次全拆</span>
           <span class="split-multi-desc">{{ options.map(option => option.label).join('、') }}</span>
@@ -75,11 +93,18 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import type { KnowledgeNode, TreeSubdivisionOption } from '@/types/knowledgeTree'
+import type {
+  KnowledgeNode,
+  TreeSplitMode,
+  TreeSubdivisionCaution,
+  TreeSubdivisionOption,
+} from '@/types/knowledgeTree'
 
 const props = defineProps<{
   node: KnowledgeNode | null
   options: TreeSubdivisionOption[]
+  caution?: TreeSubdivisionCaution | null
+  splitMode: TreeSplitMode
   loading: boolean
   error?: string
 }>()
@@ -90,10 +115,16 @@ const emit = defineEmits<{
   'single-angle': [angle: string]
   'multi-angle': [options: TreeSubdivisionOption[]]
   'first-principles': []
+  'update:split-mode': [mode: TreeSplitMode]
 }>()
 
 const step = ref<'choice' | 'loading' | 'options'>('choice')
 const customAngle = ref('')
+const splitModes: Array<{ mode: TreeSplitMode; range: string; title: string }> = [
+  { mode: 'Lite', range: '3-4', title: 'Lite：轻量拆分' },
+  { mode: 'Medium', range: '5-7', title: 'Medium：中等拆分' },
+  { mode: 'Zen', range: '8-12', title: 'Zen：深度拆分' },
+]
 
 watch(() => props.node?.id, () => {
   step.value = 'choice'
@@ -187,6 +218,40 @@ function submitCustom() {
   padding: 16px;
 }
 
+.split-mode {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  border-bottom: 1px solid rgba(26, 40, 71, 0.08);
+  padding: 10px 16px;
+}
+
+.split-mode button {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid rgba(26, 40, 71, 0.1);
+  border-radius: 8px;
+  padding: 7px 4px;
+  color: #64748b;
+  text-align: center;
+}
+
+.split-mode button.active {
+  border-color: rgba(65, 100, 178, 0.35);
+  background: #eaf0ff;
+  color: #294a91;
+}
+
+.split-mode span {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.split-mode small {
+  font-size: 10px;
+}
+
 .split-choice,
 .split-option,
 .split-multi {
@@ -218,6 +283,27 @@ function submitCustom() {
 .split-multi-desc,
 .split-option-rationale {
   color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.split-caution {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: 8px;
+  background: #fff8eb;
+  padding: 10px 12px;
+}
+
+.split-caution-label {
+  color: #9a5a00;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.split-caution-text {
+  color: #8a6b2e;
   font-size: 12px;
   line-height: 1.5;
 }

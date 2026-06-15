@@ -60,15 +60,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import KnowledgeTreeNode from './KnowledgeTreeNode.vue'
-import { buildTreeLayout, type TreeLayoutItem } from './useTreeLayout'
+import {
+  buildTreeLayout,
+  fitTreeViewport,
+  getTreeLayoutBounds,
+  type TreeLayoutItem,
+} from './useTreeLayout'
 import type { KnowledgeNode } from '@/types/knowledgeTree'
 
 const NODE_WIDTH = 236
 const NODE_HEIGHT = 172
 const MIN_ZOOM = 0.35
 const MAX_ZOOM = 1.6
+const FIT_PADDING_X = 96
+const FIT_PADDING_Y = 120
 
 const props = defineProps<{
   nodes: KnowledgeNode[]
@@ -94,6 +101,7 @@ const localPanY = ref(props.panY ?? 0)
 const localZoom = ref(clampZoom(props.zoom ?? 1))
 const panning = ref(false)
 const lastPointer = ref({ x: 0, y: 0 })
+let resizeObserver: ResizeObserver | null = null
 
 const layout = computed(() => props.rootNodeId ? buildTreeLayout(props.nodes, props.rootNodeId) : { items: [], edges: [] })
 
@@ -110,19 +118,21 @@ const childrenByParent = computed(() => {
 
 const itemByNodeId = computed(() => new Map(layout.value.items.map(item => [item.node.id, item])))
 
+const contentBounds = computed(() => getTreeLayoutBounds(layout.value.items, NODE_WIDTH, NODE_HEIGHT))
+
+const visibleLayoutKey = computed(() => layout.value.items
+  .map(item => `${item.node.id}:${item.x}:${item.y}:${item.node.collapsed ? 1 : 0}`)
+  .join('|'))
+
 const svgBounds = computed(() => {
   const padding = 180
-  if (layout.value.items.length === 0) {
-    return { minX: -padding, minY: -padding, width: padding * 2, height: padding * 2 }
+  const bounds = getTreeLayoutBounds(layout.value.items, NODE_WIDTH, NODE_HEIGHT)
+  return {
+    minX: bounds.minX - padding,
+    minY: bounds.minY - padding,
+    width: bounds.width + padding * 2,
+    height: bounds.height + padding * 2,
   }
-
-  const xs = layout.value.items.flatMap(item => [item.x - NODE_WIDTH / 2, item.x + NODE_WIDTH / 2])
-  const ys = layout.value.items.flatMap(item => [item.y - NODE_HEIGHT / 2, item.y + NODE_HEIGHT / 2])
-  const minX = Math.min(...xs) - padding
-  const minY = Math.min(...ys) - padding
-  const maxX = Math.max(...xs) + padding
-  const maxY = Math.max(...ys) + padding
-  return { minX, minY, width: maxX - minX, height: maxY - minY }
 })
 
 const edgePaths = computed(() => layout.value.edges
@@ -168,7 +178,20 @@ watch(() => props.zoom, value => {
 })
 
 onMounted(() => {
-  if (!props.panX && !props.panY) centerView()
+  resizeObserver = new ResizeObserver(() => fitView())
+  if (viewportRef.value) {
+    resizeObserver.observe(viewportRef.value)
+  }
+  fitView()
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+})
+
+watch(visibleLayoutKey, () => {
+  fitView()
 })
 
 function nodeStyle(item: TreeLayoutItem) {
@@ -218,9 +241,28 @@ function endPan(event: PointerEvent) {
 }
 
 function centerView() {
-  localPanX.value = 0
-  localPanY.value = -40
-  localZoom.value = 0.9
+  fitView()
+}
+
+async function fitView() {
+  await nextTick()
+
+  const viewport = viewportRef.value
+  if (!viewport || layout.value.items.length === 0) return
+
+  const nextFit = fitTreeViewport(
+    contentBounds.value,
+    viewport.clientWidth,
+    viewport.clientHeight,
+    FIT_PADDING_X,
+    FIT_PADDING_Y,
+    MIN_ZOOM,
+    MAX_ZOOM,
+  )
+
+  localZoom.value = nextFit.zoom
+  localPanX.value = nextFit.panX
+  localPanY.value = nextFit.panY
   emit('update:panX', localPanX.value)
   emit('update:panY', localPanY.value)
   emit('update:zoom', localZoom.value)

@@ -16,6 +16,8 @@ import {
 import type {
   KnowledgeNode,
   KnowledgeTree,
+  TreeSplitMode,
+  TreeSubdivisionCaution,
   TreeFlashcard,
   TreeGeneratedResource,
   TreeMessage,
@@ -34,8 +36,10 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
   const streamingText = ref('')
   const loading = ref(false)
   const error = ref('')
+  const splitMode = ref<TreeSplitMode>('Lite')
   const subdivisionOptionsLoading = ref(false)
   const subdivisionOptionsError = ref('')
+  const subdivisionCaution = ref<TreeSubdivisionCaution | null>(null)
   const panX = ref(0)
   const panY = ref(0)
   const zoom = ref(1)
@@ -154,6 +158,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
       treeId,
       nodeId,
       angle,
+      splitMode.value,
       handlers,
     ))
   }
@@ -165,12 +170,14 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     const nodeId = currentNodeId.value
     subdivisionOptionsLoading.value = true
     subdivisionOptionsError.value = ''
+    subdivisionCaution.value = null
 
     try {
       const ticketRes = await issueTicket()
       if (!isCurrentSubdivisionOptions(token) || currentNodeId.value !== nodeId) return []
-      const res = await getTreeSubdivisionOptions(ticketRes.data.ticket, treeId, nodeId)
+      const res = await getTreeSubdivisionOptions(ticketRes.data.ticket, treeId, nodeId, splitMode.value)
       if (!isCurrentSubdivisionOptions(token) || currentNodeId.value !== nodeId) return []
+      subdivisionCaution.value = res.data?.caution || null
       return res.data?.options || []
     } catch (e) {
       if (isCurrentSubdivisionOptions(token)) {
@@ -194,6 +201,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
       treeId,
       nodeId,
       angles,
+      splitMode.value,
       handlers,
     ))
   }
@@ -207,6 +215,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
       ticket,
       treeId,
       nodeId,
+      splitMode.value,
       handlers,
     ))
   }
@@ -252,6 +261,12 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     streamingText.value = ''
     subdivisionOptionsLoading.value = false
     subdivisionOptionsError.value = ''
+    subdivisionCaution.value = null
+  }
+
+  function setSplitMode(mode: TreeSplitMode) {
+    splitMode.value = mode
+    subdivisionCaution.value = null
   }
 
   function clearTreeState() {
@@ -428,12 +443,15 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     streamingText,
     loading,
     error,
+    splitMode,
     subdivisionOptionsLoading,
     subdivisionOptionsError,
+    subdivisionCaution,
     panX,
     panY,
     zoom,
     activeSource,
+    setSplitMode,
     loadByPlan,
     selectNode,
     toggleCollapsed,

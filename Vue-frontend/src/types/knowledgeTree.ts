@@ -64,10 +64,18 @@ export interface TreeSubdivisionOption {
   rationale: string
 }
 
+export type TreeSplitMode = 'Lite' | 'Medium' | 'Zen'
+
+export interface TreeSubdivisionCaution {
+  label: string
+  rationale: string
+}
+
 export interface TreeSubdivisionOptionsResponse {
   tree_id?: string
   node_id: string
   options: TreeSubdivisionOption[]
+  caution?: TreeSubdivisionCaution | null
   search_results?: unknown[]
 }
 

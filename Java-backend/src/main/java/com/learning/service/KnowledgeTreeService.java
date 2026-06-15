@@ -52,7 +52,9 @@ public class KnowledgeTreeService {
                 .eq(KnowledgeTree::getPlanId, planId)
                 .eq(KnowledgeTree::getUserId, userId));
         if (existing != null) {
-            return toTreeResponse(existing, loadNodes(existing.getId()));
+            List<KnowledgeNode> nodes = loadNodes(existing.getId());
+            nodes = syncResourceNodes(existing, nodes);
+            return toTreeResponse(existing, nodes);
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -111,11 +113,73 @@ public class KnowledgeTreeService {
         return toTreeResponse(tree, nodes);
     }
 
-    public KnowledgeTreeDtos.TreeResponse getTree(String treeId, Long userId) {
-        KnowledgeTree tree = requireOwnedTree(treeId, userId);
-        return toTreeResponse(tree, loadNodes(treeId));
+    private List<KnowledgeNode> syncResourceNodes(KnowledgeTree tree, List<KnowledgeNode> nodes) {
+        KnowledgeNode root = nodes.stream()
+                .filter(node -> node.getParentId() == null || node.getParentId().isBlank())
+                .findFirst()
+                .orElseGet(() -> nodes.stream()
+                        .filter(node -> defaultInt(node.getDepth(), 0) == 0)
+                        .findFirst()
+                        .orElse(null));
+        if (root == null) {
+            return nodes;
+        }
+
+        List<ModuleSeed> resourceSeeds = moduleSeedsFromResources(tree.getPlanId());
+        if (resourceSeeds.isEmpty()) {
+            return nodes;
+        }
+
+        Set<Long> existingResourceIds = nodes.stream()
+                .map(KnowledgeNode::getResourceId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Set<String> existingRootChildTitles = nodes.stream()
+                .filter(node -> Objects.equals(root.getId(), node.getParentId()))
+                .map(KnowledgeNode::getTitle)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        int nextSortOrder = nodes.stream()
+                .filter(node -> Objects.equals(root.getId(), node.getParentId()))
+                .map(KnowledgeNode::getSortOrder)
+                .filter(Objects::nonNull)
+                .max(Integer::compareTo)
+                .orElse(0) + 1;
+
+        List<KnowledgeNode> synced = new ArrayList<>(nodes);
+        boolean changed = false;
+        LocalDateTime now = LocalDateTime.now();
+        for (ModuleSeed seed : resourceSeeds) {
+            if (seed.resourceId() != null && existingResourceIds.contains(seed.resourceId())) {
+                continue;
+            }
+            if (existingRootChildTitles.contains(seed.title())) {
+                continue;
+            }
+            KnowledgeNode node = createModuleNode(tree.getId(), root.getId(), seed, nextSortOrder++, now);
+            nodeMapper.insert(node);
+            synced.add(node);
+            if (seed.resourceId() != null) {
+                existingResourceIds.add(seed.resourceId());
+            }
+            existingRootChildTitles.add(seed.title());
+            changed = true;
+        }
+        if (changed) {
+            tree.setUpdatedAt(now);
+            treeMapper.updateById(tree);
+        }
+        return synced;
     }
 
+    @Transactional
+    public KnowledgeTreeDtos.TreeResponse getTree(String treeId, Long userId) {
+        KnowledgeTree tree = requireOwnedTree(treeId, userId);
+        List<KnowledgeNode> nodes = syncResourceNodes(tree, loadNodes(treeId));
+        return toTreeResponse(tree, nodes);
+    }
+
+    @Transactional
     public KnowledgeTreeDtos.TreeResponse getByPlanInternal(Long planId, Long userId) {
         requireOwnedPlan(planId, userId);
         KnowledgeTree tree = treeMapper.selectOne(new LambdaQueryWrapper<KnowledgeTree>()
@@ -124,7 +188,12 @@ public class KnowledgeTreeService {
         if (tree == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND);
         }
-        return toTreeResponse(tree, loadNodes(tree.getId()));
+        List<KnowledgeNode> nodes = syncResourceNodes(tree, loadNodes(tree.getId()));
+        return toTreeResponse(tree, nodes);
+    }
+
+    public KnowledgeTreeDtos.TreeResponse getTreeInternal(String treeId, Long userId) {
+        return getTree(treeId, userId);
     }
 
     @Transactional

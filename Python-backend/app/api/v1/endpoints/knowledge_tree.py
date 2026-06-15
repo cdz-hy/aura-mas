@@ -1,7 +1,7 @@
 import json
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.schemas.knowledge_tree import KnowledgeTreeAiEvent
@@ -72,12 +72,13 @@ async def subdivide_node(
     node_id: str,
     ticket: str = Query(...),
     angle: str = Query(""),
+    mode: str = Query("Lite"),
 ):
     user_id = _user_id_from_ticket(ticket)
     _verify_node_access(tree_id, node_id, user_id)
     service = get_knowledge_tree_ai_service()
     return StreamingResponse(
-        _event_stream(service.subdivide_node(user_id=user_id, tree_id=tree_id, node_id=node_id, angle=angle)),
+        _event_stream(service.subdivide_node(user_id=user_id, tree_id=tree_id, node_id=node_id, angle=angle, mode=mode)),
         media_type="text/event-stream",
     )
 
@@ -87,6 +88,7 @@ async def subdivision_options(
     tree_id: str,
     node_id: str,
     ticket: str = Query(...),
+    mode: str = Query("Lite"),
 ):
     user_id = _user_id_from_ticket(ticket)
     _verify_node_access(tree_id, node_id, user_id)
@@ -95,6 +97,7 @@ async def subdivision_options(
         user_id=user_id,
         tree_id=tree_id,
         node_id=node_id,
+        mode=mode,
     )
 
 
@@ -104,6 +107,7 @@ async def multi_angle_subdivide_node(
     node_id: str,
     ticket: str = Query(...),
     angles: str = Query("[]"),
+    mode: str = Query("Lite"),
 ):
     user_id = _user_id_from_ticket(ticket)
     _verify_node_access(tree_id, node_id, user_id)
@@ -121,6 +125,7 @@ async def multi_angle_subdivide_node(
             tree_id=tree_id,
             node_id=node_id,
             angles=parsed_angles,
+            mode=mode,
         )),
         media_type="text/event-stream",
     )
@@ -128,15 +133,23 @@ async def multi_angle_subdivide_node(
 
 @router.get("/tree/{tree_id}/nodes/{node_id}/first-principles")
 async def first_principles_node(
+    request: Request,
     tree_id: str,
     node_id: str,
     ticket: str = Query(...),
+    mode: str = Query("Lite"),
 ):
     user_id = _user_id_from_ticket(ticket)
     _verify_node_access(tree_id, node_id, user_id)
     service = get_knowledge_tree_ai_service()
     return StreamingResponse(
-        _event_stream(service.first_principles(user_id=user_id, tree_id=tree_id, node_id=node_id)),
+        _event_stream(service.first_principles(
+            user_id=user_id,
+            tree_id=tree_id,
+            node_id=node_id,
+            mode=mode,
+            is_disconnected=request.is_disconnected,
+        )),
         media_type="text/event-stream",
     )
 

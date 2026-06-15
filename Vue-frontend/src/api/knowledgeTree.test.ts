@@ -133,7 +133,7 @@ describe('knowledge tree SSE API', () => {
 
     expect(requestMock.get).toHaveBeenCalledWith(
       'http://localhost:8002/api/ai/tree/tree_1/nodes/node_root/subdivision-options',
-      { params: { ticket: 'ticket_1' } },
+      { params: { ticket: 'ticket_1', mode: 'Lite' } },
     )
   })
 
@@ -142,11 +142,12 @@ describe('knowledge tree SSE API', () => {
 
     streamTreeMultiAngleSubdivide('ticket_1', 'tree_1', 'node_root', [
       { angle: 'by_concept', label: '按概念拆', rationale: '先拆概念' },
-    ], { onNodes })
+    ], 'Medium', { onNodes })
 
     const source = FakeEventSource.instances[0]
     expect(decodeURIComponent(source.url)).toContain('/api/ai/tree/tree_1/nodes/node_root/multi-angle-subdivide')
     expect(decodeURIComponent(source.url)).toContain('"label":"按概念拆"')
+    expect(decodeURIComponent(source.url)).toContain('mode=Medium')
 
     source.emit('nodes_created', {
       type: 'nodes_created',

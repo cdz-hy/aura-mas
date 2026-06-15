@@ -219,6 +219,8 @@
       <TreeSubdividePopover
         :node="treePopoverNode"
         :options="treeSubdivisionOptions"
+        :caution="knowledgeTreeStore.subdivisionCaution"
+        :split-mode="knowledgeTreeStore.splitMode"
         :loading="knowledgeTreeStore.subdivisionOptionsLoading"
         :error="knowledgeTreeStore.subdivisionOptionsError"
         @close="closeTreeSubdivide"
@@ -226,6 +228,7 @@
         @single-angle="runSingleAngleSplit"
         @multi-angle="runMultiAngleSplit"
         @first-principles="runFirstPrinciplesSplit"
+        @update:split-mode="knowledgeTreeStore.setSplitMode"
       />
     </template>
 

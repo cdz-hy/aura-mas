@@ -3,13 +3,19 @@ import json
 import logging
 import queue
 import threading
-from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from app.agents.llm_factory import get_quiz_generator_llm, get_tutor_llm
 from app.services.db.java_client import java_client as default_java_client
 from app.services.retrieval import HybridRetrievalService
 
 logger = logging.getLogger("knowledge_tree_ai")
+
+MODE_LIMITS = {
+    "Lite": (3, 4),
+    "Medium": (5, 7),
+    "Zen": (8, 12),
+}
 
 
 class KnowledgeTreeAiService:
@@ -63,18 +69,23 @@ class KnowledgeTreeAiService:
         tree_id: str,
         node_id: str,
         angle: str = "",
+        mode: str = "Lite",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         yield {"type": "start", "node_id": node_id}
         try:
-            query = angle or "拆分知识节点"
+            node_context = self._build_node_context(user_id, tree_id, node_id)
+            query = " ".join(part for part in [
+                node_context.get("node", {}).get("title"),
+                angle or "拆分知识节点",
+            ] if part)
             search_results, context_chunks = await self._search(query)
             yield {"type": "search_results", "data": search_results}
             result = await self._chat_json([
                 {"role": "system", "content": self._children_json_system_prompt()},
-                {"role": "user", "content": self._subdivide_prompt(node_id, angle, context_chunks)},
+                {"role": "user", "content": self._subdivide_prompt(node_id, angle, context_chunks, node_context, mode)},
             ])
-            children = self._coerce_children(result)
-            nodes = self._create_child_nodes(tree_id, node_id, children)
+            children = self._limit_children(self._coerce_children(result), mode)
+            nodes = self._create_grouped_children(tree_id, node_id, result, angle, children, node_context)
             yield {"type": "nodes_created", "nodes": nodes}
             yield {"type": "done"}
         except Exception as exc:
@@ -86,16 +97,20 @@ class KnowledgeTreeAiService:
         user_id: int,
         tree_id: str,
         node_id: str,
+        mode: str = "Lite",
     ) -> Dict[str, Any]:
-        search_results, context_chunks = await self._search("知识点拆分角度")
+        node_context = self._build_node_context(user_id, tree_id, node_id)
+        search_query = f"{node_context.get('node', {}).get('title', '')} 知识点拆分角度".strip()
+        search_results, context_chunks = await self._search(search_query or "知识点拆分角度")
         result = await self._chat_json([
             {"role": "system", "content": self._subdivision_options_json_system_prompt()},
-            {"role": "user", "content": self._subdivision_options_prompt(node_id, context_chunks)},
+            {"role": "user", "content": self._subdivision_options_prompt(node_id, context_chunks, node_context, mode)},
         ])
         return {
             "tree_id": tree_id,
             "node_id": node_id,
             "options": self._normalize_subdivision_options(result),
+            "caution": self._normalize_caution(result),
             "search_results": search_results,
         }
 
@@ -105,6 +120,7 @@ class KnowledgeTreeAiService:
         tree_id: str,
         node_id: str,
         angles: List[Dict[str, str]],
+        mode: str = "Lite",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         yield {"type": "start", "node_id": node_id}
         try:
@@ -113,14 +129,15 @@ class KnowledgeTreeAiService:
                 yield {"type": "error", "content": "请选择至少一个拆分角度"}
                 return
 
+            node_context = self._build_node_context(user_id, tree_id, node_id)
             search_results, context_chunks = await self._search(" ".join(a["label"] for a in normalized_angles))
             yield {"type": "search_results", "data": search_results}
 
             result = await self._chat_json([
                 {"role": "system", "content": self._multi_angle_json_system_prompt()},
-                {"role": "user", "content": self._multi_angle_prompt(node_id, normalized_angles, context_chunks)},
+                {"role": "user", "content": self._multi_angle_prompt(node_id, normalized_angles, context_chunks, node_context, mode)},
             ])
-            groups = self._normalize_angle_groups(result, normalized_angles)
+            groups = self._normalize_angle_groups(result, normalized_angles, self._child_limit_for_mode(mode))
             nodes: List[Dict[str, Any]] = []
             for group_index, group in enumerate(groups):
                 group_node = self.java_client.create_tree_node({
@@ -153,24 +170,61 @@ class KnowledgeTreeAiService:
         user_id: int,
         tree_id: str,
         node_id: str,
+        mode: str = "Lite",
+        max_depth: int = 3,
+        is_disconnected: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         yield {"type": "start", "node_id": node_id}
         try:
-            search_results, context_chunks = await self._search("第一性原理 基础概念")
+            node_context = self._build_node_context(user_id, tree_id, node_id)
+            search_query = f"{node_context.get('node', {}).get('title', '')} 第一性原理 基础概念".strip()
+            search_results, context_chunks = await self._search(search_query or "第一性原理 基础概念")
             yield {"type": "search_results", "data": search_results}
-            result = await self._chat_json([
-                {"role": "system", "content": self._first_principles_json_system_prompt()},
-                {"role": "user", "content": self._first_principles_prompt(node_id, context_chunks)},
-            ])
-            principles = result.get("children", result.get("principles", [])) if isinstance(result, dict) else []
-            nodes = []
-            for idx, child in enumerate(principles):
-                payload = self._child_payload(tree_id, node_id, child, idx)
-                payload["isFundamental"] = True
-                payload["fpRelation"] = child.get("fpRelation") or child.get("relation") or "supports"
-                payload["fpReason"] = child.get("fpReason") or child.get("reason") or child.get("summary", "")
-                nodes.append(self.java_client.create_tree_node(payload))
-            yield {"type": "nodes_created", "nodes": nodes}
+            frontier: List[tuple[Dict[str, Any], int, str]] = [
+                (node_context.get("node", {"id": node_id, "title": node_id}), 0, node_context.get("path", node_id))
+            ]
+            total_created = 0
+            while frontier:
+                parent, rel_depth, path = frontier.pop(0)
+                if rel_depth >= max_depth:
+                    continue
+                if is_disconnected is not None and await is_disconnected():
+                    break
+
+                result = await self._chat_json([
+                    {"role": "system", "content": self._first_principles_json_system_prompt()},
+                    {
+                        "role": "user",
+                        "content": self._first_principles_prompt(
+                            str(parent.get("id") or node_id),
+                            context_chunks,
+                            node_context,
+                            mode,
+                            parent,
+                            path,
+                            rel_depth,
+                            max_depth,
+                        ),
+                    },
+                ])
+                raw_principles = result.get("children", result.get("principles", [])) if isinstance(result, dict) else []
+                principles = self._limit_children([item for item in raw_principles if isinstance(item, dict)], mode)
+                if not principles:
+                    continue
+
+                nodes = []
+                for idx, child in enumerate(principles):
+                    payload = self._child_payload(tree_id, str(parent.get("id") or node_id), child, idx)
+                    payload["isFundamental"] = bool(child.get("isFundamental", child.get("is_fundamental", False)))
+                    payload["fpRelation"] = child.get("fpRelation") or child.get("relation") or child.get("fp_relation") or "supports"
+                    payload["fpReason"] = child.get("fpReason") or child.get("reason") or child.get("why") or child.get("fp_reason") or child.get("summary", "")
+                    created = self.java_client.create_tree_node(payload)
+                    nodes.append(created)
+                    if not payload["isFundamental"]:
+                        child_path = f"{path} > {created.get('title', payload['title'])}"
+                        frontier.append((created, rel_depth + 1, child_path))
+                total_created += len(nodes)
+                yield {"type": "nodes_created", "nodes": nodes}
             yield {"type": "done"}
         except Exception as exc:
             logger.exception("first_principles failed")
@@ -303,10 +357,91 @@ class KnowledgeTreeAiService:
     async def _chat_json(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         return await asyncio.to_thread(self.json_llm.chat_json, messages)
 
+    def _build_node_context(self, user_id: int, tree_id: str, node_id: str) -> Dict[str, Any]:
+        try:
+            tree_response = self.java_client.get_tree(tree_id, user_id)
+        except Exception as exc:
+            logger.warning("knowledge tree context fetch failed: %s", exc)
+            tree_response = {}
+
+        tree = tree_response.get("tree", {}) if isinstance(tree_response, dict) else {}
+        nodes = tree_response.get("nodes", []) if isinstance(tree_response, dict) else []
+        nodes = [node for node in nodes if isinstance(node, dict)]
+        by_id = {str(node.get("id")): node for node in nodes if node.get("id") is not None}
+        node = by_id.get(node_id) or {"id": node_id, "title": node_id}
+        parent_id = node.get("parentId") or node.get("parent_id")
+        parent = by_id.get(str(parent_id)) if parent_id else None
+        siblings = [
+            item for item in nodes
+            if (item.get("parentId") or item.get("parent_id")) == parent_id and str(item.get("id")) != node_id
+        ]
+        children = [
+            item for item in nodes
+            if (item.get("parentId") or item.get("parent_id")) == node_id
+        ]
+        path_nodes = []
+        cursor = node
+        seen = set()
+        while cursor and cursor.get("id") not in seen:
+            seen.add(cursor.get("id"))
+            path_nodes.append(cursor)
+            cursor_parent_id = cursor.get("parentId") or cursor.get("parent_id")
+            cursor = by_id.get(str(cursor_parent_id)) if cursor_parent_id else None
+        path = " > ".join(reversed([str(item.get("title") or item.get("id") or "") for item in path_nodes if item]))
+
+        try:
+            messages = self.java_client.get_tree_messages(node_id)
+        except Exception:
+            messages = []
+
+        return {
+            "tree": tree,
+            "node": node,
+            "parent": parent,
+            "path": path or str(node.get("title") or node_id),
+            "siblings": siblings,
+            "children": children,
+            "messages": [msg for msg in messages[-4:] if isinstance(msg, dict)] if isinstance(messages, list) else [],
+        }
+
     def _create_child_nodes(self, tree_id: str, node_id: str, children: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         nodes = []
         for idx, child in enumerate(children):
             nodes.append(self.java_client.create_tree_node(self._child_payload(tree_id, node_id, child, idx)))
+        return nodes
+
+    def _create_grouped_children(
+        self,
+        tree_id: str,
+        node_id: str,
+        result: Any,
+        angle: str,
+        children: Iterable[Dict[str, Any]],
+        node_context: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        children = list(children)
+        current_title = str(node_context.get("node", {}).get("title") or "").strip()
+        group_title = self._group_title(result, angle, current_title)
+        group_summary = ""
+        if isinstance(result, dict):
+            group_summary = str(result.get("rationale") or result.get("summary") or "").strip()
+        group_node = self.java_client.create_tree_node({
+            "treeId": tree_id,
+            "parentId": node_id,
+            "title": group_title,
+            "summary": group_summary or f"按{angle or '学习顺序'}组织 {current_title or '当前节点'} 的下一层知识点。",
+            "content": "",
+            "status": "pending",
+            "importance": 2,
+            "relevanceScore": 2,
+            "difficulty": 2,
+            "sortOrder": len(node_context.get("children", [])),
+            "collapsed": False,
+        })
+        group_id = str(group_node.get("id"))
+        nodes = [group_node]
+        for idx, child in enumerate(children):
+            nodes.append(self.java_client.create_tree_node(self._child_payload(tree_id, group_id, child, idx)))
         return nodes
 
     @staticmethod
@@ -335,6 +470,36 @@ class KnowledgeTreeAiService:
         else:
             children = []
         return [child for child in children if isinstance(child, dict)]
+
+    @staticmethod
+    def _normalize_mode(mode: str) -> str:
+        text = str(mode or "Lite").strip()
+        return text if text in MODE_LIMITS else "Lite"
+
+    @classmethod
+    def _child_limit_for_mode(cls, mode: str) -> int:
+        return MODE_LIMITS[cls._normalize_mode(mode)][1]
+
+    @classmethod
+    def _target_range_for_mode(cls, mode: str) -> str:
+        low, high = MODE_LIMITS[cls._normalize_mode(mode)]
+        return f"{low}-{high}"
+
+    @classmethod
+    def _limit_children(cls, children: List[Dict[str, Any]], mode: str) -> List[Dict[str, Any]]:
+        return children[:cls._child_limit_for_mode(mode)]
+
+    @staticmethod
+    def _group_title(result: Any, angle: str, current_title: str) -> str:
+        if isinstance(result, dict):
+            for key in ("middle_title", "middleTitle", "group_title", "groupTitle", "label", "title"):
+                value = str(result.get(key) or "").strip()
+                if value:
+                    return value[:50]
+        clean_angle = (angle or "学习顺序").strip()
+        if current_title:
+            return f"{clean_angle}拆{current_title}"[:50]
+        return f"{clean_angle}拆分"[:50]
 
     @staticmethod
     def _normalize_requested_angles(angles: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -381,10 +546,27 @@ class KnowledgeTreeAiService:
             {"angle": "按应用场景拆", "label": "按应用场景拆", "rationale": "把知识放到实际使用场景中理解。"},
         ]
 
+    @staticmethod
+    def _normalize_caution(result: Any) -> Optional[Dict[str, str]]:
+        if not isinstance(result, dict):
+            return None
+        raw = result.get("caution")
+        if not isinstance(raw, dict):
+            return None
+        label = str(raw.get("label") or raw.get("title") or "先别拆").strip()
+        rationale = str(raw.get("rationale") or raw.get("reason") or raw.get("summary") or "").strip()
+        if not rationale:
+            return None
+        return {
+            "label": label[:40] or "先别拆",
+            "rationale": rationale[:220],
+        }
+
     def _normalize_angle_groups(
         self,
         result: Any,
         requested_angles: List[Dict[str, str]],
+        child_limit: int = 5,
     ) -> List[Dict[str, Any]]:
         raw_groups = result.get("groups", []) if isinstance(result, dict) else []
         groups_by_angle = {}
@@ -392,7 +574,7 @@ class KnowledgeTreeAiService:
             if not isinstance(group, dict):
                 continue
             key = str(group.get("angle") or group.get("label") or "").strip()
-            children = self._coerce_children({"children": group.get("children", [])})
+            children = self._coerce_children({"children": group.get("children", [])})[:child_limit]
             if key and children:
                 groups_by_angle[key] = {
                     "angle": key,
@@ -561,19 +743,103 @@ class KnowledgeTreeAiService:
             parts.append(f"[{idx}] {title}\n{content[:1200]}")
         return "\n\n".join(parts)
 
+    def _node_context_text(self, node_context: Dict[str, Any]) -> str:
+        tree = node_context.get("tree", {}) or {}
+        node = node_context.get("node", {}) or {}
+        parts = [
+            f"计划目标：{tree.get('title') or '未命名计划'}",
+        ]
+        if tree.get("contextSummary"):
+            parts.append(f"计划摘要：{tree.get('contextSummary')}")
+        parts.extend([
+            f"当前节点：{node.get('title') or node.get('id')}",
+            f"节点摘要：{node.get('summary') or '无'}",
+            f"节点内容：{node.get('content') or '无'}",
+            f"节点路径：{node_context.get('path') or node.get('title') or node.get('id')}",
+            f"兄弟节点：{self._node_list_text(node_context.get('siblings', []))}",
+            f"已有子节点：{self._node_list_text(node_context.get('children', []))}",
+            f"最近对话：{self._message_list_text(node_context.get('messages', []))}",
+        ])
+        return "\n".join(parts)
+
+    @staticmethod
+    def _node_list_text(nodes: List[Dict[str, Any]]) -> str:
+        if not nodes:
+            return "无"
+        return "；".join(
+            f"{item.get('title') or item.get('id')}{'（' + str(item.get('summary'))[:80] + '）' if item.get('summary') else ''}"
+            for item in nodes[:6]
+        )
+
+    @staticmethod
+    def _message_list_text(messages: List[Dict[str, Any]]) -> str:
+        if not messages:
+            return "无"
+        lines = []
+        for message in messages:
+            role = message.get("role") or "UNKNOWN"
+            content = str(message.get("content") or "").replace("\n", " ")[:160]
+            lines.append(f"{role}: {content}")
+        return "\n".join(lines)
+
     def _explain_prompt(self, tree_id: str, node_id: str, message: str, context_chunks: List[Dict[str, Any]]) -> str:
         return f"tree_id={tree_id}, node_id={node_id}\n用户问题：{message}\n\n可参考资料：\n{self._context_text(context_chunks)}"
 
-    def _subdivide_prompt(self, node_id: str, angle: str, context_chunks: List[Dict[str, Any]]) -> str:
-        return f"请拆分节点 {node_id}。拆分角度：{angle or '按学习顺序'}。\n资料：\n{self._context_text(context_chunks)}"
+    def _subdivide_prompt(
+        self,
+        node_id: str,
+        angle: str,
+        context_chunks: List[Dict[str, Any]],
+        node_context: Dict[str, Any],
+        mode: str,
+    ) -> str:
+        return (
+            f"请拆分节点 {node_id}。拆分角度：{angle or '按学习顺序'}。"
+            f"模式：{self._normalize_mode(mode)}，目标数量：{self._target_range_for_mode(mode)} 个具体子节点。"
+            "无论角度是否单一，都先产出 middle_title 作为中间分组节点标题，再产出 children。"
+            "\n\n节点上下文：\n"
+            f"{self._node_context_text(node_context)}"
+            f"\n\n资料：\n{self._context_text(context_chunks)}"
+        )
 
-    def _first_principles_prompt(self, node_id: str, context_chunks: List[Dict[str, Any]]) -> str:
-        return f"请为节点 {node_id} 提炼第一性原理子节点。\n资料：\n{self._context_text(context_chunks)}"
+    def _first_principles_prompt(
+        self,
+        node_id: str,
+        context_chunks: List[Dict[str, Any]],
+        node_context: Dict[str, Any],
+        mode: str,
+        parent: Optional[Dict[str, Any]] = None,
+        path: str = "",
+        rel_depth: int = 0,
+        max_depth: int = 3,
+    ) -> str:
+        parent = parent or node_context.get("node", {})
+        return (
+            f"请为节点 {node_id} 提炼更底层的第一性原理子节点。"
+            "每个子节点必须说明 fpRelation/fpReason，并标注 isFundamental。"
+            f"当前层级：{rel_depth}/{max_depth}。模式：{self._normalize_mode(mode)}，每层目标数量：{self._target_range_for_mode(mode)} 个。"
+            f"\n当前拆解对象：{parent.get('title') or parent.get('id')}"
+            f"\n对象摘要：{parent.get('summary') or '无'}"
+            f"\n节点路径：{path or node_context.get('path')}"
+            "\n\n起点上下文：\n"
+            f"{self._node_context_text(node_context)}"
+            f"\n\n资料：\n{self._context_text(context_chunks)}"
+        )
 
-    def _subdivision_options_prompt(self, node_id: str, context_chunks: List[Dict[str, Any]]) -> str:
+    def _subdivision_options_prompt(
+        self,
+        node_id: str,
+        context_chunks: List[Dict[str, Any]],
+        node_context: Dict[str, Any],
+        mode: str,
+    ) -> str:
         return (
             f"请为知识树节点 node_id={node_id} 推荐 3 个适合继续拆分的角度。"
             "角度必须能生成并列的学习子节点，避免泛泛而谈。"
+            f"模式：{self._normalize_mode(mode)}，目标数量：{self._target_range_for_mode(mode)} 个具体子节点。"
+            "同时给出 caution，说明什么情况下不建议继续拆。"
+            "\n\n节点上下文：\n"
+            f"{self._node_context_text(node_context)}"
             f"\n参考资料：\n{self._context_text(context_chunks)}"
         )
 
@@ -582,11 +848,16 @@ class KnowledgeTreeAiService:
         node_id: str,
         angles: List[Dict[str, str]],
         context_chunks: List[Dict[str, Any]],
+        node_context: Dict[str, Any],
+        mode: str,
     ) -> str:
         return (
             f"请把知识树节点 node_id={node_id} 按这些角度一次性拆开："
             f"{json.dumps(angles, ensure_ascii=False)}。"
             "每个角度先形成一个分组节点，再在分组下生成具体可学习子节点。"
+            f"模式：{self._normalize_mode(mode)}，每组目标数量：{self._target_range_for_mode(mode)} 个具体子节点。"
+            "\n\n节点上下文：\n"
+            f"{self._node_context_text(node_context)}"
             f"\n参考资料：\n{self._context_text(context_chunks)}"
         )
 
@@ -600,7 +871,8 @@ class KnowledgeTreeAiService:
     def _children_json_system_prompt() -> str:
         return (
             "你是知识树拆分助手。严格输出 JSON："
-            "{\"children\":[{\"title\":\"...\",\"summary\":\"...\",\"importance\":1,\"difficulty\":1}]}"
+            "{\"middle_title\":\"按某角度拆某节点\","
+            "\"children\":[{\"title\":\"...\",\"summary\":\"...\",\"importance\":1,\"difficulty\":1}]}"
         )
 
     @staticmethod
@@ -608,8 +880,9 @@ class KnowledgeTreeAiService:
         return (
             "严格输出 JSON："
             "{\"options\":[{\"angle\":\"stable_key\",\"label\":\"按概念拆\","
-            "\"rationale\":\"为什么这个角度适合当前节点\"}]}。"
-            "只返回 2 到 4 个拆分角度，不要返回 caution/先别拆。"
+            "\"rationale\":\"为什么这个角度适合当前节点\"}],"
+            "\"caution\":{\"label\":\"先别拆\",\"rationale\":\"为什么当前可能不适合继续拆\"}}。"
+            "只返回 2 到 4 个拆分角度。"
         )
 
     @staticmethod
@@ -626,7 +899,7 @@ class KnowledgeTreeAiService:
         return (
             "你是第一性原理分析助手。严格输出 JSON："
             "{\"children\":[{\"title\":\"...\",\"summary\":\"...\",\"importance\":1,\"difficulty\":1,"
-            "\"fpRelation\":\"supports\",\"fpReason\":\"...\"}]}"
+            "\"isFundamental\":false,\"fpRelation\":\"supports\",\"fpReason\":\"...\"}]}"
         )
 
 

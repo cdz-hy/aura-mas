@@ -20,6 +20,19 @@ export interface TreeLayout {
   edges: TreeLayoutEdge[]
 }
 
+export interface TreeLayoutBounds {
+  minX: number
+  minY: number
+  width: number
+  height: number
+}
+
+export interface TreeViewportFit {
+  panX: number
+  panY: number
+  zoom: number
+}
+
 const MAIN_Y_GAP = 180
 const BRANCH_X_GAP = 260
 const BRANCH_Y_GAP = 120
@@ -90,6 +103,46 @@ export function buildTreeLayout(nodes: KnowledgeNode[], rootNodeId: string): Tre
   return { items, edges }
 }
 
+export function getTreeLayoutBounds(
+  items: TreeLayoutItem[],
+  nodeWidth: number,
+  nodeHeight: number,
+): TreeLayoutBounds {
+  if (items.length === 0) {
+    return { minX: -nodeWidth / 2, minY: -nodeHeight / 2, width: nodeWidth, height: nodeHeight }
+  }
+
+  const xs = items.flatMap(item => [item.x - nodeWidth / 2, item.x + nodeWidth / 2])
+  const ys = items.flatMap(item => [item.y - nodeHeight / 2, item.y + nodeHeight / 2])
+  const minX = Math.min(...xs)
+  const minY = Math.min(...ys)
+  const maxX = Math.max(...xs)
+  const maxY = Math.max(...ys)
+  return { minX, minY, width: maxX - minX, height: maxY - minY }
+}
+
+export function fitTreeViewport(
+  bounds: TreeLayoutBounds,
+  viewportWidth: number,
+  viewportHeight: number,
+  paddingX: number,
+  paddingY: number,
+  minZoom: number,
+  maxZoom: number,
+): TreeViewportFit {
+  const availableWidth = Math.max(1, viewportWidth - paddingX * 2)
+  const availableHeight = Math.max(1, viewportHeight - paddingY * 2)
+  const fitZoom = Math.min(1, availableWidth / bounds.width, availableHeight / bounds.height)
+  const zoom = Math.min(maxZoom, Math.max(minZoom, fitZoom))
+  const centerX = bounds.minX + bounds.width / 2
+  const centerY = bounds.minY + bounds.height / 2
+
+  return {
+    panX: -centerX * zoom,
+    panY: -centerY * zoom,
+    zoom,
+  }
+}
 function compareNodes(a: KnowledgeNode, b: KnowledgeNode) {
   const sortDelta = (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
   if (sortDelta !== 0) return sortDelta

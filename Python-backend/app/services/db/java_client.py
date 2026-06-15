@@ -193,6 +193,9 @@ class JavaBackendClient:
     def get_tree_by_plan(self, plan_id: int, user_id: int) -> dict:
         return self._request("GET", f"/api/knowledge-tree/internal/plan/{plan_id}", params={"userId": user_id})
 
+    def get_tree(self, tree_id: str, user_id: int) -> dict:
+        return self._request("GET", f"/api/knowledge-tree/internal/trees/{tree_id}", params={"userId": user_id})
+
     def create_tree_node(self, payload: dict) -> dict:
         return self._request("POST", "/api/knowledge-tree/internal/nodes", json=payload)
 
