@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 
 from app.agents.llm_factory import get_video_search_llm
 from app.agents.search_utils import search_tavily, search_bilibili_videos
+from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("agents.video_search")
 
@@ -128,7 +129,7 @@ def _parse_tavily_video_results(results: list) -> list:
             })
     return videos
 
-def search_videos_with_agent(module_title: str, source_resource_content: str, sse_callback=None) -> list:
+def search_videos_with_agent(module_title: str, source_resource_content: str, sse_callback=None, user_id: int = 0, task_id: int = None) -> list:
     """使用自主智能体搜索视频"""
     llm = get_video_search_llm()
     MAX_ROUNDS = 3
@@ -158,6 +159,7 @@ def search_videos_with_agent(module_title: str, source_resource_content: str, ss
         
         try:
             result = llm.chat_json(messages)
+            record_from_mimo(llm, user_id, "video_search_react", task_id)
             logger.info(f"  [VideoSearchAgent] 第 {round_num} 轮思考: {result.get('thought', '')}")
             decision = result.get("decision", "finish")
             
@@ -229,6 +231,7 @@ def search_videos_with_agent(module_title: str, source_resource_content: str, ss
 
     try:
         final_result = llm.chat_json([{"role": "user", "content": final_prompt}])
+        record_from_mimo(llm, user_id, "video_search_screening", task_id)
         logger.info(f"  [VideoSearchAgent] 最终筛选思考: {final_result.get('thought', '')}")
         final_videos = final_result.get("videos", [])
         logger.info(f"  [VideoSearchAgent] 筛选完成，保留 {len(final_videos)} 个视频")

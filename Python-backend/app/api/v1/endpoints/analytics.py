@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from app.agents.llm_factory import get_simple_answer_llm
+from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -131,6 +132,7 @@ async def generate_ai_suggestions(request: LearningReportRequest):
             for chunk in llm.chat_stream([{"role": "user", "content": prompt}]):
                 if chunk:
                     content += chunk
+            record_from_mimo(llm, 0, "analytics_suggestions")
 
             yield f"data: {json.dumps({'type': 'done', 'content': content}, ensure_ascii=False)}\n\n"
 
@@ -198,6 +200,7 @@ async def generate_learning_report(request: LearningReportRequest):
                 if chunk:
                     # SSE格式
                     yield f"data: {json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)}\n\n"
+            record_from_mimo(llm, 0, "analytics_report")
 
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
 

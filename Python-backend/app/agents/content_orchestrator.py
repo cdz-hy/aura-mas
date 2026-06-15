@@ -405,7 +405,8 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             if content_previews:
                 from app.agents.anomaly_checker import check_content_alignment
                 is_aligned, anomaly_reason = check_content_alignment(
-                    learning_goal, "重试编排模块: " + "; ".join(content_previews)
+                    learning_goal, "重试编排模块: " + "; ".join(content_previews),
+                    state.get("user_id", 0), state.get("task_id")
                 )
                 if not is_aligned:
                     logger.warning(f"  [内容编排智能体] 重试编排检测到内容偏离: {anomaly_reason}")
@@ -561,7 +562,8 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             if content_previews:
                 from app.agents.anomaly_checker import check_content_alignment
                 is_aligned, anomaly_reason = check_content_alignment(
-                    learning_goal, "编排模块: " + "; ".join(content_previews)
+                    learning_goal, "编排模块: " + "; ".join(content_previews),
+                    state.get("user_id", 0), state.get("task_id")
                 )
                 if not is_aligned:
                     logger.warning(f"  [内容编排智能体] 检测到编排内容偏离: {anomaly_reason}")
@@ -622,7 +624,8 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
         if content_previews:
             from app.agents.anomaly_checker import check_content_alignment
             is_aligned, anomaly_reason = check_content_alignment(
-                learning_goal, "批量编排模块: " + "; ".join(content_previews)
+                learning_goal, "批量编排模块: " + "; ".join(content_previews),
+                state.get("user_id", 0), state.get("task_id")
             )
             if not is_aligned:
                 logger.warning(f"  [内容编排智能体] 批量编排检测到内容偏离: {anomaly_reason}")

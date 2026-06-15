@@ -12,6 +12,7 @@ from app.services.db.java_client import java_client
 from app.services.retrieval import HybridRetrievalService
 from app.agents.conversation_compressor import build_chat_history_with_context
 from app.utils.profile_utils import ensure_learning_behavior_fields, update_learning_behavior
+from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("agents.tutor_agent")
 
@@ -273,6 +274,7 @@ async def tutor_chat(
 
         try:
             nr_analysis = llm.chat_json(no_resource_messages, max_tokens=512)
+            record_from_mimo(llm, user_id, "tutor_no_resource_analysis")
             is_clear = nr_analysis.get("clear", True)
             if is_clear:
                 sp = nr_analysis.get("search_points", [])
@@ -306,6 +308,7 @@ async def tutor_chat(
 
         try:
             analysis = llm.chat_json(analysis_messages, max_tokens=512)
+            record_from_mimo(llm, user_id, "tutor_analysis")
             related = analysis.get("related", True)
             search_points = analysis.get("search_points", [user_message])
             analysis_text = analysis.get("analysis", "")
@@ -447,6 +450,8 @@ async def tutor_chat(
         if not ai_response:
             _emit(sse_callback, "chunk", ai_response)
 
+    record_from_mimo(llm, user_id, "tutor_response")
+
     # 记录段落边界（\n\n 的位置）
     search_from = 0
     while True:
@@ -505,6 +510,7 @@ async def tutor_chat(
         ]
 
         profile_result = llm.chat_json(profile_messages, max_tokens=1024)
+        record_from_mimo(llm, user_id, "tutor_profile_analysis")
         should_update = profile_result.get("should_update", False)
         updates = profile_result.get("updates", {})
         confidence = profile_result.get("confidence", 0.5)

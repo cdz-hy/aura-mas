@@ -12,6 +12,7 @@ from app.services.db.java_client import java_client
 from app.agents.llm_factory import get_simple_answer_llm
 from app.utils.profile_utils import ensure_learning_behavior_fields
 from app.skills.loader import load_skill
+from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("api.note_agent")
 router = APIRouter()
@@ -212,6 +213,7 @@ async def format_note(req: FormatRequest):
                 if chunk:
                     formatted += chunk
                     yield f"data: {json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)}\n\n"
+            record_from_mimo(llm, user_id, "note_formatting")
 
             yield f"data: {json.dumps({'type': 'done', 'content': formatted}, ensure_ascii=False)}\n\n"
 

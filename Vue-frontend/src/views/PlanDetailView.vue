@@ -161,6 +161,18 @@
           </div>
           <div class="flex items-center gap-1.5 flex-shrink-0">
             <button
+              v-if="['text', 'document', 'reading'].includes(selectedResource.moduleType)"
+              class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
+              @click="exportToPdf(selectedResource)"
+              title="导出为 PDF"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+            </button>
+            <button
               class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
               @click="isFullscreen = !isFullscreen"
               :title="isFullscreen ? '退出全屏' : '全屏显示'"
@@ -221,7 +233,7 @@
 
           <!-- 文档/阅读/图文类型 -->
           <template v-else-if="selectedResource.moduleType === 'text' || selectedResource.moduleType === 'document' || selectedResource.moduleType === 'reading'">
-            <div v-if="selectedResource.moduleData?.content" class="prose prose-sm max-w-none text-navy-700 leading-relaxed markdown-body" v-html="renderedResourceContent"></div>
+            <div id="pdf-content" v-if="selectedResource.moduleData?.content" class="prose prose-sm max-w-none text-navy-700 leading-relaxed markdown-body" v-html="renderedResourceContent"></div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>资源内容待生成</p>
             </div>
@@ -493,6 +505,7 @@ import { normalizeAnimationHtml } from '@/utils/animationHtml'
 import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
 import { issueTicket } from '@/api/auth'
+import { PYTHON_AI_BASE } from '@/api/request'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useHeartbeat } from '@/composables/useHeartbeat'
@@ -1223,6 +1236,55 @@ const renderedResourceContent = computed(() => {
   }
   return renderMd(content)
 })
+
+// === 导出为 PDF ===
+async function exportToPdf(resource: any) {
+  if (!resource) return;
+  const contentEl = document.getElementById('pdf-content');
+  if (!contentEl) return;
+
+  try {
+    // 克隆 DOM，避免修改页面上可见的元素
+    const clone = contentEl.cloneNode(true) as HTMLElement;
+    const images = clone.querySelectorAll('img');
+    const placeholder = document.createElement('div');
+    placeholder.style.cssText = 'position:absolute;left:-9999px;top:-9999px;';
+    document.body.appendChild(placeholder);
+    placeholder.appendChild(clone);
+
+    // 通过后端代理将所有图片转为 base64 data URL，绕过 CORS
+    const convertPromises = Array.from(images).map(async (img) => {
+      const src = img.getAttribute('src');
+      if (!src || src.startsWith('data:')) return;
+      try {
+        const resp = await fetch(`${PYTHON_AI_BASE}/api/ai/proxy-image?url=${encodeURIComponent(src)}`);
+        const data = await resp.json();
+        if (data.data_url) {
+          img.setAttribute('src', data.data_url);
+        }
+      } catch {
+        // 转换失败时保留原图，html2canvas 会处理
+      }
+    });
+    await Promise.all(convertPromises);
+
+    const html2pdf = (await import('html2pdf.js')).default;
+    const opt = {
+      margin:       10,
+      filename:     `${resource.moduleData?.title || '文档'}.pdf`,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2 },
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+    };
+    await html2pdf().set(opt).from(clone).save();
+
+    // 清理临时 DOM
+    document.body.removeChild(placeholder);
+  } catch (err) {
+    console.error('Failed to load html2pdf or export:', err);
+  }
+}
 
 // === Mermaid 图表渲染 ===
 async function renderMermaidInResource() {

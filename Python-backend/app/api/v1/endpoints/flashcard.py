@@ -11,6 +11,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from app.services.db.java_client import java_client
 from app.agents.llm_factory import get_quiz_generator_llm
+from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("api.flashcard")
 router = APIRouter()
@@ -116,6 +117,7 @@ async def generate_flashcards(
 
         try:
             result = await asyncio.to_thread(llm.chat_json, messages, 2048)
+            record_from_mimo(llm, user_id, "flashcard_generation")
             flashcards = result.get("flashcards", [])
 
             if not flashcards:

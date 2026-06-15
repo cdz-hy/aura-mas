@@ -986,7 +986,7 @@ async def generate_single_resource(
                     
                 def _run_video_agent():
                     try:
-                        videos = search_videos_with_agent(title, source_resource_content, _v_sse_push)
+                        videos = search_videos_with_agent(title, source_resource_content, _v_sse_push, user_id, generation_task_id)
                         _v_sse_push({"type": "result", "videos": videos})
                     except Exception as e:
                         logger.error(f"[视频生成] 智能体异常: {e}")
@@ -1292,6 +1292,7 @@ async def submit_quiz(
                 result = await loop.run_in_executor(
                     None, lambda: llm.chat_json_stream(messages, on_chunk=on_token, max_tokens=2048)
                 )
+                record_from_mimo(llm, user_id, "quiz_grading_inline", generation_task_id)
             except Exception as e:
                 logger.error(f"[测验批改] Q{idx + 1} LLM 批改异常: {e}")
                 result = {"score": 0, "is_correct": False, "feedback": f"批改异常: {str(e)}",
@@ -2319,3 +2320,20 @@ async def stop_generation(
         pass
 
     return {"data": {"status": "stop_requested"}}
+
+
+@router.get("/proxy-image")
+def proxy_image(url: str = Query(..., description="图片 URL")):
+    """代理图片请求，返回 base64 data URL，解决 PDF 导出时的 CORS 问题"""
+    import base64
+    import requests as req
+    try:
+        resp = req.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        content_type = resp.headers.get("Content-Type", "image/jpeg")
+        if ";" in content_type:
+            content_type = content_type.split(";")[0].strip()
+        b64 = base64.b64encode(resp.content).decode()
+        return {"data_url": f"data:{content_type};base64,{b64}"}
+    except Exception as e:
+        return {"data_url": None, "error": str(e)}

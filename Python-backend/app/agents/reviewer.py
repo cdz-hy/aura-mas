@@ -335,7 +335,8 @@ def _review_rag_content(
             issue_descriptions = "; ".join(i.get("description", "") for i in critical_issues[:3])
             is_aligned, anomaly_reason = check_content_alignment(
                 learning_goal,
-                f"审查结果: 评分{score}/100, 关键问题: {issue_descriptions}"
+                f"审查结果: 评分{score}/100, 关键问题: {issue_descriptions}",
+                state.get("user_id", 0), state.get("task_id")
             )
             if not is_aligned:
                 logger.warning(f"  [审查智能体] 检测到检索内容与目标根本偏离: {anomaly_reason}")

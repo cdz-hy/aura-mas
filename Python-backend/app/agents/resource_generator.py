@@ -57,6 +57,8 @@ def _generate_single_module(
     user_profile: Dict[str, Any],
     sse_callback=None,
     resource_id: int = 0,
+    user_id: int = 0,
+    task_id: int = None,
 ) -> Dict[str, Any]:
     """
     为单个模块执行搜索 + 内容生成流程
@@ -221,6 +223,7 @@ def _generate_single_module(
             logger.debug(f"  [ReAct] 观察:\n{observation[:300]}...")
 
         logger.info(f"  [资源生成] 模块{module_order} ReAct 搜索完成: {len(history_tracker.all_snippets)} 条片段, {len(history_tracker.extracted_pages)} 个完整网页")
+        record_from_mimo(llm, user_id, "resource_react_search", task_id)
 
     except Exception as e:
         import traceback
@@ -320,7 +323,7 @@ def _generate_single_module(
         result["module_id"] = module_info.get("module_id", module_order)
 
         logger.info(f"  [资源生成] 模块{module_order} 生成完成: {result.get('title', '')}")
-        record_from_mimo(llm, 0, "resource_generation", None)
+        record_from_mimo(llm, user_id, "resource_generation", task_id)
 
         return result
 
@@ -346,6 +349,8 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
     user_profile = state.get("user_profile", {})
     rag_chunks = state.get("rag_context_chunks", [])
     session_id = state.get("session_id", "")
+    user_id = state.get("user_id", 0)
+    task_id = state.get("task_id")
     # 优先从 state 获取回调；回退到 stream_registry（checkpointer 序列化会丢失 callable）
     sse_callback = state.get("sse_callback") or stream_registry.get_sse_callback(session_id)
     placeholder_map = state.get("placeholder_resource_map") or stream_registry.get_placeholder_map(session_id)
@@ -413,7 +418,7 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
         result = await asyncio.to_thread(
             _generate_single_module,
             module, 1, learning_goal, user_profile,
-            sse_callback, res_id,
+            sse_callback, res_id, user_id, task_id,
         )
         module_list = [result]
     else:
@@ -433,6 +438,8 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
                 user_profile,
                 sse_callback,
                 res_id,
+                user_id,
+                task_id,
             )
             tasks.append(task)
 
@@ -487,7 +494,7 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
 
     if not state.get("background_generation"):
         from app.agents.anomaly_checker import check_content_alignment
-        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary)
+        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary, user_id, task_id)
         if not is_aligned:
             logger.warning(f"  [资源生成智能体] 自主检测到内容偏离: {anomaly_reason}")
             return {

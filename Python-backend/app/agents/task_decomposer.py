@@ -144,6 +144,8 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"  [任务分解智能体] ReAct 搜索规划异常: {str(e)}，降级为直接生成")
 
+    record_from_mimo(llm, state.get("user_id", 0), "task_decomposition_react", state.get("task_id"))
+
     # 构建最终生成的参考搜索内容
     search_context = ""
     if search_executed:
@@ -246,7 +248,7 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
             f"{m.get('title', '')}: {m.get('description', '')}" for m in modules[:3]
         )
         from app.agents.anomaly_checker import check_content_alignment
-        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary)
+        is_aligned, anomaly_reason = check_content_alignment(learning_goal, anomaly_summary, state.get("user_id", 0), state.get("task_id"))
         if not is_aligned:
             logger.warning(f"  [任务分解智能体] 自主检测到内容偏离: {anomaly_reason}")
             logger.warning(f"  [任务分解智能体] 中断当前流程 -> 回到主控")
