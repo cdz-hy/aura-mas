@@ -1431,6 +1431,8 @@ async def tutor_chat(
     resource_id: str = Query(..., description="当前模块资源 ID"),
     message: str = Query(..., description="用户消息"),
     session_id: str = Query("", description="会话 ID"),
+    context_type: str = Query("", description="页面上下文类型"),
+    context_data: str = Query("", description="页面上下文数据 JSON"),
 ):
     """
     智能辅导对话 - SSE 流式输出
@@ -1487,6 +1489,8 @@ async def tutor_chat(
                     resource_id=resource_id_int,
                     user_message=message,
                     sse_callback=_sse_callback,
+                    context_type=context_type,
+                    context_data=context_data,
                 ))
                 if res:
                     try:

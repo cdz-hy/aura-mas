@@ -31,6 +31,13 @@
       </div>
     </transition>
 
+    <!-- Tutor panel (slide-in from right) -->
+    <transition name="slide-right">
+      <div v-if="uiStore.tutorPanelOpen" class="w-[360px] border-l border-purple-200/50 bg-white flex-shrink-0 overflow-hidden">
+        <TutorChatPanel />
+      </div>
+    </transition>
+
   </div>
 </template>
 
@@ -40,6 +47,7 @@ import { useRoute } from 'vue-router'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
 import NoteSidebar from '@/components/note/NoteSidebar.vue'
+import TutorChatPanel from '@/components/chat/TutorChatPanel.vue'
 import Toast from '@/components/common/Toast.vue'
 import { useUiStore } from '@/stores/ui'
 

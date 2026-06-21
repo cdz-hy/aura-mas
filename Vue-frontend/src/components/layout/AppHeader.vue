@@ -20,7 +20,7 @@
       </nav>
     </div>
 
-    <!-- Right: notes toggle + user actions -->
+    <!-- Right: notes toggle + tutor toggle + user actions -->
     <div class="flex items-center gap-3">
       <template v-if="!authStore.isAdmin">
         <button
@@ -33,6 +33,15 @@
             <polyline points="14 2 14 8 20 8"/>
           </svg>
           笔记
+        </button>
+        <button
+          v-if="!isPlanDetailPage"
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-all duration-200"
+          :class="uiStore.tutorPanelOpen ? 'bg-purple-100 text-purple-700' : 'text-navy-400 hover:bg-purple-50 hover:text-purple-600'"
+          @click="uiStore.toggleTutorPanel()"
+        >
+          <img :src="tutorGif" alt="" class="w-4 h-4 rounded object-cover" />
+          智能辅导
         </button>
         <div class="w-px h-6 bg-navy-100"></div>
       </template>
@@ -57,6 +66,7 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
+import tutorGif from '@/image/智能辅导.gif'
 
 const route = useRoute()
 const router = useRouter()
@@ -73,6 +83,8 @@ const breadcrumbMap: Record<string, string> = {
   '/admin/kb': '知识库管理',
   '/admin/users': '用户管理',
 }
+
+const isPlanDetailPage = computed(() => route.path.startsWith('/plan/') && route.path !== '/plan/create')
 
 const breadcrumb = computed(() => {
   const path = route.path
