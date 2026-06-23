@@ -67,10 +67,10 @@
         <div class="mt-3">
           <div class="flex items-center justify-between text-xs mb-1">
             <span class="text-navy-400">学习进度</span>
-            <span class="font-medium text-navy-600">{{ Math.round(plan.progress || 0) }}%</span>
+            <span class="font-medium text-navy-600">{{ getPlanProgress(plan) }}%</span>
           </div>
           <div class="h-1.5 bg-navy-100 rounded-full overflow-hidden">
-            <div class="h-full bg-gradient-to-r from-navy-400 to-sage-500 rounded-full transition-all duration-500" :style="{ width: `${plan.progress || 0}%` }"></div>
+            <div class="h-full bg-gradient-to-r from-navy-400 to-sage-500 rounded-full transition-all duration-500" :style="{ width: `${getPlanProgress(plan)}%` }"></div>
           </div>
         </div>
       </div>
@@ -90,14 +90,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getPlans, createPlan, deletePlan } from '@/api/plan'
+import { getPlanResources, getProgressByPlan } from '@/api/resource'
 import type { LearningPlan } from '@/types/plan'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const router = useRouter()
 const plans = ref<LearningPlan[]>([])
+const planProgressMap = ref<Record<number, number>>({}) // planId -> progress percentage
 const loading = ref(true)
 const creating = ref(false)
 const showDeleteConfirm = ref(false)
@@ -108,11 +110,35 @@ async function loadPlans() {
   try {
     const res = await getPlans({ page: 1, size: 50 })
     plans.value = res.data?.records || []
+    // 加载每个计划的进度
+    await loadAllProgress()
   } catch (e) {
     console.error('Failed to load plans:', e)
   } finally {
     loading.value = false
   }
+}
+
+async function loadAllProgress() {
+  const map: Record<number, number> = {}
+  await Promise.all(plans.value.map(async (plan) => {
+    try {
+      const [resRes, progRes] = await Promise.all([
+        getPlanResources(plan.id),
+        getProgressByPlan(plan.id),
+      ])
+      const total = (resRes.data || []).filter((r: any) => r.status >= 2).length
+      const completed = (progRes.data || []).filter((p: any) => p.status === 2).length
+      map[plan.id] = total > 0 ? Math.round((completed / total) * 100) : 0
+    } catch {
+      map[plan.id] = 0
+    }
+  }))
+  planProgressMap.value = map
+}
+
+function getPlanProgress(plan: LearningPlan): number {
+  return planProgressMap.value[plan.id] ?? 0
 }
 
 async function createNewPlan() {

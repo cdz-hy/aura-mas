@@ -36,7 +36,8 @@ export const useTutorStore = defineStore('tutor', () => {
   const sessions = ref<TutorSession[]>([])
   const sessionsLoading = ref(false)
 
-  let isNewlyCreated = false
+  // 用 Set 跟踪新创建的会话 ID，避免模块级变量的竞态问题
+  const newlyCreatedSessions = new Set<string>()
 
   // ─── Per-planId state cache (prevents cross-panel state overwrite) ───
   interface PlanState {
@@ -145,8 +146,8 @@ export const useTutorStore = defineStore('tutor', () => {
     if (loading.value) return
 
     // 新建会话后跳过自动选择，避免覆盖用户刚创建的空会话
-    if (isNewlyCreated) {
-      isNewlyCreated = false
+    if (newlyCreatedSessions.size > 0) {
+      newlyCreatedSessions.clear()
       return
     }
 
@@ -193,8 +194,9 @@ export const useTutorStore = defineStore('tutor', () => {
   function newSession() {
     closeConnection()
     messages.value = []
-    _setActiveSession(_buildSessionId())
-    isNewlyCreated = true
+    const sid = _buildSessionId()
+    _setActiveSession(sid)
+    newlyCreatedSessions.add(sid)
     // Refresh session list in background
     loadSessions()
   }
@@ -270,6 +272,7 @@ export const useTutorStore = defineStore('tutor', () => {
         if (last?.role === 'assistant' && !last.content) {
           last.content = '连接中断，请稍后再试'
         }
+        _refreshSessionList()
       }
     } catch (e) {
       loading.value = false

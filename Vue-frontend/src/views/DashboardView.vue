@@ -65,9 +65,9 @@
             </div>
             <div class="flex items-center gap-3">
               <div class="w-20 h-1.5 bg-navy-100 rounded-full overflow-hidden">
-                <div class="h-full bg-gradient-to-r from-navy-400 to-navy-600 rounded-full transition-all" :style="{ width: `${plan.progress}%` }"></div>
+                <div class="h-full bg-gradient-to-r from-navy-400 to-navy-600 rounded-full transition-all" :style="{ width: `${getPlanProgress(plan)}%` }"></div>
               </div>
-              <span class="text-xs text-navy-400 w-10 text-right">{{ Math.round(plan.progress) }}%</span>
+              <span class="text-xs text-navy-400 w-10 text-right">{{ getPlanProgress(plan) }}%</span>
               <button
                 class="p-1.5 rounded-lg text-navy-300 hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
                 @click.stop="removePlan(plan.id)"
@@ -134,6 +134,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { getPlans, deletePlan } from '@/api/plan'
 import { getDashboardStats } from '@/api/stats'
+import { getPlanResources, getProgressByPlan } from '@/api/resource'
 import type { DashboardStats } from '@/api/stats'
 import type { LearningPlan } from '@/types/plan'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -142,6 +143,7 @@ import dayjs from 'dayjs'
 const router = useRouter()
 const authStore = useAuthStore()
 const plans = ref<LearningPlan[]>([])
+const planProgressMap = ref<Record<number, number>>({})
 const statsData = ref<DashboardStats | null>(null)
 const showDeleteConfirm = ref(false)
 const deletingPlanId = ref<number | null>(null)
@@ -219,9 +221,33 @@ async function loadDashboard() {
     ])
     plans.value = plansRes.data?.records || []
     if (statsRes) statsData.value = statsRes.data
+    // 加载每个计划的进度
+    await loadAllProgress()
   } catch {
     // Use empty state
   }
+}
+
+async function loadAllProgress() {
+  const map: Record<number, number> = {}
+  await Promise.all(plans.value.map(async (plan) => {
+    try {
+      const [resRes, progRes] = await Promise.all([
+        getPlanResources(plan.id),
+        getProgressByPlan(plan.id),
+      ])
+      const total = (resRes.data || []).filter((r: any) => r.status >= 2).length
+      const completed = (progRes.data || []).filter((p: any) => p.status === 2).length
+      map[plan.id] = total > 0 ? Math.round((completed / total) * 100) : 0
+    } catch {
+      map[plan.id] = 0
+    }
+  }))
+  planProgressMap.value = map
+}
+
+function getPlanProgress(plan: LearningPlan): number {
+  return planProgressMap.value[plan.id] ?? 0
 }
 
 function onVisibilityChange() {

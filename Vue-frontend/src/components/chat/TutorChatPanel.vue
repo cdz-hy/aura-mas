@@ -160,14 +160,17 @@ const tutor = useTutor(tutorContext)
 
 // ─── 上下文感知：根据路由收集页面数据 ───
 
-// 缓存画像数据，避免重复请求
+// 缓存画像数据（5 分钟 TTL）
 let cachedProfile: StudentProfile | null = null
+let cachedProfileAt = 0
+const CACHE_TTL = 5 * 60 * 1000
 
 async function fetchProfileContext(): Promise<{ type: string; data: Record<string, any> }> {
   try {
-    if (!cachedProfile) {
+    if (!cachedProfile || Date.now() - cachedProfileAt > CACHE_TTL) {
       const res = await getCurrentProfile()
       cachedProfile = res.data
+      cachedProfileAt = Date.now()
     }
     const p = cachedProfile
     // learningBehavior 可能是 JSON 字符串（Java 后端），需要先解析
@@ -201,15 +204,18 @@ async function fetchProfileContext(): Promise<{ type: string; data: Record<strin
   }
 }
 
-// 缓存 Dashboard 和 Analytics 数据
+// 缓存 Dashboard 和 Analytics 数据（5 分钟 TTL）
 let cachedDashboard: any = null
+let cachedDashboardAt = 0
 let cachedAnalytics: any = null
+let cachedAnalyticsAt = 0
 
 async function fetchDashboardContext(): Promise<{ type: string; data: Record<string, any> }> {
   try {
-    if (!cachedDashboard) {
+    if (!cachedDashboard || Date.now() - cachedDashboardAt > CACHE_TTL) {
       const res = await getDashboardStats()
       cachedDashboard = res.data
+      cachedDashboardAt = Date.now()
     }
     const d = cachedDashboard
     const data: Record<string, any> = {
@@ -230,12 +236,13 @@ async function fetchDashboardContext(): Promise<{ type: string; data: Record<str
 
 async function fetchAnalyticsContext(): Promise<{ type: string; data: Record<string, any> }> {
   try {
-    if (!cachedAnalytics) {
+    if (!cachedAnalytics || Date.now() - cachedAnalyticsAt > CACHE_TTL) {
       const [masteryRes, weekRes] = await Promise.all([
         getKnowledgeMastery(),
         getWeekComparison(),
       ])
       cachedAnalytics = { mastery: masteryRes.data, week: weekRes.data }
+      cachedAnalyticsAt = Date.now()
     }
     const { mastery, week } = cachedAnalytics
     const data: Record<string, any> = { 页面: '学习分析' }
@@ -262,21 +269,25 @@ async function fetchAnalyticsContext(): Promise<{ type: string; data: Record<str
 async function gatherContext(): Promise<{ type: string; data: Record<string, any> }> {
   const path = route.path
   if (path === '/dashboard') return fetchDashboardContext()
-  if (path === '/analytics') return fetchAnalyticsContext()
+  if (path === '/analytics' || path.startsWith('/analytics/')) return fetchAnalyticsContext()
+  if (path === '/profile') return fetchProfileContext()
   if (path === '/notes' || path.startsWith('/notes/')) return { type: 'notes', data: { 页面: '我的笔记' } }
   if (path === '/settings') return { type: 'settings', data: { 页面: '个人设置' } }
   return { type: '', data: {} }
 }
 
-// 路由变化时更新上下文
+// 路由变化时更新上下文：先同步设置页面类型，再异步获取详细数据
 watch(() => route.path, async (path) => {
-  if (path === '/profile') {
-    const ctx = await fetchProfileContext()
-    tutor.setPageContext(ctx.type, ctx.data)
-  } else {
-    const ctx = await gatherContext()
-    tutor.setPageContext(ctx.type, ctx.data)
+  // 同步设置页面类型，避免异步期间发消息拿到空上下文
+  const pageTypeMap: Record<string, string> = {
+    '/dashboard': 'dashboard', '/analytics': 'analytics', '/profile': 'profile',
+    '/notes': 'notes', '/settings': 'settings',
   }
+  const syncType = pageTypeMap[path] || (path.startsWith('/notes/') ? 'notes' : '') || (path.startsWith('/analytics/') ? 'analytics' : '')
+  if (syncType) tutor.setPageContext(syncType, { 页面: '加载中...' })
+
+  const ctx = await gatherContext()
+  tutor.setPageContext(ctx.type, ctx.data)
 }, { immediate: true })
 
 const messagesContainer = ref<HTMLElement>()
