@@ -187,6 +187,7 @@
           class="w-full h-full p-8 text-navy-700 leading-relaxed resize-none outline-none font-body text-base"
           placeholder="开始书写你的笔记...&#10;&#10;支持 Markdown 语法：&#10;# 标题&#10;**粗体** *斜体*&#10;- 列表&#10;> 引用&#10;`代码`"
           @input="onInput"
+          @mouseup="onTextareaMouseUp"
           @keydown.ctrl.s.prevent="saveNote"
           @keydown.meta.s.prevent="saveNote"
           @keydown.ctrl.z.prevent="undo"
@@ -204,6 +205,7 @@
           class="flex-1 p-6 text-navy-700 leading-relaxed resize-none outline-none font-body text-base border-r border-navy-100/50"
           placeholder="开始书写你的笔记..."
           @input="onInput"
+          @mouseup="onTextareaMouseUp"
           @keydown.ctrl.s.prevent="saveNote"
           @keydown.meta.s.prevent="saveNote"
           @keydown.ctrl.z.prevent="undo"
@@ -285,19 +287,84 @@
       </div>
     </transition>
 
-    <!-- Selection popup -->
+    <!-- Selection popup (preview mode) -->
     <Teleport to="body">
       <div
         v-if="selectionPopup.show"
         class="selection-popup"
         :style="{ left: selectionPopup.x + 'px', top: selectionPopup.y + 'px' }"
       >
+        <div class="popup-drag-handle" @mousedown.prevent="startDrag($event, 'selection')">
+          <span class="popup-drag-dots">···</span>
+        </div>
+        <div class="selection-popup-ann-types">
+          <button
+            v-for="t in ANNOTATION_TYPES"
+            :key="t.type"
+            class="selection-popup-ann-btn"
+            :style="{ '--ann-color': t.color }"
+            @click="startAnnotationFromPreview(t.type)"
+          >
+            {{ t.emoji }} {{ t.type }}
+          </button>
+        </div>
+        <div class="selection-popup-divider"></div>
         <button class="selection-popup-btn" @click="generateFromSelection">
           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
           </svg>
-          用选中内容生成闪卡
+          生成闪卡
         </button>
+      </div>
+    </Teleport>
+
+    <!-- Annotation popup (edit/split mode - user manual annotation) -->
+    <Teleport to="body">
+      <div
+        v-if="showAnnotationPopup"
+        class="annotation-popup"
+        :style="{ left: annotationPopupPos.x + 'px', top: annotationPopupPos.y + 'px' }"
+      >
+        <!-- Step 1: pick type -->
+        <div v-if="annotationStep === 'type'" class="annotation-popup-types">
+          <p class="annotation-popup-title" @mousedown.prevent="startDrag($event, 'annotation')">
+            <span class="popup-drag-dots">···</span>
+            添加批注
+          </p>
+          <div class="annotation-type-grid">
+            <button
+              v-for="t in ANNOTATION_TYPES"
+              :key="t.type"
+              class="annotation-type-btn"
+              :style="{ borderColor: t.color, '--ann-color': t.color }"
+              @click="selectAnnotationType(t.type)"
+            >
+              <span>{{ t.emoji }}</span>
+              <span>{{ t.type }}</span>
+            </button>
+          </div>
+        </div>
+        <!-- Step 2: input text -->
+        <div v-else class="annotation-popup-input">
+          <p class="annotation-popup-title" @mousedown.prevent="startDrag($event, 'annotation')">
+            <span class="popup-drag-dots">···</span>
+            <span class="ann-type-dot" :style="{ background: ANNOTATION_TYPES.find(t => t.type === annotationType)?.color }"></span>
+            {{ annotationType }}
+          </p>
+          <input
+            ref="annotationInputRef"
+            v-model="annotationText"
+            class="annotation-text-input"
+            placeholder="输入批注内容..."
+            maxlength="40"
+            @keydown.enter.prevent="confirmAnnotation"
+            @keydown.escape.prevent="closeAnnotationPopup"
+          />
+          <div class="annotation-popup-actions">
+            <button class="annotation-btn-cancel" @click="closeAnnotationPopup">取消</button>
+            <button class="annotation-btn-confirm" :disabled="!annotationText.trim()" @click="confirmAnnotation">确定</button>
+          </div>
+        </div>
       </div>
     </Teleport>
 
@@ -473,6 +540,48 @@ const noteResources = ref<NoteResourceRel[]>([])
 // Selection popup state
 const selectionPopup = ref({ show: false, x: 0, y: 0, text: '' })
 
+// User annotation popup state
+const showAnnotationPopup = ref(false)
+const annotationPopupPos = ref({ x: 0, y: 0 })
+const annotationSelEnd = ref(0)
+const annotationStep = ref<'type' | 'text'>('type')
+const annotationType = ref('')
+const annotationText = ref('')
+const annotationInputRef = ref<HTMLInputElement | null>(null)
+
+// Drag state for popups
+const isDragging = ref(false)
+const dragOffset = ref({ x: 0, y: 0 })
+const dragTarget = ref<'selection' | 'annotation' | null>(null)
+
+function startDrag(e: MouseEvent, target: 'selection' | 'annotation') {
+  // Only left mouse button
+  if (e.button !== 0) return
+  e.preventDefault()
+  isDragging.value = true
+  dragTarget.value = target
+  const pos = target === 'selection' ? selectionPopup.value : annotationPopupPos.value
+  dragOffset.value = { x: e.clientX - pos.x, y: e.clientY - pos.y }
+}
+
+function onDrag(e: MouseEvent) {
+  if (!isDragging.value || !dragTarget.value) return
+  const x = Math.max(0, Math.min(window.innerWidth - 100, e.clientX - dragOffset.value.x))
+  const y = Math.max(0, Math.min(window.innerHeight - 50, e.clientY - dragOffset.value.y))
+  if (dragTarget.value === 'selection') {
+    selectionPopup.value.x = x
+    selectionPopup.value.y = y
+  } else {
+    annotationPopupPos.value.x = x
+    annotationPopupPos.value.y = y
+  }
+}
+
+function stopDrag() {
+  isDragging.value = false
+  dragTarget.value = null
+}
+
 // Note formatting state
 const formatting = ref(false)
 const formatStatus = ref('')
@@ -543,6 +652,92 @@ function scrollToAnnotation(id: string) {
     activeAnnotation.value = id
     setTimeout(() => { activeAnnotation.value = null }, 2000)
   }
+}
+
+// === User manual annotation ===
+
+const ANNOTATION_TYPES = [
+  { type: '易混淆', color: '#8b5cf6', emoji: ' ' },
+  { type: '易错点', color: '#ef4444', emoji: '⚠️' },
+  { type: '提醒', color: '#3b82f6', emoji: ' ' },
+  { type: '注意', color: '#f59e0b', emoji: ' ' },
+  { type: '技巧', color: '#10b981', emoji: ' ' },
+]
+
+function getNextAnnotationId(): number {
+  const re = /<<A:(\d+)\|/g
+  let maxId = 0
+  let match: RegExpExecArray | null
+  while ((match = re.exec(content.value)) !== null) {
+    maxId = Math.max(maxId, Number(match[1]))
+  }
+  return maxId + 1
+}
+
+function calcPopupPos(rect: DOMRect): { x: number; y: number } {
+  // Fixed right side of page, vertically centered with selection
+  const popupWidth = 320
+  const x = Math.min(window.innerWidth - popupWidth - 16, window.innerWidth / 2 + 80)
+  const y = rect.top + rect.height / 2
+  return { x, y }
+}
+
+function openAnnotationPopup(rect: DOMRect, insertPos: number) {
+  annotationPopupPos.value = calcPopupPos(rect)
+  annotationSelEnd.value = insertPos
+  annotationStep.value = 'type'
+  annotationType.value = ''
+  annotationText.value = ''
+  showAnnotationPopup.value = true
+}
+
+function onTextareaMouseUp(e: MouseEvent) {
+  const ta = textareaRef.value
+  if (!ta) return
+  const start = ta.selectionStart
+  const end = ta.selectionEnd
+  if (start === end) {
+    showAnnotationPopup.value = false
+    return
+  }
+  const selected = content.value.substring(start, end).trim()
+  if (!selected) {
+    showAnnotationPopup.value = false
+    return
+  }
+  // Get selection rect for positioning
+  const sel = window.getSelection()
+  if (sel && sel.rangeCount > 0) {
+    const range = sel.getRangeAt(0)
+    const rect = range.getBoundingClientRect()
+    openAnnotationPopup(rect, end)
+  }
+}
+
+function selectAnnotationType(type: string) {
+  annotationType.value = type
+  annotationStep.value = 'text'
+  nextTick(() => annotationInputRef.value?.focus())
+}
+
+function confirmAnnotation() {
+  if (!annotationType.value || !annotationText.value.trim()) return
+  const id = getNextAnnotationId()
+  const marker = `<<A:${id}|${annotationType.value}|${annotationText.value.trim()}>>`
+  // Insert marker at the end of selection (after the selected text)
+  const before = content.value.substring(0, annotationSelEnd.value)
+  const after = content.value.substring(annotationSelEnd.value)
+  saveSnapshot()
+  content.value = before + marker + after
+  closeAnnotationPopup()
+  onInput()
+}
+
+function closeAnnotationPopup() {
+  showAnnotationPopup.value = false
+  annotationStep.value = 'type'
+  annotationType.value = ''
+  annotationText.value = ''
 }
 
 marked.setOptions({
@@ -899,16 +1094,26 @@ async function handleFormat() {
         }
       },
       onError(error) {
+        content.value = originalBeforeFormat.value
+        annotations.value = []
         formatting.value = false
         formatStatus.value = ''
+        showFormatPreview.value = false
+        formattedResult.value = ''
+        originalBeforeFormat.value = ''
         formatStreamAbort.value = null
         console.error('Note format error:', error)
       },
     })
     formatStreamAbort.value = abort
   } catch (e) {
+    content.value = originalBeforeFormat.value
+    annotations.value = []
     formatting.value = false
     formatStatus.value = ''
+    showFormatPreview.value = false
+    formattedResult.value = ''
+    originalBeforeFormat.value = ''
     formatStreamAbort.value = null
     console.error('Failed to start note formatting:', e)
   }
@@ -978,25 +1183,42 @@ function onPreviewMouseUp(e: MouseEvent) {
   const selection = window.getSelection()
   const text = selection?.toString().trim() || ''
 
-  if (text.length < 10) {
+  if (text.length < 2) {
     selectionPopup.value.show = false
     return
   }
 
-  // Position popup near the end of selection
   const range = selection?.getRangeAt(0)
   if (!range) return
   const rect = range.getBoundingClientRect()
+
+  // Find annotation insert position in raw markdown
+  const raw = content.value
+  const cleanSelected = text.replace(/<<A:\d+\|[^|]+\|[^>]+>>/g, '').trim()
+  const pos = raw.indexOf(cleanSelected)
+
+  const popupPos = calcPopupPos(rect)
   selectionPopup.value = {
     show: true,
-    x: rect.right + 8,
-    y: rect.top - 10,
+    x: popupPos.x,
+    y: popupPos.y,
     text,
+  }
+
+  // Prepare annotation state (for preview mode annotation insertion)
+  if (pos !== -1) {
+    annotationSelEnd.value = pos + cleanSelected.length
   }
 }
 
-function hideSelectionPopup() {
+function startAnnotationFromPreview(type: string) {
+  annotationType.value = type
+  annotationStep.value = 'text'
+  // Open annotation popup at same position as selection popup
+  annotationPopupPos.value = { x: selectionPopup.value.x, y: selectionPopup.value.y }
   selectionPopup.value.show = false
+  showAnnotationPopup.value = true
+  nextTick(() => annotationInputRef.value?.focus())
 }
 
 async function generateFromSelection() {
@@ -1047,16 +1269,24 @@ function onDocumentMouseDown(e: MouseEvent) {
   if (popup && !popup.contains(e.target as Node)) {
     selectionPopup.value.show = false
   }
+  const annPopup = document.querySelector('.annotation-popup')
+  if (annPopup && !annPopup.contains(e.target as Node)) {
+    showAnnotationPopup.value = false
+  }
 }
 
 onMounted(() => {
   loadNote()
   loadDueCount()
   document.addEventListener('mousedown', onDocumentMouseDown)
+  document.addEventListener('mousemove', onDrag)
+  document.addEventListener('mouseup', stopDrag)
 })
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', onDocumentMouseDown)
+  document.removeEventListener('mousemove', onDrag)
+  document.removeEventListener('mouseup', stopDrag)
 })
 
 watch(() => route.params.id, (newId) => {
@@ -1129,20 +1359,208 @@ watch(activeAnnotation, (id) => {
   position: fixed;
   z-index: 1100;
   animation: fadeIn 0.15s ease;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  padding: 0 6px 6px;
+  min-width: 320px;
+}
+
+.popup-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  cursor: grab;
+  user-select: none;
+}
+
+.popup-drag-handle:active {
+  cursor: grabbing;
+}
+
+.popup-drag-dots {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #cbd5e1;
+  line-height: 1;
+}
+
+.annotation-popup-title .popup-drag-dots {
+  margin-right: 4px;
+  cursor: grab;
+}
+
+.annotation-popup-title .popup-drag-dots:active {
+  cursor: grabbing;
+}
+
+.selection-popup-ann-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px;
+}
+
+.selection-popup-ann-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ann-color);
+  background: white;
+  border: 1.5px solid var(--ann-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.selection-popup-ann-btn:hover {
+  background: #f9fafb;
+}
+
+.selection-popup-divider {
+  height: 1px;
+  background: #e5e7eb;
+  margin: 4px 0;
+}
+
+/* === Annotation popup === */
+
+.annotation-popup {
+  position: fixed;
+  z-index: 1100;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  animation: fadeIn 0.15s ease;
+  min-width: 320px;
+}
+
+.annotation-popup-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  padding: 10px 14px 6px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.annotation-type-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 14px 12px;
+}
+
+.annotation-type-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ann-color);
+  background: white;
+  border: 1.5px solid var(--ann-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.annotation-type-btn:hover {
+  background: #f9fafb;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.annotation-popup-input {
+  padding: 0 0 4px;
+}
+
+.ann-type-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.annotation-text-input {
+  display: block;
+  width: calc(100% - 28px);
+  margin: 8px 14px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.annotation-text-input:focus {
+  border-color: #6366f1;
+}
+
+.annotation-popup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 14px 10px;
+}
+
+.annotation-btn-cancel {
+  padding: 5px 14px;
+  font-size: 12px;
+  color: #6b7280;
+  background: none;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.annotation-btn-cancel:hover {
+  background: #f3f4f6;
+}
+
+.annotation-btn-confirm {
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: white;
+  background: #6366f1;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.annotation-btn-confirm:hover {
+  background: #4f46e5;
+}
+
+.annotation-btn-confirm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .selection-popup-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
-  font-size: 13px;
+  padding: 5px 10px;
+  font-size: 12px;
   font-weight: 500;
   color: #92400e;
   background: #fffbeb;
   border: 1px solid #fde68a;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-radius: 6px;
   transition: all 0.15s;
   cursor: pointer;
   white-space: nowrap;
@@ -1150,7 +1568,6 @@ watch(activeAnnotation, (id) => {
 
 .selection-popup-btn:hover {
   background: #fef3c7;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 }
 
 @keyframes fadeIn {

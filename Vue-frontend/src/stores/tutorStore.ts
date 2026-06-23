@@ -24,6 +24,8 @@ export const useTutorStore = defineStore('tutor', () => {
   // ─── State ───
   const contextPlanId = ref(Number(localStorage.getItem(TUTOR_PLAN_KEY)) || 0)
   const contextResourceId = ref(0)
+  const contextType = ref('')
+  const contextData = ref<Record<string, any>>({})
 
   const activeSessionId = ref(localStorage.getItem(TUTOR_SESSION_KEY) || '')
   const messages = ref<TutorMessage[]>([])
@@ -36,23 +38,59 @@ export const useTutorStore = defineStore('tutor', () => {
 
   let isNewlyCreated = false
 
+  // ─── Per-planId state cache (prevents cross-panel state overwrite) ───
+  interface PlanState {
+    messages: TutorMessage[]
+    activeSessionId: string
+  }
+  const planStates = new Map<number, PlanState>()
+
+  function _savePlanState(planId: number) {
+    planStates.set(planId, {
+      messages: [...messages.value],
+      activeSessionId: activeSessionId.value,
+    })
+  }
+
+  function _restorePlanState(planId: number): boolean {
+    const state = planStates.get(planId)
+    if (state) {
+      messages.value = state.messages
+      activeSessionId.value = state.activeSessionId
+      return true
+    }
+    return false
+  }
+
   // ─── Getters ───
   const hasActiveSession = computed(() => !!activeSessionId.value)
 
   // ─── Context ───
   function setPlanContext(planId: number, resourceId: number) {
     const changed = contextPlanId.value !== planId
-    contextPlanId.value = planId
-    contextResourceId.value = resourceId
-    localStorage.setItem(TUTOR_PLAN_KEY, String(planId))
     if (changed) {
-      _setActiveSession('')
-      messages.value = []
+      // 保存当前 planId 的状态
+      _savePlanState(contextPlanId.value)
+      contextPlanId.value = planId
+      contextResourceId.value = resourceId
+      localStorage.setItem(TUTOR_PLAN_KEY, String(planId))
+      // 恢复目标 planId 的状态（如果有缓存）
+      if (!_restorePlanState(planId)) {
+        _setActiveSession('')
+        messages.value = []
+      }
+    } else {
+      contextResourceId.value = resourceId
     }
   }
 
   function setPlanResourceId(resourceId: number) {
     contextResourceId.value = resourceId
+  }
+
+  function setPageContext(type: string, data: Record<string, any>) {
+    contextType.value = type
+    contextData.value = data
   }
 
   // ─── Session ID generation ───
@@ -97,37 +135,39 @@ export const useTutorStore = defineStore('tutor', () => {
       const allSessions = res.data || []
       const prefix = `tutor-${contextPlanId.value}-`
       sessions.value = allSessions.filter((s: any) => s.sessionId?.startsWith(prefix))
-
-      // Don't reload messages while SSE is streaming — it would overwrite in-flight content
-      if (loading.value) return
-
-      // 新建会话后跳过自动选择，避免覆盖用户刚创建的空会话
-      if (isNewlyCreated) {
-        isNewlyCreated = false
-        return
-      }
-
-      // Prefer restoring the persisted session if it still exists
-      if (activeSessionId.value && sessions.value.some(s => s.sessionId === activeSessionId.value)) {
-        await loadSessionMessages(activeSessionId.value)
-      } else if (sessions.value.length > 0) {
-        // Fall back to latest session
-        _setActiveSession(sessions.value[0].sessionId)
-        await loadSessionMessages(sessions.value[0].sessionId)
-      } else if (!activeSessionId.value) {
-        _setActiveSession(_buildSessionId())
-      }
     } catch (e) {
       console.error('[TutorStore] 加载会话列表失败:', e)
-      if (!activeSessionId.value) {
-        _setActiveSession(_buildSessionId())
-      }
     } finally {
       sessionsLoading.value = false
     }
+
+    // Don't reload messages while SSE is streaming — it would overwrite in-flight content
+    if (loading.value) return
+
+    // 新建会话后跳过自动选择，避免覆盖用户刚创建的空会话
+    if (isNewlyCreated) {
+      isNewlyCreated = false
+      return
+    }
+
+    // 优先用 localStorage 持久化的 activeSessionId 直接加载消息
+    // 不依赖 getSessions 的返回结果（Java 后端可能返回空或失败）
+    if (activeSessionId.value) {
+      const ok = await loadSessionMessages(activeSessionId.value)
+      if (!ok) {
+        // 持久化的会话在后端已不存在，清理并创建新会话
+        _setActiveSession('')
+        _setActiveSession(_buildSessionId())
+      }
+    } else if (sessions.value.length > 0) {
+      _setActiveSession(sessions.value[0].sessionId)
+      await loadSessionMessages(sessions.value[0].sessionId)
+    } else {
+      _setActiveSession(_buildSessionId())
+    }
   }
 
-  async function loadSessionMessages(sessionId: string) {
+  async function loadSessionMessages(sessionId: string): Promise<boolean> {
     try {
       const res = await getSessionMessages(sessionId, 500)
       const dbMessages = res.data || []
@@ -135,9 +175,11 @@ export const useTutorStore = defineStore('tutor', () => {
         role: m.dialogueType === 'USER' ? 'user' as const : 'assistant' as const,
         content: m.conversationText || '',
       }))
+      return true
     } catch (e) {
       console.error('[TutorStore] 加载会话消息失败:', e)
       messages.value = []
+      return false
     }
   }
 
@@ -176,6 +218,12 @@ export const useTutorStore = defineStore('tutor', () => {
         message: text,
         session_id: activeSessionId.value,
       })
+      if (contextType.value) {
+        params.set('context_type', contextType.value)
+      }
+      if (contextData.value && Object.keys(contextData.value).length > 0) {
+        params.set('context_data', JSON.stringify(contextData.value))
+      }
 
       const es = new EventSource(`${PYTHON_AI_BASE}/api/ai/tutor/chat?${params}`)
       eventSource.value = es
@@ -263,6 +311,7 @@ export const useTutorStore = defineStore('tutor', () => {
     // Actions
     setPlanContext,
     setPlanResourceId,
+    setPageContext,
     loadSessions,
     loadSessionMessages,
     selectSession,
