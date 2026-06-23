@@ -108,7 +108,7 @@
               <div
                 v-for="res in mod.resources"
                 :key="res.id"
-                class="flex items-center gap-2 p-1.5 rounded-md text-xs transition-colors cursor-pointer"
+                class="group flex items-center gap-2 p-1.5 rounded-md text-xs transition-colors cursor-pointer"
                 :class="selectedResourceId === res.id ? 'bg-navy-100' : 'hover:bg-white'"
                 @click.stop="toggleResource(res)"
               >
@@ -118,6 +118,15 @@
                 <span v-else-if="res.status === 1 && !stuckResources.has(res.id)" class="text-blue-500 text-[10px]">生成中</span>
                 <span v-else-if="res.status === 1 || res.status === 3" class="text-red-500 text-[10px] cursor-pointer hover:underline" @click.stop="handleRetry(res)">重试</span>
                 <span v-else class="text-navy-300 text-[10px]">待生成</span>
+                <button
+                  class="flex-shrink-0 p-0.5 rounded text-navy-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100"
+                  title="删除资源"
+                  @click.stop="confirmDeleteResource(res)"
+                >
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                  </svg>
+                </button>
               </div>
             </div>
           </div>
@@ -492,6 +501,18 @@
       </div>
     </div>
   </Teleport>
+
+  <!-- 删除资源确认弹窗 -->
+  <ConfirmDialog
+    :visible="showDeleteResourceConfirm"
+    title="删除学习资源"
+    :message="`确定要删除资源「${deletingResource?.moduleData?.title || deletingResource?.moduleType || ''}」吗？该资源相关的对话、测验记录与学习进度将一并删除，此操作不可恢复。`"
+    confirm-text="确认删除"
+    cancel-text="取消"
+    type="danger"
+    @confirm="handleDeleteResourceConfirm"
+    @cancel="handleDeleteResourceCancel"
+  />
 </div>
 </template>
 
@@ -499,7 +520,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { getPlan, updatePlan } from '@/api/plan'
-import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi } from '@/api/resource'
+import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi, deleteResource as deleteResourceApi } from '@/api/resource'
 import { parseMarkdown, extractCitations } from '@/utils/markdown'
 import { normalizeAnimationHtml } from '@/utils/animationHtml'
 import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
@@ -509,6 +530,8 @@ import { PYTHON_AI_BASE } from '@/api/request'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useHeartbeat } from '@/composables/useHeartbeat'
+import { showToast } from '@/composables/useToast'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import VideoPlayer from '@/components/resource/VideoPlayer.vue'
@@ -1562,7 +1585,26 @@ function _initMermaidInteraction(wrapper: Element, uid: string, center = false) 
 }
 
 watch(() => selectedResource.value?.moduleData?.content, () => {
+  // 流式输出进行中不渲染 mermaid：每个 chunk 都会通过 v-html 替换掉已渲染的 SVG，
+  // 再触发 watch 调用 mermaid.render，造成图表反复重渲闪烁。
+  // 仅在当前资源不在流式中时渲染。
+  const rid = selectedResourceId.value
+  if (chatStore.isResourceStreaming && rid != null && chatStore.resourceStreamBuffers[rid] != null) {
+    return
+  }
   renderMermaidInResource()
+})
+
+// 流式结束后统一渲染一次（此时内容为最终态，SVG 不再被 v-html 清除）
+watch(() => chatStore.isResourceStreaming, (streaming) => {
+  if (!streaming) {
+    nextTick(() => renderMermaidInResource())
+  }
+})
+
+// 切换选中资源时立即渲染
+watch(selectedResourceId, () => {
+  nextTick(() => renderMermaidInResource())
 })
 
 onMounted(() => {
@@ -1722,6 +1764,49 @@ function selectModule(index: number) {
   const mod = modules.value[index]
   if (mod?.resources.length > 0) {
     toggleResource(mod.resources[0])
+  }
+}
+
+// 删除资源
+const showDeleteResourceConfirm = ref(false)
+const deletingResource = ref<LearningResource | null>(null)
+
+function confirmDeleteResource(res: LearningResource) {
+  deletingResource.value = res
+  showDeleteResourceConfirm.value = true
+}
+
+function handleDeleteResourceCancel() {
+  showDeleteResourceConfirm.value = false
+  deletingResource.value = null
+}
+
+async function handleDeleteResourceConfirm() {
+  const res = deletingResource.value
+  if (!res) return
+  try {
+    await deleteResourceApi(res.id)
+    // 从本地列表移除
+    resources.value = resources.value.filter(r => r.id !== res.id)
+    // 若删除的是当前选中资源，清空选中态
+    if (selectedResourceId.value === res.id) {
+      heartbeat.stop()
+      selectedResourceId.value = null
+      selectedResource.value = null
+      quizData.value = null
+      mindmapData.value = null
+      gradingResult.value = null
+      quizSubmittedAnswers.value = null
+      showExplanations.value = false
+      isFullscreen.value = false
+    }
+    showToast('资源已删除', 'success', { title: '删除成功' })
+  } catch (e) {
+    console.error('删除资源失败:', e)
+    showToast('删除失败，请稍后重试', 'error', { title: '删除失败' })
+  } finally {
+    showDeleteResourceConfirm.value = false
+    deletingResource.value = null
   }
 }
 

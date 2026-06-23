@@ -9,6 +9,10 @@ export function getResource(resourceId: number) {
   return request.get<any, { data: LearningResource }>(`/resource/${resourceId}`)
 }
 
+export function deleteResource(resourceId: number) {
+  return request.delete<any, { data: null }>(`/resource/${resourceId}`)
+}
+
 export function dispatchTask(data: {
   planId: number
   resourceId: number

@@ -15,9 +15,10 @@ from app.agents.schemas import (
     INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP,
 )
 from app.agents.llm_factory import get_controller_llm
-from app.prompts import CONTROLLER_PROMPT
+from app.prompts import CONTROLLER_REACT_PROMPT
 from app.utils.token_recorder import record_from_mimo
 from app.services.db.java_client import java_client
+import json
 
 logger = logging.getLogger("agents.controller")
 
@@ -327,82 +328,142 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     if context_info:
         logger.info(f"  [主控智能体] 系统状态: {context_info.strip()}")
 
-    messages = [
-        {"role": "system", "content": CONTROLLER_PROMPT},
-        {"role": "user", "content": f"对话历史:\n{history_text}\n{context_info}\n\n当前用户输入: {user_message}\n\n请综合判断意图与 learning_goal，输出 JSON:"}
-    ]
+    # ==================== ReAct 思考与工具调用循环 ====================
+    MAX_REACT_ROUNDS = 6
+    react_history = []
+    
+    intent = INTENT_AMBIGUOUS
+    reasoning = ""
+    managed_learning_goal = None
+    resource_type = None
+    new_events = []
 
-    try:
-        logger.info(f"  [主控智能体] 正在流式调用 LLM 进行意图识别与目标管理...")
+    for round_num in range(1, MAX_REACT_ROUNDS + 1):
+        logger.info(f"  [主控智能体] ReAct - 第 {round_num} 轮")
 
-        intent = None
-        reasoning = ""
-        managed_learning_goal = None  # LLM 智能管理后的 learning_goal
-        accumulated_text = ""
+        react_context = ""
+        if react_history:
+            react_context = "\n\n## 工具调用记录\n" + "\n".join(react_history)
+            
+        # 准备 prompt
+        messages = [
+            {"role": "system", "content": CONTROLLER_REACT_PROMPT.format(max_rounds=MAX_REACT_ROUNDS)},
+            {"role": "user", "content": f"对话历史:\n{history_text}\n{context_info}\n\n当前用户输入: {user_message}{react_context}\n\n请进行决策，输出 JSON:"}
+        ]
 
-        # 流式收集完整 JSON（不再早退，因为 learning_goal 在 intent 之后输出）
-        # 早退判定改为：检测到 JSON 结束符 } 即可
-        for chunk in llm.chat_stream(messages, temperature=0.2):
-            accumulated_text += chunk
-            # 检测 JSON 完整结束（含 intent + learning_goal + reasoning）
-            if accumulated_text.count("{") > 0 and accumulated_text.count("}") >= accumulated_text.count("{"):
-                # 试探性解析，成功即可早退
-                try:
-                    import json
-                    start = accumulated_text.find('{')
-                    end = accumulated_text.rfind('}') + 1
-                    candidate = accumulated_text[start:end]
-                    parsed = json.loads(candidate)
-                    if "intent" in parsed and "learning_goal" in parsed:
-                        intent = parsed.get("intent", INTENT_AMBIGUOUS)
-                        managed_learning_goal = parsed.get("learning_goal", "").strip()
-                        reasoning = parsed.get("reasoning", "")
-                        logger.info(f"  [主控智能体] 流式判断: 完整 JSON 已收齐，提前退出!")
-                        break
-                except Exception:
-                    pass  # JSON 还未完整，继续累积
+        try:
+            react_result = llm.chat_json(messages)
+            record_from_mimo(llm, state.get("user_id", 0), "controller_react", state.get("task_id"))
+            
+            if not isinstance(react_result, dict):
+                logger.warning(f"  [主控智能体] 返回非字典类型，终止 ReAct")
+                break
 
-        # 如果流式过程没有解析成功，尝试最后再解析一次
-        if intent is None:
-            try:
-                import json
-                if '{' in accumulated_text and '}' in accumulated_text:
-                    start = accumulated_text.find('{')
-                    end = accumulated_text.rfind('}') + 1
-                    json_str = accumulated_text[start:end]
-                    result = json.loads(json_str)
-                    intent = result.get("intent", INTENT_AMBIGUOUS)
-                    managed_learning_goal = result.get("learning_goal", "").strip()
-                    reasoning = result.get("reasoning", "")
-                else:
-                    intent = INTENT_AMBIGUOUS
-                    reasoning = "无法解析 JSON 输出"
-            except Exception as parse_err:
-                intent = INTENT_AMBIGUOUS
-                reasoning = f"JSON 解析失败: {str(parse_err)}"
+            thought = react_result.get("thought", "")
+            decision = react_result.get("decision", "finish").lower().strip()
+            
+            logger.info(f"  [主控智能体] 思考: {thought[:100]}...")
 
-        logger.info(f"  [主控智能体] 意图识别结果: {intent}")
-        if managed_learning_goal:
-            logger.info(f"  [主控智能体] 智能管理的 learning_goal: {managed_learning_goal}")
-        if reasoning:
-            logger.info(f"  [主控智能体] 推理过程: {reasoning}")
+            if decision == "tool_call":
+                actions = react_result.get("actions", [])
+                logger.info(f"  [主控智能体] 决定调用工具: {len(actions)} 个动作")
+                
+                for act in actions:
+                    act_name = act.get("action")
+                    logger.info(f"    - 执行工具: {act_name}")
+                    if act_name == "get_resource_content":
+                        rid = act.get("resource_id")
+                        try:
+                            res = java_client.get_resource_by_id(int(rid))
+                            content = (res.get("moduleData") or "")[:2000]
+                            react_history.append(f"工具 get_resource_content(id={rid}) 结果: 标题={res.get('title')}, 内容片段={content}...")
+                        except Exception as e:
+                            react_history.append(f"工具 get_resource_content 失败: {e}")
+                    
+                    elif act_name == "get_plan_modules":
+                        try:
+                            mods = java_client.get_plan_resources(state.get("plan_id", 0))
+                            summary = [f"ID:{m['id']}, Type:{m.get('moduleType')}, Title:{m.get('title')}" for m in mods]
+                            react_history.append(f"工具 get_plan_modules 结果: \n" + "\n".join(summary))
+                        except Exception as e:
+                            react_history.append(f"工具 get_plan_modules 失败: {e}")
+                    
+                    elif act_name == "get_user_profile_fields":
+                        fields = act.get("fields", [])
+                        try:
+                            prof = java_client.get_user_profile(state.get("user_id", 0))
+                            lb = prof.get("learning_behavior", {})
+                            extracted = {k: lb.get(k) for k in fields if k in lb}
+                            react_history.append(f"工具 get_user_profile_fields 结果: {json.dumps(extracted, ensure_ascii=False)}")
+                        except Exception as e:
+                            react_history.append(f"工具 get_user_profile_fields 失败: {e}")
+                            
+                    elif act_name == "get_user_quiz_stats":
+                        try:
+                            stats = java_client.get_user_quiz_stats(state.get("user_id", 0), state.get("plan_id", 0))
+                            react_history.append(f"工具 get_user_quiz_stats 结果: {json.dumps(stats, ensure_ascii=False)}")
+                        except Exception as e:
+                            react_history.append(f"工具 get_user_quiz_stats 失败: {e}")
+                
+                # 触发 stream_events 以展示前端 thought 气泡
+                new_events.append({
+                    "event_type": "thinking",
+                    "agent": "controller",
+                    "data": {"message": f"思考: {thought}\n决定使用工具..."},
+                    "step_description": "思考并收集信息"
+                })
+                
+                # 如果有注入的 sse_callback，可以尝试直接推送到前端（可选，实现实时刷新）
+                sse_cb = state.get("sse_callback")
+                if sse_cb:
+                    try:
+                        sse_cb(f'data: {json.dumps({"type": "progress", "content": f"思考并收集信息: {thought}"}, ensure_ascii=False)}\n\n')
+                    except Exception:
+                        pass
+                        
+                continue
+                
+            else:
+                # finish
+                intent = react_result.get("intent", INTENT_AMBIGUOUS)
+                managed_learning_goal = str(react_result.get("learning_goal", "")).strip()
+                reasoning = react_result.get("reasoning", "")
+                resource_type = react_result.get("resource_type")
+                logger.info(f"  [主控智能体] ReAct 结束，最终意图: {intent}")
+                break
 
-        # 记录 token 消耗（流式可能提前终止，需补录估算值）
-        user_id = state.get("user_id", 0)
-        task_id = state.get("task_id")
-        if not llm.get_usage_records():
-            input_est = sum(llm._estimate_tokens(m.get("content", "")) for m in messages)
-            llm.add_usage(input_tokens=input_est, output_tokens=llm._estimate_tokens(accumulated_text))
-        record_from_mimo(llm, user_id, "intent_recognition", task_id)
-
-    except Exception as e:
-        intent = INTENT_AMBIGUOUS
-        reasoning = f"意图解析异常: {str(e)}"
-        managed_learning_goal = None
-        logger.error(f"  [主控智能体] 意图识别失败: {str(e)}")
+        except Exception as e:
+            logger.error(f"  [主控智能体] ReAct 异常: {e}")
+            break
 
     # 确定下一个节点
+    
+    # 【空载拦截】：如果用户想生成动画、播客、类型资源或题目，但上下文中没有任何资源，强行拦截转为追问
+    if intent in ["generate_type_resource", "generate_animation", INTENT_GENERATE_QUIZ] and not state.get("source_resource_content"):
+        logger.info(f"  [主控智能体] 空载拦截：缺少源文本，将 {intent} 强行转为追问")
+        intent = "clarify"
+        reasoning = "用户请求生成动画、导图、播客、题目等特定类型资源，但在当前的对话上下文中，由于没有明确挂载之前的资源文本，系统处于'空载'状态。请委婉地询问用户：具体想要基于哪个知识点或刚刚学过的哪个主题来生成？并建议用户先选择一个具体的模块资源。"
+
     next_node = _route_by_intent(intent, state)
+    
+    if intent == "clarify":
+        # 委托给简答智能体进行真流式生成和追问
+        logger.info(f"  [主控智能体] 决定追问，委托给简答智能体处理")
+        return {
+            "intent": "clarify",
+            "next_node": NODE_SIMPLE_ANSWER,
+            "anomaly_clarify": True,
+            "anomaly_reason": reasoning,
+            "current_step": "主控智能体决定追问澄清",
+            "iteration_count": iteration + 1,
+            "stream_events": [{
+                "event_type": "thinking",
+                "agent": "controller",
+                "data": {"message": f"需要澄清需求: {reasoning[:20]}..."},
+                "step_description": "准备向用户追问"
+            }]
+        }
+        
     logger.info(f"  [主控智能体] 路由决策: {intent} -> {next_node}")
 
     # learning_goal 智能管理：优先采用 LLM 的判定，降级回退到 checkpoint goal
@@ -411,12 +472,11 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     checkpoint_goal = state.get("_checkpoint_learning_goal", "")
 
     if managed_learning_goal and len(managed_learning_goal) >= 2:
-        # LLM 成功输出了管理后的目标
         if managed_learning_goal != current_goal:
             resolved_learning_goal = managed_learning_goal
             logger.info(f"  [主控智能体] LLM 智能管理目标: '{current_goal[:40]}' → '{managed_learning_goal[:80]}'")
-    elif intent != INTENT_GENERATE_RESOURCE and checkpoint_goal:
-        # 降级方案：LLM 未输出有效目标，但意图非 generate_resource，恢复历史目标
+    elif intent not in [INTENT_GENERATE_RESOURCE, "generate_type_resource", "generate_animation"] and checkpoint_goal:
+        # 降级方案：恢复历史目标
         resolved_learning_goal = checkpoint_goal
         logger.info(f"  [主控智能体] 降级恢复历史目标: {checkpoint_goal[:80]}")
 
@@ -442,15 +502,37 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         "next_node": next_node,
         "current_step": f"主控智能体: 意图=[{intent}], 目标=[{final_goal[:40]}], {reasoning[:80]}",
         "iteration_count": iteration + 1,
+        "stream_events": new_events,
     }
+    
+    if resource_type:
+        result["resource_type"] = resource_type
+        
     if intent == "confirm":
         result["task_breakdown_confirmed"] = True
         result["human_feedback"] = None
-    if intent == "simple_qa":
+    if intent == "simple_qa" or intent == "clarify":
         result["task_breakdown"] = None
         result["task_breakdown_confirmed"] = False
         result["needs_human_confirm"] = False
         result["human_feedback"] = None
+        
+    # 自动伪造 task_breakdown 以便下游生成补充资源
+    if intent in ["generate_type_resource", "generate_animation"]:
+        current_module_id = state.get("current_module_id")
+        if current_module_id and not state.get("task_breakdown"):
+            current_title = state.get("current_module_title") or "当前学习模块"
+            logger.info(f"  [主控智能体] 自动伪造 task_breakdown (module_id={current_module_id})")
+            result["task_breakdown"] = {
+                "title": current_title,
+                "modules": [{
+                    "module_order": current_module_id,
+                    "title": current_title,
+                    "description": "用户请求的补充学习资源"
+                }]
+            }
+            result["task_breakdown_confirmed"] = True
+
     if resolved_learning_goal:
         result["learning_goal"] = resolved_learning_goal
     result["_checkpoint_learning_goal"] = final_goal
@@ -484,6 +566,10 @@ def _route_by_intent(intent: str, state: AgentState) -> str:
     elif intent == "generate_type_resource":
         logger.info(f"  [主控路由] 生成类型资源 -> 类型资源生成智能体")
         return NODE_RESOURCE_TYPE_GENERATOR
+        
+    elif intent == "generate_animation":
+        logger.info(f"  [主控路由] 生成动画 -> 动画生成智能体")
+        return NODE_ANIMATION_SKILL_GENERATOR
 
     elif intent == INTENT_GRADE_QUIZ:
         logger.info(f"  [主控路由] 批改题目 -> 题目判定智能体")

@@ -20,7 +20,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from app.services.db.java_client import java_client
 from app.graph.learning_graph import get_learning_graph
-from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR, NODE_ANIMATION_SKILL_GENERATOR, NODE_HUMAN_CONFIRM
+from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR, NODE_ANIMATION_SKILL_GENERATOR, NODE_HUMAN_CONFIRM, NODE_WAIT_USER_REPLY
 from app.prompts import QUIZ_GRADER_PROMPT
 from app.agents.profile_maintainer import profile_maintainer_node
 from app.agents.conversation_compressor import build_chat_history_with_context, async_compress_and_save
@@ -204,6 +204,8 @@ async def plan_chat(
     message: str = Query(..., description="用户消息"),
     session_id: str = Query("", description="会话 ID"),
     task_breakdown: str = Query("", description="前端回传的任务分解 JSON（确认时）"),
+    current_module_id: str = Query("", description="当前正在学习的模块ID"),
+    current_module_title: str = Query("", description="当前模块标题"),
 ):
     """
     计划关联 AI 对话 - SSE 流式输出
@@ -289,18 +291,25 @@ async def plan_chat(
     except Exception:
         pass
 
-    # ── 恢复路径检测：checkpointer 中是否有中断在 human_confirm 的状态 ──
+    # ── 恢复路径检测：checkpointer 中是否有中断的状态 ──
     _can_resume = False
+    _resume_node = None
     graph = get_learning_graph()
     config = {"configurable": {"thread_id": session_id}}
-    if breakdown_confirmed or human_feedback:
-        try:
-            existing = graph.get_state(config)
-            if existing and existing.next and NODE_HUMAN_CONFIRM in existing.next:
+    
+    try:
+        existing = graph.get_state(config)
+        if existing and existing.next:
+            if NODE_HUMAN_CONFIRM in existing.next and (breakdown_confirmed or human_feedback):
                 _can_resume = True
-                logger.info(f"[计划对话] 检测到中断状态，将从 checkpointer 恢复")
-        except Exception:
-            pass
+                _resume_node = NODE_HUMAN_CONFIRM
+                logger.info(f"[计划对话] 检测到中断状态，将从 checkpointer 恢复 (human_confirm)")
+            elif NODE_WAIT_USER_REPLY in existing.next:
+                _can_resume = True
+                _resume_node = NODE_WAIT_USER_REPLY
+                logger.info(f"[计划对话] 检测到中断状态，将从 checkpointer 恢复 (wait_user_reply)")
+    except Exception:
+        pass
 
     if _can_resume:
         # ── 恢复路径：aupdate_state + astream(None) ──
@@ -375,17 +384,24 @@ async def plan_chat(
                             )
                             logger.info(f"[对话流-恢复] 推送已创建的 {len(placeholder_map)} 个占位记录到前端")
 
-                        await graph_inner.aupdate_state(config, {
+                        update_payload = {
                             "user_message": message,
-                            "human_feedback": None if breakdown_confirmed else (human_feedback or message),
-                            "task_breakdown_confirmed": breakdown_confirmed,
-                            "needs_human_confirm": False,
                             "sse_callback": _threadsafe_cb,
                             "create_placeholder_callback": _create_placeholder_callback,
                             "placeholder_resource_map": placeholder_map,
                             "chat_history": chat_history,
                             "user_profile": user_profile,
-                        })
+                        }
+                        
+                        if _resume_node == NODE_HUMAN_CONFIRM:
+                            update_payload["human_feedback"] = None if breakdown_confirmed else (human_feedback or message)
+                            update_payload["task_breakdown_confirmed"] = breakdown_confirmed
+                            update_payload["needs_human_confirm"] = False
+                            
+                        # 如果是 wait_user_reply 恢复，仅更新 user_message 等基础信息即可
+                        # 图会正常执行从 wait_user_reply 路由到 controller_node，controller 就能读到新的 user_message
+
+                        await graph_inner.aupdate_state(config, update_payload)
                         async for event in graph_inner.astream(None, config=config, stream_mode="updates"):
                             if check_stop(session_id):
                                 _threadsafe_cb(None)  # sentinel
@@ -473,6 +489,8 @@ async def plan_chat(
             "task_id": chat_task_id,
             "session_id": session_id,
             "user_message": message,
+            "current_module_id": int(current_module_id) if current_module_id and current_module_id.isdigit() else None,
+            "current_module_title": current_module_title,
             "human_feedback": human_feedback,
             "chat_history": chat_history,
             "user_profile": user_profile,

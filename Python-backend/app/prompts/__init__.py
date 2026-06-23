@@ -1,6 +1,6 @@
 """系统提示词集中管理 — 与智能体代码分离，便于维护和调优"""
 
-from app.prompts.controller import CONTROLLER_PROMPT
+from app.prompts.controller import CONTROLLER_REACT_PROMPT
 from app.prompts.task_decomposer import TASK_DECOMPOSER_PROMPT, TASK_DECOMPOSER_REACT_PROMPT
 from app.prompts.simple_answer import SIMPLE_ANSWER_PROMPT
 from app.prompts.rag_retriever import RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT, RAG_RETRIEVER_CONFIG_PROMPT

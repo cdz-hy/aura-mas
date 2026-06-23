@@ -23,6 +23,7 @@ NODE_RESOURCE_TYPE_GENERATOR = "resource_type_generator"
 NODE_ANIMATION_SKILL_GENERATOR = "animation_skill_generator"
 NODE_PROFILE_MAINTAINER = "profile_maintainer"
 NODE_HUMAN_CONFIRM = "human_confirm"
+NODE_WAIT_USER_REPLY = "wait_user_reply"
 
 # 意图类型
 INTENT_GENERATE_RESOURCE = "generate_resource"
@@ -31,6 +32,9 @@ INTENT_GENERATE_QUIZ = "generate_quiz"
 INTENT_GRADE_QUIZ = "grade_quiz"
 INTENT_AMBIGUOUS = "ambiguous"
 INTENT_FOLLOW_UP = "follow_up"
+INTENT_GENERATE_ANIMATION = "generate_animation"
+INTENT_GENERATE_TYPE_RESOURCE = "generate_type_resource"
+INTENT_CLARIFY = "clarify"
 def reduce_current_step(left: str, right: str) -> str:
     """合并并行节点的状态步骤描述，避免并发冲突"""
     if not left:
@@ -64,6 +68,8 @@ class AgentState(TypedDict, total=False):
     task_id: Optional[int]
     session_id: str
     user_message: str  # 当前用户输入
+    current_module_id: Optional[int]  # 前端传入的当前正在学习的模块ID
+    current_module_title: Optional[str]  # 前端传入的模块标题
 
     # ==================== 对话上下文 ====================
     chat_history: List[Dict[str, str]]  # [{"role": "user"/"assistant", "content": "..."}]
@@ -74,6 +80,7 @@ class AgentState(TypedDict, total=False):
     next_node: str  # 下一个要执行的节点
     needs_human_confirm: bool  # 是否需要用户确认
     human_feedback: Optional[str]  # 用户反馈内容
+    resource_type: Optional[str]  # 生成类型资源时的具体类型(podcast, mindmap等)
 
     # ==================== 用户画像 ====================
     user_profile: Dict[str, Any]  # 用户画像数据

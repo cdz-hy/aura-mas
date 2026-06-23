@@ -145,11 +145,9 @@
 
       <!-- Input -->
       <div class="px-6 py-4 border-t border-navy-100/50 bg-white">
-        <form @submit.prevent="sendMessage" class="flex gap-3">
-          <input
+        <form @submit.prevent="sendMessage" class="flex gap-3 items-end">
+          <AutoGrowTextarea
             v-model="inputText"
-            type="text"
-            class="input-field flex-1"
             :placeholder="store.streaming ? 'AI回复中...' : store.awaitingConfirmation ? '输入补充说明或直接发送确认...' : '输入你的问题...'"
             :disabled="store.streaming"
           />
@@ -178,6 +176,7 @@ import { useRoute } from 'vue-router'
 import { parseMarkdown } from '@/utils/markdown'
 import { useChatStore } from '@/stores/chat'
 import ChatSessionSidebar from '@/components/chat/ChatSessionSidebar.vue'
+import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
 
 const route = useRoute()
 const planId = route.params.id as string

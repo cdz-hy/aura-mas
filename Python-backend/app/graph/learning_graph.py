@@ -15,8 +15,9 @@ from app.agents.schemas import (
     NODE_ANIMATION_SKILL_GENERATOR,
     NODE_PROFILE_MAINTAINER, NODE_HUMAN_CONFIRM,
     NODE_REVIEW_ORCHESTRATE, NODE_REVIEWER, NODE_CONTENT_ORCHESTRATOR,
+    NODE_WAIT_USER_REPLY,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
-    INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP,
+    INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP, INTENT_CLARIFY,
 )
 from app.agents.controller import controller_node
 from app.agents.task_decomposer import task_decomposer_node
@@ -386,7 +387,8 @@ def build_learning_graph() -> StateGraph:
     graph.add_node(NODE_ANIMATION_SKILL_GENERATOR, animation_skill_generator_node)
     graph.add_node(NODE_PROFILE_MAINTAINER, profile_maintainer_node)
     graph.add_node(NODE_HUMAN_CONFIRM, _human_confirm_node)
-    logger.info("已注册 14 个节点")
+    graph.add_node(NODE_WAIT_USER_REPLY, wait_user_reply_node)
+    logger.info("已注册 15 个节点")
 
     # 设置入口
     graph.set_entry_point(NODE_CONTROLLER)
@@ -405,6 +407,7 @@ def build_learning_graph() -> StateGraph:
             NODE_RESOURCE_TYPE_GENERATOR: NODE_RESOURCE_TYPE_GENERATOR,
             NODE_ANIMATION_SKILL_GENERATOR: NODE_ANIMATION_SKILL_GENERATOR,
             NODE_HUMAN_CONFIRM: NODE_HUMAN_CONFIRM,
+            NODE_WAIT_USER_REPLY: NODE_WAIT_USER_REPLY,
             END: END,
         }
     )
@@ -430,6 +433,9 @@ def build_learning_graph() -> StateGraph:
             END: END,
         }
     )
+
+    # 追问挂起 -> 回到主控继续 ReAct
+    graph.add_edge(NODE_WAIT_USER_REPLY, NODE_CONTROLLER)
 
     # RAG 检索 -> 编排与审查分支（或资源自主生成）
     graph.add_conditional_edges(
@@ -583,6 +589,16 @@ def _human_confirm_node(state: AgentState) -> Dict[str, Any]:
     }
 
 
+# ==================== 追问挂起节点 ====================
+
+def wait_user_reply_node(state: AgentState) -> Dict[str, Any]:
+    """追问挂起节点 - 用于主控 ReAct 过程中需要追问用户时暂停图执行"""
+    logger.info(f"  [追问挂起节点] 等待用户回复追问内容，流程暂停")
+    return {
+        "current_step": "等待用户回复追问内容",
+        "iteration_count": state.get("iteration_count", 0) + 1,
+    }
+
 # ==================== 全局图实例与编译 ====================
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
@@ -625,6 +641,6 @@ def get_learning_graph():
         graph = build_learning_graph()
         _learning_graph = graph.compile(
             checkpointer=_checkpointer,
-            interrupt_before=[NODE_HUMAN_CONFIRM]
+            interrupt_before=[NODE_HUMAN_CONFIRM, NODE_WAIT_USER_REPLY]
         )
     return _learning_graph

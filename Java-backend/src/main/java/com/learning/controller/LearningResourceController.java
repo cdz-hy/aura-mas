@@ -7,6 +7,7 @@ import com.learning.service.LearningResourceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,6 +37,15 @@ public class LearningResourceController {
     @PostMapping
     public Result<LearningResource> createResource(@RequestBody LearningResource resource) {
         return Result.success(resourceService.createResource(resource));
+    }
+
+    @Operation(summary = "删除学习资源")
+    @DeleteMapping("/{resourceId}")
+    public Result<Void> deleteResource(Authentication authentication,
+                                         @PathVariable Long resourceId) {
+        Long userId = (Long) authentication.getPrincipal();
+        resourceService.deleteResource(resourceId, userId);
+        return Result.success();
     }
 
     @Operation(summary = "更新资源内容(前端调用)")

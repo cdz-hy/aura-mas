@@ -116,11 +116,10 @@
 
     <!-- Input bar -->
     <div class="px-4 py-3 border-t border-purple-100/50 bg-white">
-      <form @submit.prevent="handleSend()" class="flex gap-2">
-        <input
+      <form @submit.prevent="handleSend()" class="flex gap-2 items-end">
+        <AutoGrowTextarea
           v-model="inputText"
-          type="text"
-          class="flex-1 px-4 py-2 text-sm border border-purple-200 rounded-xl outline-none focus:border-purple-400 transition-colors"
+          textarea-class="flex-1 px-4 py-2 text-sm border border-purple-200 rounded-xl outline-none focus:border-purple-400 transition-colors resize-none overflow-y-auto leading-relaxed"
           placeholder="输入你的问题..."
           :disabled="tutor.loading.value"
         />
@@ -149,6 +148,7 @@ import { parseMarkdown } from '@/utils/markdown'
 import { felderAxisLabel } from '@/types/profile'
 import type { StudentProfile } from '@/types/profile'
 import tutorGif from '@/image/智能辅导.gif'
+import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
 
 const uiStore = useUiStore()
 const route = useRoute()

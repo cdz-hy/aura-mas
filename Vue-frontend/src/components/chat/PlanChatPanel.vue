@@ -314,11 +314,9 @@
     <!-- Input bar -->
     <div class="px-6 py-3 border-t border-navy-100/50 bg-white">
       <!-- Assistant input -->
-      <form v-if="mode === 'assistant'" @submit.prevent="handleSendAssistant()" class="flex gap-3">
-        <input
+      <form v-if="mode === 'assistant'" @submit.prevent="handleSendAssistant()" class="flex gap-3 items-end">
+        <AutoGrowTextarea
           v-model="assistantInput"
-          type="text"
-          class="input-field flex-1"
           :placeholder="chatStore.streaming ? 'AI回复中...' : chatStore.awaitingConfirmation ? '输入补充说明...' : '描述你想学习的内容...'"
           :disabled="chatStore.streaming"
         />
@@ -327,11 +325,9 @@
         </button>
       </form>
       <!-- Tutor input -->
-      <form v-else @submit.prevent="handleSendTutor()" class="flex gap-3">
-        <input
+      <form v-else @submit.prevent="handleSendTutor()" class="flex gap-3 items-end">
+        <AutoGrowTextarea
           v-model="tutorInput"
-          type="text"
-          class="input-field flex-1"
           placeholder="输入你的问题..."
           :disabled="tutor.loading.value"
         />
@@ -405,6 +401,7 @@ import { parseMarkdown } from '@/utils/markdown'
 import { useTutor, pickFollowUp } from '@/composables/useTutor'
 import type { TutorContext } from '@/composables/useTutor'
 import tutorGif from '@/image/智能辅导.gif'
+import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
 
 const props = defineProps<{
   planId: string

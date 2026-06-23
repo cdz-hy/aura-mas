@@ -231,7 +231,17 @@ def _generate_anomaly_clarification(
     ]
 
     try:
-        result = llm.chat_json(messages, max_tokens=512)
+        sse_cb = state.get("sse_callback")
+        
+        def _on_chunk(chunk: str):
+            if sse_cb:
+                try:
+                    sse_cb(f'data: {json.dumps({"type": "stream_text", "content": chunk}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
+
+        logger.info(f"  [简答智能体] 正在流式生成异常追问回复...")
+        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, stream_field="response", max_tokens=512)
         from app.utils.token_recorder import record_from_mimo
         record_from_mimo(llm, state.get("user_id", 0), "anomaly_clarify", state.get("task_id"))
         response = result.get("response", f"抱歉，我在处理你的请求时遇到了一些困惑。能否请你再详细说明一下你的需求？")
