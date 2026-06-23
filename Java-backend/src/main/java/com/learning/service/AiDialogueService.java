@@ -124,6 +124,33 @@ public class AiDialogueService {
     }
 
     @Transactional
+    public void deleteUserDialogue(Long dialogueId, Long userId) {
+        AiDialogue dialogue = dialogueMapper.selectById(dialogueId);
+        if (dialogue != null && dialogue.getUserId().equals(userId)) {
+            dialogue.setIsDeleted(1);
+            dialogue.setDeletedAt(LocalDateTime.now());
+            dialogueMapper.updateById(dialogue);
+        }
+    }
+
+    @Transactional
+    public void deleteUserDialogueBatch(List<Long> dialogueIds, Long userId) {
+        if (dialogueIds == null || dialogueIds.isEmpty()) return;
+        
+        LambdaQueryWrapper<AiDialogue> wrapper = new LambdaQueryWrapper<AiDialogue>()
+                .in(AiDialogue::getId, dialogueIds)
+                .eq(AiDialogue::getUserId, userId);
+        
+        List<AiDialogue> dialogues = dialogueMapper.selectList(wrapper);
+        LocalDateTime now = LocalDateTime.now();
+        for (AiDialogue d : dialogues) {
+            d.setIsDeleted(1);
+            d.setDeletedAt(now);
+            dialogueMapper.updateById(d);
+        }
+    }
+
+    @Transactional
     public void updateConversationContext(Long dialogueId, String conversationContext) {
         AiDialogue dialogue = dialogueMapper.selectById(dialogueId);
         if (dialogue != null) {

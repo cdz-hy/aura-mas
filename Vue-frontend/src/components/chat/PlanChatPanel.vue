@@ -50,6 +50,16 @@
             </span>
           </button>
           <button
+            class="p-2 rounded-lg transition-colors relative"
+            :class="isManageMode ? 'bg-indigo-100 text-indigo-700' : 'bg-navy-50 text-navy-500 hover:bg-navy-100'"
+            @click="toggleManageMode()"
+            title="管理消息"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <button
             class="p-2 rounded-lg bg-navy-50 text-navy-500 hover:bg-navy-100 transition-colors"
             @click="handleNewSession()"
             title="新建会话"
@@ -147,7 +157,12 @@
         </div>
 
         <!-- Message list -->
-        <div v-for="(msg, i) in chatStore.messages" :key="i" class="flex gap-3" :class="msg.role === 'user' ? 'justify-end' : ''">
+        <div v-for="(msg, i) in chatStore.messages" :key="i" class="flex gap-3 group" :class="msg.role === 'user' ? 'justify-end' : ''">
+          <!-- Checkbox for manage mode -->
+          <div v-if="isManageMode && msg.id" class="flex items-center" :class="msg.role === 'user' ? 'order-first ml-3' : 'mr-3'">
+            <input type="checkbox" :value="msg.id" v-model="selectedMessageIds" class="w-4 h-4 text-navy-600 rounded border-gray-300 focus:ring-navy-500 cursor-pointer" />
+          </div>
+
           <template v-if="msg.role === 'assistant'">
             <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-navy-500 to-navy-700 flex items-center justify-center flex-shrink-0">
               <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -280,7 +295,12 @@
         </div>
 
         <!-- Message list -->
-        <div v-for="(msg, i) in tutor.messages.value" :key="i" class="tutor-msg-row" :class="msg.role">
+        <div v-for="(msg, i) in tutor.messages.value" :key="i" class="tutor-msg-row group" :class="msg.role">
+          <!-- Checkbox for manage mode -->
+          <div v-if="isManageMode && msg.id" class="flex items-center" :class="msg.role === 'user' ? 'order-first ml-2' : 'mr-2'">
+            <input type="checkbox" :value="msg.id" v-model="selectedMessageIds" class="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500 cursor-pointer" />
+          </div>
+
           <div v-if="msg.role === 'assistant'" class="tutor-avatar">
             <img :src="tutorGif" alt="" />
           </div>
@@ -313,8 +333,21 @@
 
     <!-- Input bar -->
     <div class="px-6 py-3 border-t border-navy-100/50 bg-white">
+      <!-- Manage actions bar -->
+      <div v-if="isManageMode" class="flex items-center justify-between w-full">
+        <span class="text-sm text-navy-600 font-medium">已选择 {{ selectedMessageIds.length }} 条消息</span>
+        <div class="flex gap-2">
+          <button type="button" class="px-4 py-2 text-sm font-medium text-navy-600 bg-navy-50 rounded-xl hover:bg-navy-100 transition-colors" @click="toggleManageMode()">
+            取消
+          </button>
+          <button type="button" class="px-4 py-2 text-sm font-medium text-white bg-red-500 rounded-xl hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" :disabled="selectedMessageIds.length === 0" @click="deleteSelectedMessages()">
+            删除选中
+          </button>
+        </div>
+      </div>
+
       <!-- Assistant input -->
-      <form v-if="mode === 'assistant'" @submit.prevent="handleSendAssistant()" class="flex gap-3 items-end">
+      <form v-else-if="mode === 'assistant'" @submit.prevent="handleSendAssistant()" class="flex gap-3 items-end w-full">
         <AutoGrowTextarea
           v-model="assistantInput"
           :placeholder="chatStore.streaming ? 'AI回复中...' : chatStore.awaitingConfirmation ? '输入补充说明...' : '描述你想学习的内容...'"
@@ -466,6 +499,28 @@ const assistantInput = ref('')
 const tutorInput = ref('')
 const showModifyInput = ref(false)
 const modifyText = ref('')
+const isManageMode = ref(false)
+const selectedMessageIds = ref<number[]>([])
+
+function toggleManageMode() {
+  isManageMode.value = !isManageMode.value
+  if (!isManageMode.value) {
+    selectedMessageIds.value = []
+  }
+}
+
+async function deleteSelectedMessages() {
+  if (selectedMessageIds.value.length === 0) return
+  const ids = [...selectedMessageIds.value]
+  selectedMessageIds.value = []
+  isManageMode.value = false
+  
+  if (props.mode === 'tutor') {
+    await tutor.deleteMessages(ids)
+  } else {
+    await chatStore.deleteMessages(ids)
+  }
+}
 
 const quickQuestions = [
   '我想学习 Python 基础',
@@ -641,6 +696,8 @@ function detectResourceType(msg: string): string | null {
 
 // Load tutor sessions when switching to tutor mode
 watch(() => props.mode, (newMode) => {
+  isManageMode.value = false
+  selectedMessageIds.value = []
   if (newMode === 'tutor') {
     tutor.loadSessions()
     nextTick(() => scrollBottom())

@@ -115,4 +115,23 @@ public class AiDialogueController {
         dialogueService.linkSessionToPlan(sessionId, planId);
         return Result.success();
     }
+
+    @Operation(summary = "删除单条消息")
+    @DeleteMapping("/api/dialogue/{id}")
+    public Result<Void> deleteMessage(Authentication authentication, @PathVariable Long id) {
+        Long userId = (Long) authentication.getPrincipal();
+        dialogueService.deleteUserDialogue(id, userId);
+        return Result.success();
+    }
+
+    @Operation(summary = "批量删除消息")
+    @DeleteMapping("/api/dialogue/batch")
+    public Result<Void> deleteMessages(Authentication authentication, @RequestBody Map<String, List<Long>> body) {
+        Long userId = (Long) authentication.getPrincipal();
+        List<Long> ids = body.get("ids");
+        if (ids != null && !ids.isEmpty()) {
+            dialogueService.deleteUserDialogueBatch(ids, userId);
+        }
+        return Result.success();
+    }
 }

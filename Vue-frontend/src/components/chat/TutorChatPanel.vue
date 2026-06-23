@@ -9,6 +9,16 @@
       <div class="flex items-center gap-1.5">
         <button
           class="p-2 rounded-lg transition-colors relative"
+          :class="isManageMode ? 'bg-indigo-100 text-indigo-700' : 'bg-purple-50 text-purple-500 hover:bg-purple-100'"
+          @click="toggleManageMode()"
+          title="管理消息"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <button
+          class="p-2 rounded-lg transition-colors relative"
           :class="showSessionList ? 'bg-purple-100 text-purple-700' : 'bg-purple-50 text-purple-500 hover:bg-purple-100'"
           @click="showSessionList = !showSessionList"
           title="会话历史"
@@ -86,7 +96,12 @@
       </div>
 
       <!-- Message list -->
-      <div v-for="(msg, i) in tutor.messages.value" :key="i" class="tutor-msg-row" :class="msg.role">
+      <div v-for="(msg, i) in tutor.messages.value" :key="i" class="tutor-msg-row group" :class="msg.role">
+        <!-- Checkbox for manage mode -->
+        <div v-if="isManageMode && msg.id" class="flex items-center" :class="msg.role === 'user' ? 'order-first ml-2' : 'mr-2'">
+          <input type="checkbox" :value="msg.id" v-model="selectedMessageIds" class="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500 cursor-pointer" />
+        </div>
+
         <div v-if="msg.role === 'assistant'" class="tutor-avatar">
           <img :src="tutorGif" alt="" />
         </div>
@@ -116,7 +131,20 @@
 
     <!-- Input bar -->
     <div class="px-4 py-3 border-t border-purple-100/50 bg-white">
-      <form @submit.prevent="handleSend()" class="flex gap-2 items-end">
+      <!-- Manage actions bar -->
+      <div v-if="isManageMode" class="flex items-center justify-between w-full">
+        <span class="text-sm text-purple-600 font-medium">已选择 {{ selectedMessageIds.length }} 条消息</span>
+        <div class="flex gap-2">
+          <button type="button" class="px-4 py-2 text-sm font-medium text-purple-600 bg-purple-50 rounded-xl hover:bg-purple-100 transition-colors" @click="toggleManageMode()">
+            取消
+          </button>
+          <button type="button" class="px-4 py-2 text-sm font-medium text-white bg-red-500 rounded-xl hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" :disabled="selectedMessageIds.length === 0" @click="deleteSelectedMessages()">
+            删除选中
+          </button>
+        </div>
+      </div>
+
+      <form v-else @submit.prevent="handleSend()" class="flex gap-2 items-end">
         <AutoGrowTextarea
           v-model="inputText"
           textarea-class="flex-1 px-4 py-2 text-sm border border-purple-200 rounded-xl outline-none focus:border-purple-400 transition-colors resize-none overflow-y-auto leading-relaxed"
@@ -283,6 +311,23 @@ const messagesContainer = ref<HTMLElement>()
 const inputText = ref('')
 const showSessionList = ref(false)
 const currentFollowUp = ref('有什么不懂的地方吗，我可以帮你哦')
+const isManageMode = ref(false)
+const selectedMessageIds = ref<number[]>([])
+
+function toggleManageMode() {
+  isManageMode.value = !isManageMode.value
+  if (!isManageMode.value) {
+    selectedMessageIds.value = []
+  }
+}
+
+async function deleteSelectedMessages() {
+  if (selectedMessageIds.value.length === 0) return
+  const ids = [...selectedMessageIds.value]
+  selectedMessageIds.value = []
+  isManageMode.value = false
+  await tutor.deleteMessages(ids)
+}
 
 // Update follow-up hints periodically
 watch(() => tutor.messages.value.length, () => {

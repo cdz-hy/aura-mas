@@ -44,7 +44,7 @@ export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([])
   const activeSessionId = ref(localStorage.getItem('chat_activeSessionId') || '')
   const sessionsLoading = ref(false)
-  const messages = ref<Array<{ role: string; content: string; type?: string; breakdown?: any; resources?: GeneratedResourceRef[] }>>([])
+  const messages = ref<Array<{ id?: number; role: string; content: string; type?: string; breakdown?: any; resources?: GeneratedResourceRef[] }>>([])
 
   // ─── 多会话并发：按 sessionId 隔离流式状态 ───
   const sessionStreams = new Map<string, SessionStreamState>()
@@ -272,16 +272,16 @@ export const useChatStore = defineStore('chat', () => {
     if (m.intentType === 'task_breakdown') {
       try {
         const breakdown = JSON.parse(m.conversationText)
-        return { role: 'assistant' as const, content: '学习路径已生成，请确认', type: 'confirm', breakdown }
+        return { id: m.id, role: 'assistant' as const, content: '学习路径已生成，请确认', type: 'confirm', breakdown }
       } catch {}
     }
     if (m.intentType === 'resource_generated') {
       try {
         const data = JSON.parse(m.conversationText)
-        return { role: 'assistant' as const, content: data.summary || '学习资源已生成', type: 'resource_generated', resources: data.resources || [] }
+        return { id: m.id, role: 'assistant' as const, content: data.summary || '学习资源已生成', type: 'resource_generated', resources: data.resources || [] }
       } catch {}
     }
-    return { role: m.dialogueType === 'USER' ? 'user' as const : 'assistant' as const, content: m.conversationText }
+    return { id: m.id, role: m.dialogueType === 'USER' ? 'user' as const : 'assistant' as const, content: m.conversationText }
   }
 
   async function loadHistoryByPlan(planId: string) {
@@ -389,6 +389,26 @@ export const useChatStore = defineStore('chat', () => {
       }
     } catch (e) {
       console.error('Failed to delete session:', e)
+    }
+  }
+
+  async function deleteMessageAction(id: number) {
+    try {
+      const { deleteMessage } = await import('@/api/chat')
+      await deleteMessage(id)
+      messages.value = messages.value.filter(m => m.id !== id)
+    } catch (e) {
+      console.error('Failed to delete message:', e)
+    }
+  }
+
+  async function deleteMessagesAction(ids: number[]) {
+    try {
+      const { deleteMessages } = await import('@/api/chat')
+      await deleteMessages(ids)
+      messages.value = messages.value.filter(m => m.id === undefined || !ids.includes(m.id))
+    } catch (e) {
+      console.error('Failed to delete messages:', e)
     }
   }
 
@@ -823,6 +843,8 @@ export const useChatStore = defineStore('chat', () => {
     newSession,
     selectSession,
     deleteSession,
+    deleteMessage: deleteMessageAction,
+    deleteMessages: deleteMessagesAction,
     sendMessage,
     confirmBreakdown,
     stopGeneration,

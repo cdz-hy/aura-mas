@@ -6,6 +6,7 @@ import { PYTHON_AI_BASE } from '@/api/request'
 import { useAuthStore } from './auth'
 
 export interface TutorMessage {
+  id?: number
   role: 'user' | 'assistant'
   content: string
 }
@@ -172,6 +173,7 @@ export const useTutorStore = defineStore('tutor', () => {
       const res = await getSessionMessages(sessionId, 500)
       const dbMessages = res.data || []
       messages.value = dbMessages.map((m: any) => ({
+        id: m.id,
         role: m.dialogueType === 'USER' ? 'user' as const : 'assistant' as const,
         content: m.conversationText || '',
       }))
@@ -296,6 +298,26 @@ export const useTutorStore = defineStore('tutor', () => {
     loading.value = false
   }
 
+  async function deleteMessageAction(id: number) {
+    try {
+      const { deleteMessage } = await import('@/api/chat')
+      await deleteMessage(id)
+      messages.value = messages.value.filter(m => m.id !== id)
+    } catch (e) {
+      console.error('[TutorStore] 删除消息失败:', e)
+    }
+  }
+
+  async function deleteMessagesAction(ids: number[]) {
+    try {
+      const { deleteMessages } = await import('@/api/chat')
+      await deleteMessages(ids)
+      messages.value = messages.value.filter(m => m.id === undefined || !ids.includes(m.id))
+    } catch (e) {
+      console.error('[TutorStore] 批量删除消息失败:', e)
+    }
+  }
+
   return {
     // State
     contextPlanId,
@@ -319,5 +341,7 @@ export const useTutorStore = defineStore('tutor', () => {
     sendMessage,
     closeConnection,
     stopGeneration,
+    deleteMessage: deleteMessageAction,
+    deleteMessages: deleteMessagesAction,
   }
 })

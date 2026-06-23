@@ -25,6 +25,16 @@ export function deleteSession(sessionId: string) {
   return request.delete<any, { data: null }>(`/dialogue/session/${sessionId}`)
 }
 
+export function deleteMessage(id: number) {
+  return request.delete<any, { data: null }>(`/dialogue/${id}`)
+}
+
+export function deleteMessages(ids: number[]) {
+  return request.delete<any, { data: null }>(`/dialogue/batch`, {
+    data: { ids }
+  })
+}
+
 export function linkSessionToPlan(sessionId: string, planId: number) {
   return request.put<any, { data: null }>(`/dialogue/session/${sessionId}/link-plan/${planId}`)
 }
