@@ -11,6 +11,8 @@ from app.agents.enhanced_search import (
     execute_actions_parallel
 )
 from app.utils.token_recorder import record_from_mimo
+from app.utils import stream_registry
+import json
 
 logger = logging.getLogger("agents.task_decomposer")
 
@@ -31,6 +33,32 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
     if existing_plan:
         logger.info(f"  已有学习路径: {existing_plan.get('title', '未命名')}")
     logger.info(f"  用户画像: {'有' if user_profile else '无'}")
+
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+    
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "任务分解智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在分析学习目标，规划个性化学习路径...")
 
     llm = get_task_decomposer_llm()
 
@@ -88,7 +116,8 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
             ]
 
             # 调用 LLM 进行 ReAct 决策
-            react_result = llm.chat_json(messages)
+            _emit_thinking_start("任务分解智能体", "")
+            react_result = llm.chat_json_stream(messages, on_chunk=_emit_thinking_chunk, stream_field="thought")
             logger.debug(f"  [ReAct] LLM 原始返回: {str(react_result)[:300]}")
 
             if not isinstance(react_result, dict):
@@ -107,6 +136,7 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
 
             if decision == "finish" or not actions:
                 logger.info(f"  [ReAct] 结束自主搜索规划")
+                _emit_thinking("决策完成: 结束自主搜索，开始生成学习路径大纲")
                 break
 
             # 验证动作格式
@@ -116,6 +146,10 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
                     action_type = action.get("action", "")
                     if action_type in ["search", "extract"]:
                         valid_actions.append(action)
+                        if action_type == "search":
+                            _emit_thinking(f"调用工具: 网页搜索 (关键词: {action.get('query', '')})")
+                        elif action_type == "extract":
+                            _emit_thinking(f"调用工具: 提取网页 (URL: {action.get('url', '')})")
 
             if not valid_actions:
                 break
@@ -133,6 +167,7 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
                     images = result.get("images", [])
                     if results or images:
                         history_tracker.add_search_result(query, results, images)
+                    _emit_thinking(f"网页搜索完成: 找到 {len(results)} 条相关结果，{len(images)} 张图片")
                 elif action_type == "extract":
                     url = result.get("url", "")
                     title = result.get("title", "")
@@ -140,6 +175,9 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
                     success = result.get("success", False)
                     if success and content:
                         history_tracker.add_extracted_page(url, title, content)
+                        _emit_thinking(f"提取网页完成: 成功读取页面「{title}」({len(content)} 字符)")
+                    else:
+                        _emit_thinking(f"提取网页失败: 无法读取该页面")
 
     except Exception as e:
         logger.warning(f"  [任务分解智能体] ReAct 搜索规划异常: {str(e)}，降级为直接生成")
@@ -225,7 +263,8 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [任务分解智能体] 正在调用 LLM 生成学习路径...")
-        result = llm.chat_json(messages)
+        _emit_thinking_start("任务分解智能体", "")
+        result = llm.chat_json_stream(messages, on_chunk=_emit_thinking_chunk, stream_field="analysis")
         record_from_mimo(llm, state.get("user_id", 0), "task_decomposition", state.get("task_id"))
 
         modules = result.get("modules", [])

@@ -8,11 +8,13 @@ from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_profile_maintainer_llm
 from app.prompts import PROFILE_MAINTAINER_PROMPT
 from app.utils.token_recorder import record_from_mimo
+from app.utils import stream_registry
 from app.utils.profile_utils import (
     ensure_learning_behavior_fields,
     update_learning_behavior,
     map_dimension_name,
 )
+import json
 
 logger = logging.getLogger("agents.profile_maintainer")
 
@@ -29,6 +31,32 @@ def profile_maintainer_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  [画像维护智能体] 开始处理")
     logger.info(f"  用户输入: {user_message[:80]}")
     logger.info(f"  有答题数据: {'是' if quiz_result else '否'}")
+
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "画像维护智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在分析对话，更新你的学习画像...")
 
     llm = get_profile_maintainer_llm()
 
@@ -78,7 +106,8 @@ def profile_maintainer_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [画像维护智能体] 正在调用 LLM 分析画像...")
-        result = llm.chat_json(messages, max_tokens=2048)
+        _emit_thinking_start("画像维护智能体", "")
+        result = llm.chat_json_stream(messages, on_chunk=_emit_thinking_chunk, stream_field="analysis", max_tokens=2048)
         record_from_mimo(llm, state.get("user_id", 0), "profile_maintenance", state.get("task_id"))
         should_update = result.get("should_update", False)
         updates = result.get("updates", {})

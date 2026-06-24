@@ -10,6 +10,7 @@ from app.agents.schemas import AgentState, NODE_CONTROLLER
 from app.agents.llm_factory import get_simple_answer_llm
 from app.prompts import SIMPLE_ANSWER_PROMPT
 from app.utils.token_recorder import record_from_mimo
+from app.utils import stream_registry
 from app.utils.profile_utils import map_dimension_name
 
 logger = logging.getLogger("agents.simple_answer")
@@ -62,6 +63,25 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  [简答智能体] 开始处理")
     logger.info(f"  用户输入: {user_message[:100]}")
 
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "简答智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在理解你的问题并组织回答...")
+
     # 检查是否为异常追问模式：智能体发现内容偏离，需要向用户澄清
     is_anomaly_clarify = state.get("anomaly_clarify", False)
     anomaly_reason = state.get("anomaly_reason", "")
@@ -102,11 +122,12 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
     try:
         logger.info(f"  [简答智能体] 正在调用 LLM 生成回复（流式）...")
         sse_cb = state.get("sse_callback")
+        _emit_thinking_start("简答智能体", "")
 
         def _on_chunk(chunk: str):
             if sse_cb:
                 try:
-                    sse_cb(f'data: {json.dumps({"type": "stream_text", "content": chunk}, ensure_ascii=False)}\n\n')
+                    sse_cb(f'data: {json.dumps({"type": "chunk", "content": chunk}, ensure_ascii=False)}\n\n')
                 except Exception:
                     pass
 
@@ -232,11 +253,20 @@ def _generate_anomaly_clarification(
 
     try:
         sse_cb = state.get("sse_callback")
-        
+
+        def _emit_thinking_start_inner(agent: str, prefix: str = ""):
+            if sse_cb:
+                try:
+                    sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
+
+        _emit_thinking_start_inner("简答智能体", "")
+
         def _on_chunk(chunk: str):
             if sse_cb:
                 try:
-                    sse_cb(f'data: {json.dumps({"type": "stream_text", "content": chunk}, ensure_ascii=False)}\n\n')
+                    sse_cb(f'data: {json.dumps({"type": "chunk", "content": chunk}, ensure_ascii=False)}\n\n')
                 except Exception:
                     pass
 

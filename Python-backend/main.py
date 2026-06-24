@@ -15,6 +15,8 @@ from app.core.config import settings
 from app.core.reload import get_reload_dirs
 from app.services.mq_consumer import mq_consumer
 from app.services.cache_consumer import cache_consumer
+from app.graph.learning_graph import get_learning_graph
+from app.services.cache import _get_redis
 import uvicorn
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -46,6 +48,12 @@ async def lifespan(app: FastAPI):
     logger.info("正在启动 MQ 消费者...")
     await mq_consumer.start()
     await cache_consumer.start()
+
+    # 预热：提前构建 LangGraph 图 + 检查 Redis，避免首次请求卡顿
+    logger.info("正在预热系统资源...")
+    _get_redis()  # 触发一次 Redis 连接检查，失败则永久降级
+    get_learning_graph()  # 提前构建工作流图单例
+    logger.info("系统资源预热完成")
 
     # 后台保活任务
     keepalive_task = None

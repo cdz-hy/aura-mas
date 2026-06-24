@@ -6,6 +6,27 @@ SSE 桥接层 - 将现有 LangGraph 的事件类型翻译为前端期望的 SSE 
 import json
 from typing import Dict, Any, List, Generator
 
+# agent 英文名 -> 中文名 映射表，统一前端显示名称
+AGENT_NAME_MAP = {
+    "controller": "主控智能体",
+    "task_decomposer": "任务分解智能体",
+    "rag_retriever": "RAG检索智能体",
+    "reviewer": "审查智能体",
+    "content_orchestrator": "内容编排智能体",
+    "resource_generator": "资源生成智能体",
+    "animation_skill_generator": "动画生成智能体",
+    "resource_type_generator": "类型资源生成智能体",
+    "quiz_generator": "题目生成智能体",
+    "quiz_grader": "题目判定智能体",
+    "simple_answer": "简答智能体",
+    "profile_maintainer": "画像维护智能体",
+}
+
+
+def _map_agent_name(agent: str) -> str:
+    """将英文 agent 名称映射为中文，已是中文则原样返回"""
+    return AGENT_NAME_MAP.get(agent, agent)
+
 
 def graph_event_to_sse(evt: Dict[str, Any]) -> str:
     """
@@ -19,17 +40,22 @@ def graph_event_to_sse(evt: Dict[str, Any]) -> str:
 
     # 映射表: graph event_type -> frontend SSE type
     if event_type == "content":
-        # content 事件 -> chunk (流式文本增量)
+        # content 事件 -> node_content (仅供后端持久化拦截，前端静默忽略)
         text = data.get("text", "")
         if text:
-            return _sse({"type": "chunk", "content": text})
+            return _sse({"type": "node_content", "content": text})
         return ""
 
     elif event_type == "thinking":
-        # thinking 事件 -> progress (进度日志)
-        step = data.get("step", "") or evt.get("step_description", "")
-        if step:
-            return _sse({"type": "progress", "content": step})
+        # thinking 事件 -> thinking
+        # 如果 data.message 存在，使用 data.message，否则回退到 step / step_description
+        content = data.get("message", "") or data.get("step", "") or evt.get("step_description", "")
+        if content:
+            return _sse({
+                "type": "thinking", 
+                "agent": _map_agent_name(agent), 
+                "content": content
+            })
         return ""
 
     elif event_type == "task_breakdown":

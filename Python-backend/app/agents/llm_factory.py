@@ -223,10 +223,13 @@ class MIMOClient:
         messages: list,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        on_reasoning: Optional[Any] = None,
     ) -> Generator[str, None, None]:
-        """流式对话 - 返回增量文本（含思维链 reasoning_content）"""
+        """流式对话 - 返回增量文本，可通过 on_reasoning 回调获取思维链"""
         payload, _ = self._build_payload(
             messages, stream=True, temperature=temperature, max_tokens=max_tokens,
+            response_format=response_format,
         )
 
         headers = {
@@ -261,11 +264,13 @@ class MIMOClient:
                     if not choices:
                         continue
                     delta = choices[0].get("delta", {})
-                    # 思维链内容（reasoning_content）不对外输出，仅调试时记录
+                    # 思维链内容（reasoning_content）：通过回调实时推送
                     reasoning = delta.get("reasoning_content", "")
-                    if reasoning:
-                        import logging
-                        logging.getLogger("llm_factory").debug(f"[思维链] {reasoning[:100]}")
+                    if reasoning and on_reasoning:
+                        try:
+                            on_reasoning(reasoning)
+                        except Exception:
+                            pass
                     # 只输出正式内容
                     content = delta.get("content", "")
                     if content:
@@ -290,6 +295,7 @@ class MIMOClient:
         self,
         messages: list,
         on_chunk: Optional[Any] = None,
+        on_reasoning: Optional[Any] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stream_field: Optional[str] = None,
@@ -313,7 +319,7 @@ class MIMOClient:
         field_escaped = False
         field_buf = ""
 
-        for chunk in self.chat_stream(messages, temperature=temperature, max_tokens=max_tokens):
+        for chunk in self.chat_stream(messages, temperature=temperature, max_tokens=max_tokens, on_reasoning=on_reasoning):
             accumulated += chunk
             if on_chunk:
                 try:
@@ -362,14 +368,18 @@ class MIMOClient:
         messages: list,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        on_reasoning: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """对话并解析 JSON 返回，使用 response_format 强制 JSON 输出"""
+        """对话并解析 JSON 返回，使用 response_format 强制 JSON 输出，支持思维链流式回调"""
         logger = __import__('logging').getLogger("llm_factory")
         json_format = {"type": "json_object"}
 
         try:
-            raw = self.chat(messages, temperature=temperature, max_tokens=max_tokens,
-                            response_format=json_format)
+            # 使用 chat_stream 流式调用，支持 on_reasoning 回调
+            raw = ""
+            for chunk in self.chat_stream(messages, temperature=temperature, max_tokens=max_tokens,
+                                          response_format=json_format, on_reasoning=on_reasoning):
+                raw += chunk
         except Exception as e:
             logger.error(f"LLM API 调用失败: {str(e)[:300]}")
             raise Exception(f"LLM API 调用失败: {str(e)[:200]}")
@@ -595,7 +605,7 @@ def get_controller_llm() -> MIMOClient:
 
 
 def get_task_decomposer_llm() -> MIMOClient:
-    """任务分解智能体 - pro 模型，启用思维链"""
+    """任务分解智能体 - pro 模型"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=3072,
                       thinking=THINKING_DISABLED)
 
@@ -619,9 +629,9 @@ def get_rag_retriever_llm() -> MIMOClient:
 
 
 def get_content_orchestrator_llm() -> MIMOClient:
-    """内容编排智能体 - 标准模型（mimo-v2.5，131K 上下文），启用思维链"""
+    """内容编排智能体 - 标准模型（mimo-v2.5，131K 上下文）"""
     return MIMOClient(model=MIMOClient.MODEL_STANDARD, temperature=0.5, max_tokens=16384,
-                      thinking=THINKING_ENABLED)
+                      thinking=THINKING_DISABLED)
 
 
 def get_reviewer_llm() -> MIMOClient:
@@ -631,31 +641,31 @@ def get_reviewer_llm() -> MIMOClient:
 
 
 def get_resource_generator_llm() -> MIMOClient:
-    """多模态资源自主生成智能体 - pro 模型，启用思维链"""
+    """多模态资源自主生成智能体 - pro 模型"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=6144,
                       thinking=THINKING_DISABLED)
 
 
 def get_quiz_generator_llm() -> MIMOClient:
-    """题目生成智能体 - pro 模型，启用思维链"""
+    """题目生成智能体 - pro 模型"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=3072,
-                      thinking=THINKING_ENABLED)
+                      thinking=THINKING_DISABLED)
 
 
 def get_resource_type_generator_llm() -> MIMOClient:
-    """多模态类型资源生成智能体 - pro 模型，关闭思维链加速生成，支持 mindmap/summary/code 等结构化输出"""
+    """多模态类型资源生成智能体 - pro 模型，支持 mindmap/summary/code 等结构化输出"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=8192,
                       thinking=THINKING_DISABLED)
 
 
 def get_quiz_grader_llm() -> MIMOClient:
-    """题目判定智能体 - pro 模型，关闭思维链"""
+    """题目判定智能体 - pro 模型"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=1536,
                       thinking=THINKING_DISABLED)
 
 
 def get_profile_maintainer_llm() -> MIMOClient:
-    """画像维护智能体 - pro 模型，关闭思维链"""
+    """画像维护智能体 - pro 模型"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=2048,
                       thinking=THINKING_DISABLED)
 
@@ -667,18 +677,18 @@ def get_compressor_llm() -> MIMOClient:
 
 
 def get_tutor_llm() -> MIMOClient:
-    """智能辅导智能体 - pro 模型，关闭思维链，中等温度"""
+    """智能辅导智能体 - pro 模型，中等温度"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=2048,
                       thinking=THINKING_DISABLED)
 
 def get_video_search_llm() -> MIMOClient:
-    """视频搜索智能体 - pro 模型，关闭思维链"""
+    """视频搜索智能体 - pro 模型"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=8192,
                       thinking=THINKING_DISABLED)
 
 
 def get_animation_skill_generator_llm() -> MIMOClient:
-    """动画技能生成智能体 - pro-speed 模型（高速），专用端点，关闭思维链"""
+    """动画技能生成智能体 - pro-speed 模型（高速），专用端点"""
     return MIMOClient(model=MIMOClient.MODEL_PRO_SPEED, temperature=0.5, max_tokens=8192,
                       thinking=THINKING_DISABLED, base_url=settings.MIMO_BASE_URL_SPEED,
                       api_key=settings.MIMO_API_KEY_SPEED)

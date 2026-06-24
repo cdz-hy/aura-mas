@@ -18,6 +18,7 @@ from app.agents.llm_factory import get_controller_llm
 from app.prompts import CONTROLLER_REACT_PROMPT
 from app.utils.token_recorder import record_from_mimo
 from app.services.db.java_client import java_client
+from app.utils import stream_registry
 import json
 
 logger = logging.getLogger("agents.controller")
@@ -59,6 +60,31 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  [主控智能体] 开始处理 (迭代: {iteration})")
     logger.info(f"  用户输入: {user_message[:100]}")
     logger.info(f"{'='*60}")
+
+    # 实时推送辅助：全程复用
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "主控智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在分析你的需求...")
 
     # 智能体自主异常检测：任何智能体发现内容偏离，中断回到主控，主控转入追问模式
     if state.get("agent_anomaly"):
@@ -331,7 +357,15 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     # ==================== ReAct 思考与工具调用循环 ====================
     MAX_REACT_ROUNDS = 6
     react_history = []
-    
+
+    # 工具中文名映射
+    TOOL_NAME_MAP = {
+        "get_resource_content": "获取资源内容",
+        "get_plan_modules": "获取计划模块列表",
+        "get_user_profile_fields": "获取用户画像",
+        "get_user_quiz_stats": "获取答题统计",
+    }
+
     intent = INTENT_AMBIGUOUS
     reasoning = ""
     managed_learning_goal = None
@@ -344,7 +378,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         react_context = ""
         if react_history:
             react_context = "\n\n## 工具调用记录\n" + "\n".join(react_history)
-            
+
         # 准备 prompt
         messages = [
             {"role": "system", "content": CONTROLLER_REACT_PROMPT.format(max_rounds=MAX_REACT_ROUNDS)},
@@ -352,42 +386,82 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         ]
 
         try:
-            react_result = llm.chat_json(messages)
+            # 流式推送 thought 字段，逐 token 到前端
+            _chunk_emitted = False
+            def _on_thought_chunk(chunk: str):
+                nonlocal _chunk_emitted
+                _chunk_emitted = True
+                _emit_thinking_chunk(chunk)
+
+            _emit_thinking_start("主控智能体", "思考: ")
+            react_result = llm.chat_json_stream(messages, on_chunk=_on_thought_chunk, stream_field="thought")
             record_from_mimo(llm, state.get("user_id", 0), "controller_react", state.get("task_id"))
-            
+
             if not isinstance(react_result, dict):
                 logger.warning(f"  [主控智能体] 返回非字典类型，终止 ReAct")
                 break
 
             thought = react_result.get("thought", "")
             decision = react_result.get("decision", "finish").lower().strip()
-            
+
+            # 降级：如果流式未触发（如 JSON 解析重试走了非流式路径），补推完整 thought
+            if not _chunk_emitted and thought:
+                _emit_thinking_chunk(thought)
+
             logger.info(f"  [主控智能体] 思考: {thought[:100]}...")
 
             if decision == "tool_call":
                 actions = react_result.get("actions", [])
                 logger.info(f"  [主控智能体] 决定调用工具: {len(actions)} 个动作")
-                
+
+                # thought 已通过流式推送，这里不再重复推送
+
                 for act in actions:
                     act_name = act.get("action")
+                    tool_cn_name = TOOL_NAME_MAP.get(act_name, act_name)
                     logger.info(f"    - 执行工具: {act_name}")
+
+                    # 推送工具调用开始
+                    _emit_thinking(f"调用工具: {tool_cn_name}")
+
                     if act_name == "get_resource_content":
                         rid = act.get("resource_id")
                         try:
                             res = java_client.get_resource_by_id(int(rid))
                             content = (res.get("moduleData") or "")[:2000]
                             react_history.append(f"工具 get_resource_content(id={rid}) 结果: 标题={res.get('title')}, 内容片段={content}...")
+                            # 推送结果概述
+                            _emit_thinking(f"{tool_cn_name}完成: 获取到资源「{res.get('title', '未知')}」，内容长度{len(content)}字")
                         except Exception as e:
                             react_history.append(f"工具 get_resource_content 失败: {e}")
-                    
+                            _emit_thinking(f"{tool_cn_name}失败: {e}")
+
                     elif act_name == "get_plan_modules":
                         try:
                             mods = java_client.get_plan_resources(state.get("plan_id", 0))
-                            summary = [f"ID:{m['id']}, Type:{m.get('moduleType')}, Title:{m.get('title')}" for m in mods]
+                            # 从 moduleData JSON 中提取标题（顶层 title 字段通常为空）
+                            def _extract_title(m):
+                                t = m.get('title')
+                                if t:
+                                    return t
+                                try:
+                                    md = m.get('moduleData', '')
+                                    if isinstance(md, str) and md:
+                                        obj = json.loads(md)
+                                        if isinstance(obj, dict):
+                                            return obj.get('title')
+                                except Exception:
+                                    pass
+                                return f"模块{m.get('order') or m.get('moduleOrder') or '?'}"
+                            summary = [f"ID:{m['id']}, Type:{m.get('moduleType')}, Title:{_extract_title(m)}" for m in mods]
                             react_history.append(f"工具 get_plan_modules 结果: \n" + "\n".join(summary))
+                            # 推送结果概述
+                            titles = [_extract_title(m) or f"模块{m.get('moduleOrder', '?')}" for m in mods[:5]]
+                            _emit_thinking(f"{tool_cn_name}完成: 共{len(mods)}个资源 - {', '.join(titles)}")
                         except Exception as e:
                             react_history.append(f"工具 get_plan_modules 失败: {e}")
-                    
+                            _emit_thinking(f"{tool_cn_name}失败: {e}")
+
                     elif act_name == "get_user_profile_fields":
                         fields = act.get("fields", [])
                         try:
@@ -395,34 +469,35 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
                             lb = prof.get("learning_behavior", {})
                             extracted = {k: lb.get(k) for k in fields if k in lb}
                             react_history.append(f"工具 get_user_profile_fields 结果: {json.dumps(extracted, ensure_ascii=False)}")
+                            # 推送结果概述
+                            field_count = len(extracted)
+                            _emit_thinking(f"{tool_cn_name}完成: 获取到{field_count}个画像字段 - {', '.join(extracted.keys())}")
                         except Exception as e:
                             react_history.append(f"工具 get_user_profile_fields 失败: {e}")
-                            
+                            _emit_thinking(f"{tool_cn_name}失败: {e}")
+
                     elif act_name == "get_user_quiz_stats":
                         try:
                             stats = java_client.get_user_quiz_stats(state.get("user_id", 0), state.get("plan_id", 0))
                             react_history.append(f"工具 get_user_quiz_stats 结果: {json.dumps(stats, ensure_ascii=False)}")
+                            # 推送结果概述
+                            accuracy = stats.get("accuracy", "未知")
+                            total = stats.get("total_questions", 0)
+                            _emit_thinking(f"{tool_cn_name}完成: 共答题{total}道，正确率{accuracy}")
                         except Exception as e:
                             react_history.append(f"工具 get_user_quiz_stats 失败: {e}")
-                
-                # 触发 stream_events 以展示前端 thought 气泡
+                            _emit_thinking(f"{tool_cn_name}失败: {e}")
+
+                # stream_events 仍保留（已被 resource_chat.py 过滤掉 thinking，不会重复推送）
                 new_events.append({
                     "event_type": "thinking",
                     "agent": "controller",
                     "data": {"message": f"思考: {thought}\n决定使用工具..."},
                     "step_description": "思考并收集信息"
                 })
-                
-                # 如果有注入的 sse_callback，可以尝试直接推送到前端（可选，实现实时刷新）
-                sse_cb = state.get("sse_callback")
-                if sse_cb:
-                    try:
-                        sse_cb(f'data: {json.dumps({"type": "progress", "content": f"思考并收集信息: {thought}"}, ensure_ascii=False)}\n\n')
-                    except Exception:
-                        pass
-                        
+
                 continue
-                
+
             else:
                 # finish
                 intent = react_result.get("intent", INTENT_AMBIGUOUS)
@@ -430,6 +505,8 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
                 reasoning = react_result.get("reasoning", "")
                 resource_type = react_result.get("resource_type")
                 logger.info(f"  [主控智能体] ReAct 结束，最终意图: {intent}")
+                # 推送最终决策
+                _emit_thinking(f"决策完成: 意图={intent}，目标={managed_learning_goal or '未明确'}")
                 break
 
         except Exception as e:

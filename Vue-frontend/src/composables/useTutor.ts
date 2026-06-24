@@ -79,5 +79,7 @@ export function useTutor(context: ComputedRef<TutorContext>) {
     stopGeneration: () => store.stopGeneration(),
     loadSessions: () => store.loadSessions(),
     setPageContext: (type: string, data: Record<string, any>) => store.setPageContext(type, data),
+    deleteMessage: (id: number) => store.deleteMessage(id),
+    deleteMessages: (ids: number[]) => store.deleteMessages(ids),
   }
 }

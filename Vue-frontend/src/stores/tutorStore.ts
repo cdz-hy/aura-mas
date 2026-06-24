@@ -9,6 +9,7 @@ export interface TutorMessage {
   id?: number
   role: 'user' | 'assistant'
   content: string
+  thinkings?: Array<{ agent: string, content: string }>
 }
 
 export interface TutorSession {
@@ -246,6 +247,23 @@ export const useTutorStore = defineStore('tutor', () => {
             const last = messages.value[messages.value.length - 1]
             if (last?.role === 'assistant') {
               last.content = data.content
+            }
+          } else if (data.type === 'thinking') {
+            const last = messages.value[messages.value.length - 1]
+            if (last?.role === 'assistant') {
+              if (!last.thinkings) last.thinkings = []
+              last.thinkings.push({ agent: data.agent || '辅导智能体', content: data.content })
+            }
+          } else if (data.type === 'thinking_start') {
+            const last = messages.value[messages.value.length - 1]
+            if (last?.role === 'assistant') {
+              if (!last.thinkings) last.thinkings = []
+              last.thinkings.push({ agent: data.agent || '辅导智能体', content: data.content || '' })
+            }
+          } else if (data.type === 'thinking_chunk') {
+            const last = messages.value[messages.value.length - 1]
+            if (last?.role === 'assistant' && last.thinkings?.length) {
+              last.thinkings[last.thinkings.length - 1].content += data.content
             }
           } else if (data.type === 'error') {
             const last = messages.value[messages.value.length - 1]

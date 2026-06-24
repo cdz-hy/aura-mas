@@ -290,6 +290,32 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  [内容编排智能体] 开始处理")
     logger.info(f"  学习目标: {learning_goal[:100]}")
     logger.info(f"  输入内容块: {len(rag_chunks)} 个")
+
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(session_id)
+
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "内容编排智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在编排学习内容，整合检索资料...")
     logger.info(f"  自主生成内容: {'有' if generated_content else '无'}")
     logger.info(f"  编排模式: {'并行' if use_parallel else '批量'}")
     
@@ -331,6 +357,7 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
         placeholder_map = state.get("placeholder_resource_map") or stream_registry.get_placeholder_map(session_id)
 
         try:
+            _emit_thinking_start("内容编排智能体", "")
             tasks = []
             for module_id, module_info in target_modules_info:
                 placeholder = placeholder_map.get(module_id, {})
@@ -488,6 +515,7 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                     pass
 
         try:
+            _emit_thinking_start("内容编排智能体", "")
             tasks = []
             for i, module in enumerate(modules):
                 module_order = i + 1
@@ -603,10 +631,12 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     if not use_parallel or not modules:
         logger.info(f"  [内容编排智能体] 使用批量模式")
         _emit(state, "progress", "正在编排学习内容...")
+        _emit_thinking_start("内容编排智能体", "")
         batch_result = _batch_orchestration(
             rag_chunks, task_breakdown, user_message, learning_goal,
             user_profile, generated_content, chat_history,
             sse_callback=state.get("sse_callback"),
+            on_chunk=_emit_thinking_chunk,
         )
         extra_records = batch_result.pop("_usage_records", None) or []
         _flush_module_usage(batch_result.get("module_list", []),
@@ -655,6 +685,7 @@ def _batch_orchestration(
     generated_content: Dict[str, Any],
     chat_history: List[Dict[str, str]],
     sse_callback=None,
+    on_chunk=None,
 ) -> Dict[str, Any]:
     """批量编排模式：一次性生成所有模块（原有逻辑）"""
     llm = get_content_orchestrator_llm()
@@ -736,7 +767,7 @@ def _batch_orchestration(
 
     try:
         logger.info(f"  [内容编排智能体] 正在调用 LLM 进行批量编排...")
-        result = llm.chat_json(messages, max_tokens=16384)
+        result = llm.chat_json_stream(messages, on_chunk=on_chunk, max_tokens=16384)
         modules_list = result.get("modules", [])
         _normalize_modules(modules_list)
 

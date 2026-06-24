@@ -123,6 +123,27 @@ def _generate_single_module(
     )
     logger.info(f"  [资源生成] 模块{module_order} 个性化偏好约束:\n{style_text}")
 
+    def _emit_thinking(content: str):
+        if sse_callback:
+            try:
+                sse_callback(f'data: {json.dumps({"type": "thinking", "agent": "资源生成智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if sse_callback:
+            try:
+                sse_callback(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if sse_callback:
+            try:
+                sse_callback(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
     # ==================== ReAct 自主搜索循环 ====================
     MAX_REACT_ROUNDS = 6  # 最多 6 轮 ReAct 循环
     history_tracker = SearchHistoryTracker()
@@ -156,7 +177,8 @@ def _generate_single_module(
             ]
 
             # LLM 思考并决策（使用 chat_json_stream 而非 chat_json，避免 response_format 兼容问题）
-            react_result = llm.chat_json_stream(messages, max_tokens=4096)
+            _emit_thinking_start("资源生成智能体", "")
+            react_result = llm.chat_json_stream(messages, on_chunk=_emit_thinking_chunk, stream_field="thought", max_tokens=4096)
             logger.debug(f"  [ReAct] LLM 原始返回: {str(react_result)[:300]}")
 
             # 确保 react_result 是字典
@@ -178,11 +200,13 @@ def _generate_single_module(
             # 如果决定结束
             if decision == "finish":
                 logger.info(f"  [ReAct] 模块{module_order} 自主决定搜索结束")
+                _emit_thinking(f"模块{module_order}决策完成: 结束搜索，开始整理内容...")
                 break
 
             # 如果没有动作，视为结束
             if not actions:
                 logger.info(f"  [ReAct] 模块{module_order} 无动作，结束搜索")
+                _emit_thinking(f"模块{module_order}决策完成: 无需继续搜索，开始整理内容...")
                 break
 
             # 验证动作格式
@@ -192,6 +216,11 @@ def _generate_single_module(
                     action_type = action.get("action", "")
                     if action_type in ["search", "extract"]:
                         valid_actions.append(action)
+                        if action_type == "search":
+                            _emit_thinking(f"调用工具: 网页搜索 (模块{module_order} - 关键词: {action.get('query', '')})")
+                        elif action_type == "extract":
+                            _emit_thinking(f"调用工具: 提取网页内容 (模块{module_order} - URL: {action.get('url', '')})")
+
             if not valid_actions:
                 logger.warning(f"  [ReAct] 无有效动作，结束搜索")
                 break
@@ -209,6 +238,7 @@ def _generate_single_module(
                     images = result.get("images", [])
                     if results or images:
                         history_tracker.add_search_result(query, results, images)
+                    _emit_thinking(f"网页搜索完成 (模块{module_order}): 找到 {len(results)} 条相关结果，{len(images)} 张图片")
 
                 elif action_type == "extract":
                     url = result.get("url", "")
@@ -217,12 +247,16 @@ def _generate_single_module(
                     success = result.get("success", False)
                     if success and content:
                         history_tracker.add_extracted_page(url, title, content)
+                        _emit_thinking(f"提取网页完成 (模块{module_order}): 成功读取页面「{title}」({len(content)} 字符)")
+                    else:
+                        _emit_thinking(f"提取网页失败 (模块{module_order}): 无法读取该页面")
 
             # 格式化结果供 LLM 观察（实际不会再次调用，但记录日志）
             observation = format_action_results_for_llm(action_results)
             logger.debug(f"  [ReAct] 观察:\n{observation[:300]}...")
 
         logger.info(f"  [资源生成] 模块{module_order} ReAct 搜索完成: {len(history_tracker.all_snippets)} 条片段, {len(history_tracker.extracted_pages)} 个完整网页")
+        _emit_thinking(f"模块{module_order} 的搜索与素材收集完毕，准备生成最终图文内容...")
         record_from_mimo(llm, user_id, "resource_react_search", task_id)
 
     except Exception as e:
@@ -358,6 +392,13 @@ async def resource_generator_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"{'='*60}")
     logger.info(f"  [资源生成智能体] 开始处理")
     logger.info(f"  学习目标: {learning_goal[:100]}")
+
+    # 实时推送思考过程
+    if sse_callback:
+        try:
+            sse_callback(f'data: {json.dumps({"type": "thinking", "agent": "资源生成智能体", "content": "正在自主生成学习资源..."}, ensure_ascii=False)}\n\n')
+        except Exception:
+            pass
 
     # 确定需要生成的模块列表
     modules = task_breakdown.get("modules", [])

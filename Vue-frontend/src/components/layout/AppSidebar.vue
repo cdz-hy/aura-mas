@@ -9,13 +9,7 @@
       @click="uiStore.toggleSidebar()"
     >
       <div class="flex items-center gap-3 min-w-0">
-        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-navy-600 to-navy-800 flex items-center justify-center flex-shrink-0 shadow-sm">
-          <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 2L2 7l10 5 10-5-10-5z" />
-            <path d="M2 17l10 5 10-5" />
-            <path d="M2 12l10 5 10-5" />
-          </svg>
-        </div>
+        <img src="/aura-icon.svg" alt="AURA" class="w-9 h-9 flex-shrink-0" />
         <transition name="fade">
           <span v-if="!uiStore.sidebarCollapsed" class="font-display text-lg font-bold text-navy-800 whitespace-nowrap">
             智学

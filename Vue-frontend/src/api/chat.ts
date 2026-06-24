@@ -7,6 +7,7 @@ export interface StreamState {
   is_streaming: boolean
   source: string
   error?: string
+  thinkings?: Array<{ agent: string, content: string }>
 }
 
 export function getSessions(intentType: string, planId?: number) {

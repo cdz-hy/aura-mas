@@ -8,6 +8,8 @@ from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_quiz_generator_llm
 from app.prompts import QUIZ_GENERATOR_PROMPT
 from app.utils.token_recorder import record_from_mimo
+from app.utils import stream_registry
+import json
 
 logger = logging.getLogger("agents.quiz_generator")
 
@@ -25,6 +27,32 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"{'='*60}")
     logger.info(f"  [题目生成智能体] 开始处理")
     logger.info(f"  学习目标: {learning_goal[:100]}")
+
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "题目生成智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在结合薄弱点生成练习题...")
 
     llm = get_quiz_generator_llm()
 
@@ -84,7 +112,8 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [题目生成智能体] 正在调用 LLM 生成题目...")
-        result = llm.chat_json(messages, max_tokens=4096)
+        _emit_thinking_start("题目生成智能体", "")
+        result = llm.chat_json_stream(messages, on_chunk=_emit_thinking_chunk, max_tokens=4096)
         record_from_mimo(llm, state.get("user_id", 0), "quiz_generation", state.get("task_id"))
         questions = result.get("questions", [])
 

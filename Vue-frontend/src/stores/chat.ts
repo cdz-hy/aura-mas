@@ -44,7 +44,7 @@ export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([])
   const activeSessionId = ref(localStorage.getItem('chat_activeSessionId') || '')
   const sessionsLoading = ref(false)
-  const messages = ref<Array<{ id?: number; role: string; content: string; type?: string; breakdown?: any; resources?: GeneratedResourceRef[] }>>([])
+  const messages = ref<Array<{ id?: number; role: string; content: string; type?: string; breakdown?: any; resources?: GeneratedResourceRef[]; thinkings?: Array<{ agent: string, content: string }> }>>([])
 
   // ─── 多会话并发：按 sessionId 隔离流式状态 ───
   const sessionStreams = new Map<string, SessionStreamState>()
@@ -79,6 +79,13 @@ export const useChatStore = defineStore('chat', () => {
   const selectedModuleContext = ref<{ title: string; description: string; moduleId: number; planId: number } | null>(null)
 
   let currentPlanId = localStorage.getItem('chat_currentPlanId') || ''
+
+  function _removeEmptyPlaceholder() {
+    const _last = messages.value[messages.value.length - 1]
+    if (_last && _last.role === 'assistant' && !_last.type && !_last.content && (!_last.thinkings || _last.thinkings.length === 0)) {
+      messages.value.pop()
+    }
+  }
 
   // 哪些会话正在流式输出（供侧边栏显示绿点指示）
   // 手动管理而非 computed，因 sessionStreams 为原始 Map 无法被 Vue 追踪
@@ -192,6 +199,16 @@ export const useChatStore = defineStore('chat', () => {
     hasStreamText = !!state.text
     _syncStreamingSessions()
 
+    // push 占位 assistant 消息，让三个点动画、思考过程和流式文本在同一个气泡内显示
+    const _placeholder = { role: 'assistant', content: '', thinkings: [] } as any
+    if (streamBuffer.value) {
+      _placeholder.content = streamBuffer.value
+    }
+    if (state.thinkings && state.thinkings.length > 0) {
+      _placeholder.thinkings = [...state.thinkings]
+    }
+    messages.value.push(_placeholder)
+
     // 持续轮询更新
     _recoverTimer.value = setInterval(async () => {
       try {
@@ -199,23 +216,29 @@ export const useChatStore = defineStore('chat', () => {
         if (!s) {
           // 缓存过期或不存在
           _stopRecover()
+          _removeEmptyPlaceholder()
           streaming.value = false
           loadSessions(planId)
           return
         }
         if (s.is_streaming) {
-          // 仍在流式，更新文本
+          // 仍在流式，更新占位消息的 content 和 thinkings
           streamBuffer.value = s.text || ''
+          const _last = messages.value[messages.value.length - 1]
+          if (_last && _last.role === 'assistant' && !_last.type) {
+            _last.content = s.text || ''
+            if (s.thinkings && s.thinkings.length > 0) {
+              _last.thinkings = [...s.thinkings]
+            }
+          }
         } else {
           // 流式完成
           _stopRecover()
-          if (s.text) {
-            messages.value.push({ role: 'assistant', content: s.text })
-          }
           streamBuffer.value = ''
           streaming.value = false
           hasStreamText = false
-          // 从 DB 加载完整消息（包含后端保存的其他消息）
+          // 移除占位消息，从 DB 加载完整消息（包含 thinkings 等持久化数据）
+          _removeEmptyPlaceholder()
           await loadSessions(planId)
           if (sessionId === activeSessionId.value) {
             await selectSession(sessionId)
@@ -223,6 +246,7 @@ export const useChatStore = defineStore('chat', () => {
         }
       } catch {
         _stopRecover()
+        _removeEmptyPlaceholder()
         streaming.value = false
       }
     }, 500)  // 500ms 轮询间隔
@@ -269,19 +293,29 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function dbMessageToChatMessage(m: ChatMessage) {
+    let thinkings: Array<{ agent: string, content: string }> | undefined
+    if (m.conversationContext) {
+      try {
+        const ctx = JSON.parse(m.conversationContext)
+        if (ctx.thinkings) {
+          thinkings = ctx.thinkings
+        }
+      } catch {}
+    }
+
     if (m.intentType === 'task_breakdown') {
       try {
         const breakdown = JSON.parse(m.conversationText)
-        return { id: m.id, role: 'assistant' as const, content: '学习路径已生成，请确认', type: 'confirm', breakdown }
+        return { id: m.id, role: 'assistant' as const, content: '学习路径已生成，请确认', type: 'confirm', breakdown, thinkings }
       } catch {}
     }
     if (m.intentType === 'resource_generated') {
       try {
         const data = JSON.parse(m.conversationText)
-        return { id: m.id, role: 'assistant' as const, content: data.summary || '学习资源已生成', type: 'resource_generated', resources: data.resources || [] }
+        return { id: m.id, role: 'assistant' as const, content: data.summary || '学习资源已生成', type: 'resource_generated', resources: data.resources || [], thinkings }
       } catch {}
     }
-    return { id: m.id, role: m.dialogueType === 'USER' ? 'user' as const : 'assistant' as const, content: m.conversationText }
+    return { id: m.id, role: m.dialogueType === 'USER' ? 'user' as const : 'assistant' as const, content: m.conversationText, thinkings }
   }
 
   async function loadHistoryByPlan(planId: string) {
@@ -426,6 +460,7 @@ export const useChatStore = defineStore('chat', () => {
 
     const capturedSessionId = activeSessionId.value
     messages.value.push({ role: 'user', content: text })
+    messages.value.push({ role: 'assistant', content: '', thinkings: [] })
     streaming.value = true
     _syncStreamingSessions()
     streamBuffer.value = ''
@@ -444,6 +479,26 @@ export const useChatStore = defineStore('chat', () => {
           onStreamText(content) {
             streamBuffer.value += content
             hasStreamText = true
+          },
+          onThinking(agent, content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type) {
+              if (!lastMsg.thinkings) lastMsg.thinkings = []
+              lastMsg.thinkings.push({ agent, content })
+            }
+          },
+          onThinkingStart(agent, content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type) {
+              if (!lastMsg.thinkings) lastMsg.thinkings = []
+              lastMsg.thinkings.push({ agent, content })
+            }
+          },
+          onThinkingChunk(content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type && lastMsg.thinkings?.length) {
+              lastMsg.thinkings[lastMsg.thinkings.length - 1].content += content
+            }
           },
           onResourceStreamStart(placeholders) {
             streamingPlaceholders.value = placeholders
@@ -474,8 +529,18 @@ export const useChatStore = defineStore('chat', () => {
             // 仅在当前活跃会话时更新显示
             if (capturedSessionId !== activeSessionId.value) return
             if (streamBuffer.value) {
-              messages.value.push({ role: 'assistant', content: streamBuffer.value })
+              const _last = messages.value[messages.value.length - 1]
+              if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                _last.content = streamBuffer.value
+              } else {
+                messages.value.push({ role: 'assistant', content: streamBuffer.value })
+              }
               streamBuffer.value = ''
+            }
+            // 移除空的占位消息（无 content、无 thinkings）
+            const _ph = messages.value[messages.value.length - 1]
+            if (_ph && _ph.role === 'assistant' && !_ph.type && !_ph.content && (!_ph.thinkings || _ph.thinkings.length === 0)) {
+              messages.value.pop()
             }
             const breakdown = taskBreakdown || (pendingModules.value.length ? { modules: pendingModules.value } : null)
             pendingTaskBreakdown.value = breakdown
@@ -544,7 +609,10 @@ export const useChatStore = defineStore('chat', () => {
                 isResourceStreaming.value = false
                 streaming.value = false
                 clearStreamState(capturedSessionId)
-                if (isActive) loadSessions(planId)
+                if (isActive) {
+                  _removeEmptyPlaceholder()
+                  loadSessions(planId)
+                }
                 return
               }
             }
@@ -582,9 +650,15 @@ export const useChatStore = defineStore('chat', () => {
             }
             if (isActive) {
               if (streamBuffer.value) {
-                messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                const _last = messages.value[messages.value.length - 1]
+                if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                  _last.content = streamBuffer.value
+                } else {
+                  messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                }
                 streamBuffer.value = ''
               }
+              _removeEmptyPlaceholder()
               streaming.value = false
               resourceStreamBuffers.value = {}
               streamingPlaceholders.value = []
@@ -610,9 +684,15 @@ export const useChatStore = defineStore('chat', () => {
             }
             if (isActive) {
               if (streamBuffer.value) {
-                messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                const _last = messages.value[messages.value.length - 1]
+                if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                  _last.content = streamBuffer.value
+                } else {
+                  messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                }
                 streamBuffer.value = ''
               }
+              _removeEmptyPlaceholder()
               messages.value.push({ role: 'assistant', content: `错误：${err}` })
               streaming.value = false
               resourceStreamBuffers.value = {}
@@ -699,6 +779,7 @@ export const useChatStore = defineStore('chat', () => {
     persistSessionState()
 
     messages.value.push({ role: 'user', content: `请为「${moduleContext.title}」生成${typeLabel}` })
+    messages.value.push({ role: 'assistant', content: '', thinkings: [] })
     streaming.value = true
     _syncStreamingSessions()
     streamBuffer.value = ''
@@ -723,6 +804,26 @@ export const useChatStore = defineStore('chat', () => {
           onStreamText(content) {
             streamBuffer.value += content
             supHasStreamText = true
+          },
+          onThinking(agent, content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type) {
+              if (!lastMsg.thinkings) lastMsg.thinkings = []
+              lastMsg.thinkings.push({ agent, content })
+            }
+          },
+          onThinkingStart(agent, content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type) {
+              if (!lastMsg.thinkings) lastMsg.thinkings = []
+              lastMsg.thinkings.push({ agent, content })
+            }
+          },
+          onThinkingChunk(content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type && lastMsg.thinkings?.length) {
+              lastMsg.thinkings[lastMsg.thinkings.length - 1].content += content
+            }
           },
           onResourceStreamStart(placeholders) {
             streamingPlaceholders.value = placeholders
@@ -783,9 +884,15 @@ export const useChatStore = defineStore('chat', () => {
             }
             if (isActive) {
               if (streamBuffer.value) {
-                messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                const _last = messages.value[messages.value.length - 1]
+                if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                  _last.content = streamBuffer.value
+                } else {
+                  messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                }
                 streamBuffer.value = ''
               }
+              _removeEmptyPlaceholder()
               streaming.value = false
               resourceStreamBuffers.value = {}
               streamingPlaceholders.value = []
@@ -798,9 +905,15 @@ export const useChatStore = defineStore('chat', () => {
             const isActive = capturedSessionId === activeSessionId.value
             if (isActive) {
               if (streamBuffer.value) {
-                messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                const _last = messages.value[messages.value.length - 1]
+                if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                  _last.content = streamBuffer.value
+                } else {
+                  messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                }
                 streamBuffer.value = ''
               }
+              _removeEmptyPlaceholder()
               messages.value.push({ role: 'assistant', content: `${typeLabel}生成失败：${err}` })
               streaming.value = false
               resourceStreamBuffers.value = {}

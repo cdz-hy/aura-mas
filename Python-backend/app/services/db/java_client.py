@@ -127,6 +127,7 @@ class JavaBackendClient:
         dialogue_type: str,
         plan_id: Optional[int] = None,
         intent_type: Optional[str] = None,
+        conversation_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """创建对话记录"""
         body = {
@@ -139,6 +140,8 @@ class JavaBackendClient:
             body["planId"] = plan_id
         if intent_type is not None:
             body["intentType"] = intent_type
+        if conversation_context is not None:
+            body["conversationContext"] = conversation_context
         return self._request("POST", "/api/internal/dialogue", json=body)
 
     def update_dialogue_resource_id(self, dialogue_id: int, resource_id: int):

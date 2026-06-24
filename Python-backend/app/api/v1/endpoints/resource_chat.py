@@ -27,7 +27,7 @@ from app.agents.conversation_compressor import build_chat_history_with_context, 
 from app.schemas.sse_bridge import graph_step_to_sse
 from app.utils.profile_utils import ensure_learning_behavior_fields
 from app.utils.token_recorder import record_from_mimo
-from app.services.stream_state import update_stream_text, mark_stream_done, mark_stream_error, request_stop, check_stop, clear_stop
+from app.services.stream_state import update_stream_text, mark_stream_done, mark_stream_error, request_stop, check_stop, clear_stop, add_thinking, append_thinking_chunk
 from app.utils import stream_registry
 
 logger = logging.getLogger("api.resource_chat")
@@ -182,19 +182,63 @@ def _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, us
                 logger.info(f"[增量保存] 已保存 {len(unpassed)} 个无占位的通过模块")
 
 
-def _collect_stream_text(sse_data: str, ai_response_parts: list, session_id: str) -> list:
-    """从 SSE 事件中提取流式文本并更新 stream_state"""
-    if '"chunk"' in sse_data or '"stream_text"' in sse_data:
+def _collect_stream_events(sse_data: str, bg_state: dict, session_id: str):
+    """从 SSE 事件中提取流式文本及思考过程并更新状态"""
+    if '"chunk"' in sse_data:
         try:
             d = json.loads(sse_data.replace("data: ", "").strip())
             content = d.get("content", "")
             if content:
-                ai_response_parts.append(content)
-                accumulated = "".join(ai_response_parts)
+                if "chunk_accumulator" not in bg_state:
+                    bg_state["chunk_accumulator"] = []
+                bg_state["chunk_accumulator"].append(content)
+                accumulated = "".join(bg_state["chunk_accumulator"])
                 update_stream_text(session_id, accumulated, "chat")
         except Exception:
             pass
-    return ai_response_parts
+    elif '"node_content"' in sse_data:
+        try:
+            d = json.loads(sse_data.replace("data: ", "").strip())
+            content = d.get("content", "")
+            if content:
+                bg_state["ai_response_parts"].append(content)
+                accumulated = "".join(bg_state["ai_response_parts"])
+                update_stream_text(session_id, accumulated, "chat")
+        except Exception:
+            pass
+    elif '"thinking_start"' in sse_data:
+        try:
+            d = json.loads(sse_data.replace("data: ", "").strip())
+            agent = d.get("agent", "")
+            content = d.get("content", "")
+            if "thinkings" not in bg_state:
+                bg_state["thinkings"] = []
+            bg_state["thinkings"].append({"agent": agent, "content": content})
+            add_thinking(session_id, agent, content)
+        except Exception:
+            pass
+    elif '"thinking_chunk"' in sse_data:
+        try:
+            d = json.loads(sse_data.replace("data: ", "").strip())
+            content = d.get("content", "")
+            if content and bg_state.get("thinkings"):
+                bg_state["thinkings"][-1]["content"] += content
+                append_thinking_chunk(session_id, content)
+        except Exception:
+            pass
+    elif '"thinking"' in sse_data:
+        try:
+            d = json.loads(sse_data.replace("data: ", "").strip())
+            if "content" in d:
+                agent = d.get("agent", "")
+                content = d["content"]
+                if "thinkings" not in bg_state:
+                    bg_state["thinkings"] = []
+                bg_state["thinkings"].append({"agent": agent, "content": content})
+                # 同步写入 stream_state，供刷新后恢复
+                add_thinking(session_id, agent, content)
+        except Exception:
+            pass
 
 
 @router.get("/chat")
@@ -346,6 +390,8 @@ async def plan_chat(
 
             # sse_callback 线程安全：从后台线程 put 到 async queue
             def _threadsafe_cb(data):
+                if data and isinstance(data, str):
+                    _collect_stream_events(data, bg_state, session_id)
                 loop.call_soon_threadsafe(_queue.put_nowait, data)
 
             # 注入占位回调（graph 节点内部调用）
@@ -411,17 +457,16 @@ async def plan_chat(
                                     continue
                                 _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, user_id, session_id, emit=_threadsafe_cb)
                                 # module 事件已由 sse_callback 通过 resource_stream_text 实时推送，跳过避免重复
-                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") != "module"]
+                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") not in ("module", "thinking")]
                                 filtered_output = {**node_output, "stream_events": filtered_events}
                                 for sse_data in graph_step_to_sse(node_name, filtered_output):
-                                    bg_state["ai_response_parts"] = _collect_stream_text(sse_data, bg_state["ai_response_parts"], session_id)
                                     _persist_profile_update(sse_data, user_id)
                                     _threadsafe_cb(sse_data)
 
                     asyncio.run(_do_resume())
                     _bg_save_resources(bg_state, plan_id_int, user_id, session_id, message, chat_history, user_profile, chat_task_id, emit=_threadsafe_cb)
                     _save_plain_text_reply(bg_state["breakdown_confirmed"], bg_state["generated_resource_info"],
-                                           bg_state["ai_response_parts"], user_id, session_id, plan_id_int)
+                                           bg_state["ai_response_parts"], user_id, session_id, plan_id_int, bg_state.get("thinkings"))
                 except Exception as e:
                     logger.error(f"[对话流-恢复] 线程异常: {e}", exc_info=True)
                     mark_stream_error(session_id, str(e))
@@ -445,19 +490,25 @@ async def plan_chat(
             threading.Thread(target=_run_graph, daemon=True).start()
 
             # 实时消费 queue：节点内部的 sse_callback 事件立即 yield
+            _completed_normally = False
             try:
                 while True:
                     item = await _queue.get()
                     if item is _sentinel:
+                        yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
+                        _completed_normally = True
                         break
                     if item is None:
                         # stopped 信号
                         yield f'data: {json.dumps({"type": "done", "stopped": True}, ensure_ascii=False)}\n\n'
+                        _completed_normally = True
                         break
                     yield item
             finally:
-                # 客户端断开连接或发生异常时，主动触发停止信号，通知后台线程停止大模型调用
-                request_stop(session_id)
+                # 客户端断开连接时不停止后台线程，让生成继续运行
+                # 刷新后前端通过 recoverStreaming 轮询 stream_state 恢复显示
+                # 用户主动停止通过 POST /api/ai/stop 调用 request_stop
+                pass
 
     else:
         # ── 新建路径：构造 initial_state 从头执行 ──
@@ -551,6 +602,8 @@ async def plan_chat(
 
             # sse_callback 线程安全：从后台线程 put 到 async queue
             def _threadsafe_cb(data):
+                if data and isinstance(data, str):
+                    _collect_stream_events(data, bg_state, session_id)
                 loop.call_soon_threadsafe(_queue.put_nowait, data)
 
             # 注入 sse_callback（graph 节点内部调用）
@@ -594,17 +647,16 @@ async def plan_chat(
                                     continue
                                 _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, user_id, session_id, emit=_threadsafe_cb)
                                 # module 事件已由 sse_callback 通过 resource_stream_text 实时推送，跳过避免重复
-                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") != "module"]
+                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") not in ("module", "thinking")]
                                 filtered_output = {**node_output, "stream_events": filtered_events}
                                 for sse_data in graph_step_to_sse(node_name, filtered_output):
-                                    bg_state["ai_response_parts"] = _collect_stream_text(sse_data, bg_state["ai_response_parts"], session_id)
                                     _persist_profile_update(sse_data, user_id)
                                     _threadsafe_cb(sse_data)
 
                     asyncio.run(_do_run())
                     _bg_save_resources(bg_state, plan_id_int, user_id, session_id, message, chat_history, user_profile, chat_task_id, emit=_threadsafe_cb)
                     _save_plain_text_reply(bg_state["breakdown_confirmed"], bg_state["generated_resource_info"],
-                                           bg_state["ai_response_parts"], user_id, session_id, plan_id_int)
+                                           bg_state["ai_response_parts"], user_id, session_id, plan_id_int, bg_state.get("thinkings"))
                 except Exception as e:
                     logger.error(f"[对话流] 线程异常: {e}", exc_info=True)
                     mark_stream_error(session_id, str(e))
@@ -628,18 +680,24 @@ async def plan_chat(
             threading.Thread(target=_run_graph, daemon=True).start()
 
             # 实时消费 queue：节点内部的 sse_callback 事件立即 yield
+            _completed_normally = False
             try:
                 while True:
                     item = await _queue.get()
                     if item is _sentinel:
+                        yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
+                        _completed_normally = True
                         break
                     if item is None:
                         yield f'data: {json.dumps({"type": "done", "stopped": True}, ensure_ascii=False)}\n\n'
+                        _completed_normally = True
                         break
                     yield item
             finally:
-                # 客户端断开连接或发生异常时，主动触发停止信号，通知后台线程停止大模型调用
-                request_stop(session_id)
+                # 客户端断开连接时不停止后台线程，让生成继续运行
+                # 刷新后前端通过 recoverStreaming 轮询 stream_state 恢复显示
+                # 用户主动停止通过 POST /api/ai/stop 调用 request_stop
+                pass
 
     def _bg_save_resources(bg_state, plan_id_int, user_id, session_id, message, chat_history, user_profile, chat_task_id, emit=None):
         """图执行完成后保存资源和记录"""
@@ -740,10 +798,14 @@ async def plan_chat(
                 "resources": bs["generated_resource_info"],
             }
             try:
+                conversation_context = None
+                if bs.get("thinkings"):
+                    conversation_context = json.dumps({"thinkings": bs["thinkings"]}, ensure_ascii=False)
                 result = java_client.create_dialogue(
                     user_id=user_id, session_id=session_id,
                     conversation_text=json.dumps(dialogue_data, ensure_ascii=False),
                     dialogue_type="AI", plan_id=plan_id_int, intent_type="resource_generated",
+                    conversation_context=conversation_context,
                 )
                 dialogue_id = result.get("data", {}).get("id") if isinstance(result, dict) else None
                 if dialogue_id and bs["generated_resource_info"]:
@@ -1048,6 +1110,8 @@ async def generate_single_resource(
             loop = asyncio.get_event_loop()
 
             def _threadsafe_cb(data):
+                if data and isinstance(data, str):
+                    _collect_stream_events(data, bg_state, session_id)
                 loop.call_soon_threadsafe(_queue.put_nowait, data)
 
             initial_state["sse_callback"] = _threadsafe_cb
@@ -1072,10 +1136,9 @@ async def generate_single_resource(
                                     continue
                                 _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, user_id, session_id, emit=_threadsafe_cb)
                                 # module 事件已由 sse_callback 通过 resource_stream_text 实时推送，跳过避免重复
-                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") != "module"]
+                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") not in ("module", "thinking")]
                                 filtered_output = {**node_output, "stream_events": filtered_events}
                                 for sse_data in graph_step_to_sse(node_name, filtered_output):
-                                    bg_state["ai_response_parts"] = _collect_stream_text(sse_data, bg_state["ai_response_parts"], session_id)
                                     _persist_profile_update(sse_data, user_id)
                                     _threadsafe_cb(sse_data)
 
@@ -1162,9 +1225,8 @@ async def generate_single_resource(
                         break
                     yield item
             finally:
-                # 仅在客户端断开连接或异常退出时触发停止信号，正常完成不触发
-                if not _completed_normally:
-                    request_stop(session_id)
+                # 客户端断开连接时不停止后台线程，让生成继续运行
+                pass
 
         except Exception as e:
             logger.error(f"[资源生成] 异常: {e}", exc_info=True)
@@ -1490,8 +1552,16 @@ async def tutor_chat(
 
     # 事件队列（tutor_agent 通过 sse_callback 推入）
     _sse_events = []
+    _thinkings = []
     def _sse_callback(data):
         _sse_events.append(data)
+        if '"thinking"' in data:
+            try:
+                d = json.loads(data.replace("data: ", "").strip())
+                if d.get("type") == "thinking" and "content" in d:
+                    _thinkings.append({"agent": d.get("agent", ""), "content": d["content"]})
+            except Exception:
+                pass
 
     async def event_stream() -> AsyncGenerator[str, None]:
         try:
@@ -1512,6 +1582,9 @@ async def tutor_chat(
                 ))
                 if res:
                     try:
+                        conversation_context = None
+                        if _thinkings:
+                            conversation_context = json.dumps({"thinkings": _thinkings}, ensure_ascii=False)
                         java_client.create_dialogue(
                             user_id=user_id,
                             session_id=session_id,
@@ -1519,6 +1592,7 @@ async def tutor_chat(
                             dialogue_type="AI",
                             plan_id=plan_id_int,
                             intent_type="chat",
+                            conversation_context=conversation_context,
                         )
                     except Exception as e:
                         logger.warning(f"[智能辅导] 记录 AI 回复失败: {e}")
@@ -1975,12 +2049,15 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -
 
 
 def _save_plain_text_reply(breakdown_confirmed, generated_resource_info,
-                           ai_response_parts, user_id, session_id, plan_id_int):
+                           ai_response_parts, user_id, session_id, plan_id_int, thinkings=None):
     """未生成资源时，保存纯文本 AI 回复"""
     if not breakdown_confirmed and not generated_resource_info:
         ai_response = "\n".join(ai_response_parts) if ai_response_parts else "处理完成"
         if ai_response and ai_response != "处理完成":
             try:
+                conversation_context = None
+                if thinkings:
+                    conversation_context = json.dumps({"thinkings": thinkings}, ensure_ascii=False)
                 java_client.create_dialogue(
                     user_id=user_id,
                     session_id=session_id,
@@ -1988,6 +2065,7 @@ def _save_plain_text_reply(breakdown_confirmed, generated_resource_info,
                     dialogue_type="AI",
                     plan_id=plan_id_int,
                     intent_type="plan_chat",
+                    conversation_context=conversation_context,
                 )
             except Exception as e:
                 logger.warning(f"记录 AI 回复失败: {e}")

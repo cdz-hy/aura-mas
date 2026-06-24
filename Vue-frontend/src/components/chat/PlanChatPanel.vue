@@ -235,7 +235,18 @@
 
             <!-- Normal assistant message -->
             <div v-else class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
-              <div class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
+              <ThinkingProcess 
+                v-if="msg.thinkings && msg.thinkings.length > 0" 
+                :thinkings="msg.thinkings" 
+                :isStreaming="chatStore.streaming && i === chatStore.messages.length - 1"
+              />
+              <div v-if="msg.content" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
+              <div v-else-if="chatStore.streaming && i === chatStore.messages.length - 1 && chatStore.streamBuffer" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(chatStore.streamBuffer)"></div>
+              <div v-else-if="chatStore.streaming && i === chatStore.messages.length - 1" class="flex gap-1.5 py-1">
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0s"></span>
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.15s"></span>
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.3s"></span>
+              </div>
             </div>
           </template>
 
@@ -244,23 +255,6 @@
               <p class="leading-relaxed">{{ msg.content }}</p>
             </div>
           </template>
-        </div>
-
-        <!-- Streaming indicator (assistant) -->
-        <div v-if="chatStore.streaming" class="flex items-start gap-3">
-          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-navy-500 to-navy-700 flex items-center justify-center flex-shrink-0">
-            <svg class="w-4 h-4 text-white animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-            </svg>
-          </div>
-          <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
-            <div v-if="chatStore.streamBuffer" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(chatStore.streamBuffer)"></div>
-            <div v-else class="flex gap-1.5 py-1">
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0s"></span>
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.15s"></span>
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.3s"></span>
-            </div>
-          </div>
         </div>
 
         <!-- Module context prompt -->
@@ -433,6 +427,7 @@ import { useAuthStore } from '@/stores/auth'
 import { parseMarkdown } from '@/utils/markdown'
 import { useTutor, pickFollowUp } from '@/composables/useTutor'
 import type { TutorContext } from '@/composables/useTutor'
+import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
 import tutorGif from '@/image/智能辅导.gif'
 import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
 

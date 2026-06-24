@@ -110,7 +110,18 @@
 
             <!-- 普通消息 -->
             <div v-else class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
-              <div class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
+              <ThinkingProcess 
+                v-if="msg.thinkings && msg.thinkings.length > 0" 
+                :thinkings="msg.thinkings" 
+                :isStreaming="store.streaming && i === store.messages.length - 1"
+              />
+              <div v-if="msg.content" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
+              <div v-else-if="store.streaming && i === store.messages.length - 1 && store.streamBuffer" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(store.streamBuffer)"></div>
+              <div v-else-if="store.streaming && i === store.messages.length - 1" class="flex gap-1.5 py-1">
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0s"></span>
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.15s"></span>
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.3s"></span>
+              </div>
             </div>
           </template>
 
@@ -120,26 +131,6 @@
               <p class="leading-relaxed">{{ msg.content }}</p>
             </div>
           </template>
-        </div>
-
-        <!-- Streaming -->
-        <div v-if="store.streaming" class="flex items-start gap-3">
-          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-navy-500 to-navy-700 flex items-center justify-center flex-shrink-0">
-            <svg class="w-4 h-4 text-white animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-            </svg>
-          </div>
-          <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
-            <div v-if="store.streamBuffer" class="text-navy-700 leading-relaxed markdown-body">
-              <div>{{ store.streamBuffer }}<span class="inline-block w-0.5 h-4 bg-navy-400 ml-0.5 animate-pulse align-text-bottom"></span></div>
-            </div>
-            <!-- 加载动画 -->
-            <div v-else class="flex gap-1.5 py-1">
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0s"></span>
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.15s"></span>
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.3s"></span>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -177,6 +168,7 @@ import { parseMarkdown } from '@/utils/markdown'
 import { useChatStore } from '@/stores/chat'
 import ChatSessionSidebar from '@/components/chat/ChatSessionSidebar.vue'
 import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
+import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
 
 const route = useRoute()
 const planId = route.params.id as string

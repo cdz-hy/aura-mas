@@ -30,7 +30,8 @@ public class AiDialogueController {
         String conversationText = (String) body.get("conversationText");
         String dialogueType = (String) body.get("dialogueType");
         String intentType = (String) body.get("intentType");
-        return Result.success(dialogueService.createDialogue(userId, sessionId, planId, conversationText, dialogueType, intentType));
+        String conversationContext = (String) body.get("conversationContext");
+        return Result.success(dialogueService.createDialogue(userId, sessionId, planId, conversationText, dialogueType, intentType, conversationContext));
     }
 
     @Operation(summary = "内部接口：软删除对话记录")

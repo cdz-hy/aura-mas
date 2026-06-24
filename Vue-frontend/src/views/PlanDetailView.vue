@@ -1049,6 +1049,10 @@ onMounted(async () => {
       openResourceById(resId)
     }
   }
+  // 刷新后恢复：检查后端是否仍在生成中
+  if (chatStore.activeSessionId) {
+    await chatStore.recoverStreaming(String(planId.value))
+  }
 })
 
 watch(selectedResource, (newRes) => {
