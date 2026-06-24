@@ -39,7 +39,6 @@ def _review_single_module(
     module: Dict[str, Any],
     module_order: int,
     task_breakdown_module: Dict[str, Any],
-    on_chunk=None,
 ) -> Dict[str, Any]:
     """
     审查单个模块的内容质量
@@ -74,7 +73,7 @@ def _review_single_module(
     ]
     
     try:
-        result = llm.chat_json_stream(messages, on_chunk=on_chunk, max_tokens=1536)
+        result = llm.chat_json(messages, max_tokens=1536)
         result["module_order"] = module_order
         result["module_title"] = module_title
         result["_usage_records"] = llm.get_usage_records()
@@ -144,8 +143,7 @@ async def reviewer_node(state: AgentState) -> Dict[str, Any]:
 
     # 模块级别审查
     if use_module_review:
-        _emit_thinking_start("审查智能体", "")
-        result = await _review_modules(module_list, task_breakdown, learning_goal, on_chunk=_emit_thinking_chunk)
+        result = await _review_modules(module_list, task_breakdown, learning_goal)
         extra_records = result.pop("_usage_records", None) or []
         _flush_review_usage(
             result.get("module_review_results", []),
@@ -155,8 +153,7 @@ async def reviewer_node(state: AgentState) -> Dict[str, Any]:
         return result
 
     # 批量 RAG 审查（原有逻辑）
-    _emit_thinking_start("审查智能体", "")
-    result = _review_rag_content(rag_chunks, learning_goal, on_chunk=_emit_thinking_chunk)
+    result = _review_rag_content(rag_chunks, learning_goal)
     extra_records = result.pop("_usage_records", None) or []
     _flush_review_usage([], state.get("user_id", 0),
                         "content_review", state.get("task_id"),
@@ -168,7 +165,6 @@ async def _review_modules(
     module_list: List[Dict[str, Any]],
     task_breakdown: Dict[str, Any],
     learning_goal: str,
-    on_chunk=None,
 ) -> Dict[str, Any]:
     """模块级别审查：逐个检查已生成的模块"""
     logger.info(f"  待审查模块数: {len(module_list)} 个")
@@ -185,7 +181,6 @@ async def _review_modules(
                 module,
                 i + 1,
                 task_module,
-                on_chunk,
             )
             tasks.append(task)
         
@@ -296,7 +291,6 @@ async def _review_modules(
 def _review_rag_content(
     rag_chunks: List[Dict[str, Any]],
     learning_goal: str,
-    on_chunk=None,
 ) -> Dict[str, Any]:
     """批量 RAG 审查：检查检索内容的整体质量（原有逻辑）"""
     logger.info(f"  待审查内容块: {len(rag_chunks)} 个")
@@ -344,7 +338,7 @@ def _review_rag_content(
 
     try:
         logger.info(f"  [审查智能体] 正在调用 LLM 进行内容审查...")
-        result = llm.chat_json_stream(messages, on_chunk=on_chunk)
+        result = llm.chat_json(messages)
         passed = result.get("passed", True)
         issues = result.get("issues", [])
         suggestions = result.get("suggestions", [])

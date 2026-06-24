@@ -1376,12 +1376,11 @@ async function renderMermaidInResource() {
           _initMermaidInteraction(el, uid, true)
         } catch (err: any) {
           if (el.getAttribute('data-mermaid-code') === codeBase64) {
-            console.error('Mermaid rendering error:', err)
+            console.warn('Mermaid rendering failed, showing raw code:', err.message)
+            // 清理 mermaid.render 失败后插入到 body 的错误 SVG 残留
+            document.querySelectorAll('div[id^="dmermaid-"], svg[id^="mermaid-"]').forEach(n => n.remove())
             el.innerHTML = `
-              <div class="flex flex-col p-4 bg-red-50 rounded-xl border border-red-100">
-                <span class="text-sm font-semibold text-red-600 mb-2">图表渲染失败</span>
-                <pre class="text-xs text-red-500 overflow-x-auto p-2 bg-white rounded border border-red-50/50">${err.message || String(err)}</pre>
-              </div>
+              <pre class="text-xs text-navy-500 bg-navy-50 rounded-xl p-4 border border-navy-100/50 overflow-x-auto leading-relaxed">${normalizedCode}</pre>
             `
             el.setAttribute('data-rendered', 'true')
             el.removeAttribute('data-rendering')

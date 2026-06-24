@@ -184,7 +184,7 @@ def _summarize_source_content(source_content: str, state: AgentState, on_chunk=N
                 ),
             },
         ]
-        result = llm.chat_json_stream(summary_messages, on_chunk=on_chunk, max_tokens=1024)
+        result = llm.chat_json(summary_messages, max_tokens=1024)
         record_from_mimo(
             llm,
             state.get("user_id", 0),
@@ -820,7 +820,6 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
             logger.info("  [动画生成] 正在调用 LLM 流式生成完整 HTML...")
 
             # 使用流式生成避免长输出超时
-            _emit_thinking_start("动画生成智能体", "")
             response_chunks = []
             chunk_count = 0
             for chunk in llm.chat_stream(messages, max_tokens=ANIMATION_HTML_MAX_TOKENS):

@@ -263,8 +263,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [类型资源生成] 正在调用 LLM 生成 {resource_type}...")
-        _emit_thinking_start("类型资源生成智能体", "")
-        result = llm.chat_json_stream(messages, on_chunk=_emit_thinking_chunk, max_tokens=8192)
+        result = llm.chat_json(messages, max_tokens=8192)
         record_from_mimo(llm, state.get("user_id", 0), "resource_type_generation", state.get("task_id"))
 
         # 标准化输出

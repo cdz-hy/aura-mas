@@ -122,7 +122,6 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
     try:
         logger.info(f"  [简答智能体] 正在调用 LLM 生成回复（流式）...")
         sse_cb = state.get("sse_callback")
-        _emit_thinking_start("简答智能体", "")
 
         def _on_chunk(chunk: str):
             if sse_cb:
@@ -252,16 +251,7 @@ def _generate_anomaly_clarification(
     ]
 
     try:
-        sse_cb = state.get("sse_callback")
-
-        def _emit_thinking_start_inner(agent: str, prefix: str = ""):
-            if sse_cb:
-                try:
-                    sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
-                except Exception:
-                    pass
-
-        _emit_thinking_start_inner("简答智能体", "")
+        sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
 
         def _on_chunk(chunk: str):
             if sse_cb:

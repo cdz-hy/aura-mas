@@ -238,7 +238,11 @@ class MIMOClient:
         }
 
         url = f"{self.base_url.rstrip('/')}/chat/completions"
-        resp = _llm_session.post(url, headers=headers, json=payload, stream=True, timeout=self.request_timeout)
+        # 流式请求：连接超时 30s，读取超时用 request_timeout（默认 120s）
+        # 但流式 LLM 输出可能间隔较长，额外加 60s 容错
+        stream_read_timeout = self.request_timeout + 60
+        resp = _llm_session.post(url, headers=headers, json=payload, stream=True,
+                                 timeout=(30, stream_read_timeout))
 
         if resp.status_code != 200:
             raise Exception(f"MIMO API 流式调用失败 ({resp.status_code}): {resp.text}")

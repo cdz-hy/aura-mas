@@ -111,7 +111,6 @@ def _optimize_search_queries(
     chat_history: list = None,
     user_id: int = 0,
     task_id: int = None,
-    on_chunk=None,
 ) -> List[str]:
     """使用 LLM 为每个模块生成优化的检索词"""
     if not modules:
@@ -152,7 +151,7 @@ def _optimize_search_queries(
     ]
 
     try:
-        result = llm.chat_json_stream(messages, on_chunk=on_chunk)
+        result = llm.chat_json(messages)
         record_from_mimo(llm, user_id, "rag_query_optimization", task_id)
         if isinstance(result, dict) and "queries" in result:
             queries = result["queries"]
@@ -240,7 +239,6 @@ async def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
     )
     
     _emit_thinking("正在分析用户画像和历史对话，优化检索关键词...")
-    _emit_thinking_start("RAG检索智能体", "")
     # 获取各个模块的优化检索词
     search_queries = _optimize_search_queries(
         modules_to_retrieve,
@@ -249,7 +247,6 @@ async def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
         chat_history,
         user_id=state.get("user_id", 0),
         task_id=state.get("task_id"),
-        on_chunk=_emit_thinking_chunk,
     )
     
     if search_queries:
