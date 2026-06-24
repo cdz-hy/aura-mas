@@ -10,7 +10,7 @@ import org.springframework.stereotype.Service;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
+
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
@@ -65,17 +65,13 @@ public class StatsService {
                         .eq(QuizRecord::getIsCorrect, 1));
         stats.put("correctQuizzes", correctQuizCount);
 
-        LocalDateTime todayStart = LocalDateTime.of(LocalDate.now(), LocalTime.MIN);
-        LocalDateTime todayEnd = LocalDateTime.of(LocalDate.now(), LocalTime.MAX);
-
-        List<LearningDuration> todayDurations = durationMapper.selectList(
-                new LambdaQueryWrapper<LearningDuration>()
-                        .eq(LearningDuration::getUserId, userId)
-                        .between(LearningDuration::getCreatedAt, todayStart, todayEnd));
-
-        int todaySeconds = todayDurations.stream()
-                .mapToInt(d -> d.getDurationSeconds() != null ? d.getDurationSeconds() : 0)
-                .sum();
+        // 今日学习时长（从 DailyStudyTime 表获取，与心跳写入一致）
+        DailyStudyTime todayDaily = dailyStudyTimeMapper.selectOne(
+                new LambdaQueryWrapper<DailyStudyTime>()
+                        .eq(DailyStudyTime::getUserId, userId)
+                        .eq(DailyStudyTime::getStudyDate, LocalDate.now()));
+        int todaySeconds = todayDaily != null && todayDaily.getDurationSeconds() != null
+                ? todayDaily.getDurationSeconds() : 0;
         stats.put("todayDurationSeconds", todaySeconds);
 
         List<LearningDuration> allDurations = durationMapper.selectList(

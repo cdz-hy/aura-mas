@@ -16,6 +16,7 @@ from app.agents.schemas import (
     NODE_PROFILE_MAINTAINER, NODE_HUMAN_CONFIRM,
     NODE_REVIEW_ORCHESTRATE, NODE_REVIEWER, NODE_CONTENT_ORCHESTRATOR,
     NODE_WAIT_USER_REPLY,
+    NODE_DEBATE,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
     INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP, INTENT_CLARIFY,
 )
@@ -31,6 +32,7 @@ from app.agents.quiz_grader import quiz_grader_node
 from app.agents.resource_type_generator import resource_type_generator_node
 from app.agents.animation_skill_generator import animation_skill_generator_node
 from app.agents.profile_maintainer import profile_maintainer_node
+from app.graph.debate_graph import get_debate_graph
 from app.services.db.java_client import java_client
 
 logger = logging.getLogger("graph.learning")
@@ -75,8 +77,8 @@ def route_after_animation_skill_generator(state: AgentState) -> str:
     return END
 
 
-def route_after_rag(state: AgentState) -> str | List[str]:
-    """RAG 检索之后的路由 - 决定并行或串行分支"""
+def route_after_rag(state: AgentState) -> str:
+    """RAG 检索之后的路由 - 进入辩论子图或资源自主生成"""
     anomaly = _route_if_anomaly(state)
     if anomaly:
         return anomaly
@@ -86,15 +88,13 @@ def route_after_rag(state: AgentState) -> str | List[str]:
         logger.info(f"  [路由] RAG 检索不足 (低分/无关内容已过滤) -> 资源自主生成智能体")
         return NODE_RESOURCE_GENERATOR
 
-    # 自主生成内容存在时，必须走串行：先编排后审查
+    # 正常模式 + 自主生成模式：统一进入辩论子图
     generated_content = state.get("generated_content")
     if generated_content:
-        logger.info(f"  [路由] 自主生成模式: 先编排 -> 后审查 (串行路由)")
-        return NODE_CONTENT_ORCHESTRATOR
-
-    # 正常模式：并行分支到编排和审查
-    logger.info(f"  [路由] RAG 检索完成 -> 编排与审查 (并行路由)")
-    return [NODE_CONTENT_ORCHESTRATOR, NODE_REVIEWER]
+        logger.info(f"  [路由] 自主生成模式 -> 辩论子图 (编排+审查)")
+    else:
+        logger.info(f"  [路由] RAG 检索完成 -> 辩论子图 (编排+审查)")
+    return NODE_DEBATE
 
 
 def route_after_content_orchestrator(state: AgentState) -> str:
@@ -151,6 +151,29 @@ def route_after_review_orchestrate(state: AgentState) -> str:
     # 审查编排完成 → 直接结束（画像维护改为异步后台执行）
     logger.info(f"  [路由] 审查编排完成 -> END (画像维护将在后台异步执行)")
     return END
+
+
+def route_after_debate(state: AgentState) -> str:
+    """辩论子图之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
+    debate_status = state.get("debate_status", "resolved")
+    review_passed = state.get("review_passed", False)
+    failed_modules = state.get("failed_modules", [])
+
+    if debate_status == "resolved" or review_passed:
+        logger.info(f"  [路由] 辩论结束(通过) -> END")
+        return END
+
+    # max_rounds 或审查未通过 → 回主控兜底
+    if failed_modules:
+        retry_ids = [m["module_order"] for m in failed_modules]
+        logger.warning(f"  [路由] 辩论结束(未通过) -> 主控智能体 (重试模块: {retry_ids})")
+    else:
+        logger.warning(f"  [路由] 辩论结束(未通过) -> 主控智能体 (重新决策)")
+    return NODE_CONTROLLER
 
 
 def route_after_simple_answer(state: AgentState) -> str:
@@ -377,9 +400,6 @@ def build_learning_graph() -> StateGraph:
     graph.add_node(NODE_TASK_DECOMPOSER, task_decomposer_node)
     graph.add_node(NODE_SIMPLE_ANSWER, simple_answer_node)
     graph.add_node(NODE_RAG_RETRIEVER, rag_retriever_node)
-    graph.add_node(NODE_CONTENT_ORCHESTRATOR, content_orchestrator_node)
-    graph.add_node(NODE_REVIEWER, reviewer_node)
-    graph.add_node(NODE_REVIEW_ORCHESTRATE, review_orchestrate_node)
     graph.add_node(NODE_RESOURCE_GENERATOR, resource_generator_node)
     graph.add_node(NODE_QUIZ_GENERATOR, quiz_generator_node)
     graph.add_node(NODE_QUIZ_GRADER, quiz_grader_node)
@@ -388,7 +408,8 @@ def build_learning_graph() -> StateGraph:
     graph.add_node(NODE_PROFILE_MAINTAINER, profile_maintainer_node)
     graph.add_node(NODE_HUMAN_CONFIRM, _human_confirm_node)
     graph.add_node(NODE_WAIT_USER_REPLY, wait_user_reply_node)
-    logger.info("已注册 15 个节点")
+    graph.add_node(NODE_DEBATE, get_debate_graph())
+    logger.info("已注册 16 个节点（含追问挂起 + 辩论子图）")
 
     # 设置入口
     graph.set_entry_point(NODE_CONTROLLER)
@@ -437,49 +458,28 @@ def build_learning_graph() -> StateGraph:
     # 追问挂起 -> 回到主控继续 ReAct
     graph.add_edge(NODE_WAIT_USER_REPLY, NODE_CONTROLLER)
 
-    # RAG 检索 -> 编排与审查分支（或资源自主生成）
+    # RAG 检索 -> 辩论子图（或资源自主生成）
     graph.add_conditional_edges(
         NODE_RAG_RETRIEVER,
         route_after_rag,
         {
-            NODE_CONTENT_ORCHESTRATOR: NODE_CONTENT_ORCHESTRATOR,
-            NODE_REVIEWER: NODE_REVIEWER,
+            NODE_DEBATE: NODE_DEBATE,
             NODE_RESOURCE_GENERATOR: NODE_RESOURCE_GENERATOR,
             NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
         }
     )
 
-    # 内容编排 -> 审查智能体（串行）或 审查编排汇合节点（并行）
+    # 辩论子图 -> 结束或回主控兜底
     graph.add_conditional_edges(
-        NODE_CONTENT_ORCHESTRATOR,
-        route_after_content_orchestrator,
+        NODE_DEBATE,
+        route_after_debate,
         {
-            NODE_REVIEWER: NODE_REVIEWER,
-            NODE_REVIEW_ORCHESTRATE: NODE_REVIEW_ORCHESTRATE,
-            NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
-        }
-    )
-
-    # 审查智能体 -> 审查编排汇合节点
-    graph.add_conditional_edges(
-        NODE_REVIEWER,
-        route_after_reviewer,
-        {
-            NODE_REVIEW_ORCHESTRATE: NODE_REVIEW_ORCHESTRATE,
-            NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
-        }
-    )
-
-    # 审查编排汇合 -> 画像维护、回到主控或结束
-    graph.add_conditional_edges(
-        NODE_REVIEW_ORCHESTRATE,
-        route_after_review_orchestrate,
-        {
-            NODE_PROFILE_MAINTAINER: NODE_PROFILE_MAINTAINER,
             NODE_CONTROLLER: NODE_CONTROLLER,
             END: END,
         }
     )
+
+    # 辩论子图内部已处理 编排→审查 循环，不再需要父图中的编排/审查边
 
     # 简答 -> 结束、画像维护、自主生成、或异常回主控
     graph.add_conditional_edges(

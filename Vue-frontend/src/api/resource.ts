@@ -46,3 +46,23 @@ export function bulkCreateResources(resources: Array<{
 }>) {
   return request.post<any, { data: LearningResource[] }>('/resource/bulk', resources)
 }
+
+// ─── 资源完成进度 ───
+
+export interface ResourceProgress {
+  resourceId: number
+  status: number // 0=未开始, 1=学习中, 2=已完成
+  durationSeconds: number
+}
+
+export function markResourceComplete(planId: number, resourceId: number) {
+  return request.post<any, { data: null }>('/progress/complete', null, { params: { planId, resourceId } })
+}
+
+export function unmarkResourceComplete(planId: number, resourceId: number) {
+  return request.delete<any, { data: null }>('/progress/complete', { params: { planId, resourceId } })
+}
+
+export function getProgressByPlan(planId: number) {
+  return request.get<any, { data: ResourceProgress[] }>('/progress/plan', { params: { planId } })
+}

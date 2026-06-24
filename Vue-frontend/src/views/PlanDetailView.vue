@@ -63,10 +63,10 @@
             <span class="text-xs px-2 py-0.5 rounded-full" :class="statusClass(plan.status)">
               {{ statusText(plan.status) }}
             </span>
-            <span class="text-xs text-navy-400">{{ Math.round(plan.progress || 0) }}%</span>
+            <span class="text-xs text-navy-400">{{ planProgress }}%</span>
           </div>
           <div class="mt-2 h-1.5 bg-navy-100 rounded-full overflow-hidden">
-            <div class="h-full bg-gradient-to-r from-navy-400 to-sage-500 rounded-full transition-all duration-500" :style="{ width: `${plan.progress || 0}%` }"></div>
+            <div class="h-full bg-gradient-to-r from-navy-400 to-sage-500 rounded-full transition-all duration-500" :style="{ width: `${planProgress}%` }"></div>
           </div>
         </div>
 
@@ -114,7 +114,21 @@
               >
                 <span class="w-2 h-2 rounded-full flex-shrink-0" :class="res.status === 2 ? 'bg-emerald-400' : res.status === 1 ? 'bg-blue-400' : res.status === 3 ? 'bg-red-400' : 'bg-navy-200'"></span>
                 <span class="text-navy-600 truncate flex-1">{{ res.moduleData?.title || typeLabels[res.moduleType] || res.moduleType }}</span>
-                <span v-if="res.status === 2" class="text-emerald-500 text-[10px]">已生成</span>
+                <template v-if="res.status >= 2">
+                  <button
+                    v-if="progressMap[res.id] === 2"
+                    class="text-emerald-600 text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 transition-colors"
+                    @click.stop="toggleResourceComplete(res, $event)"
+                    title="点击取消完成"
+                  >已完成</button>
+                  <button
+                    v-else-if="res.moduleType !== 'quiz'"
+                    class="text-navy-400 text-[10px] px-1.5 py-0.5 rounded bg-navy-50 hover:bg-navy-100 transition-colors"
+                    @click.stop="toggleResourceComplete(res, $event)"
+                    title="点击标记完成"
+                  >未完成</button>
+                  <span v-else class="text-navy-300 text-[10px]">未完成</span>
+                </template>
                 <span v-else-if="res.status === 1 && !stuckResources.has(res.id)" class="text-blue-500 text-[10px]">生成中</span>
                 <span v-else-if="res.status === 1 || res.status === 3" class="text-red-500 text-[10px] cursor-pointer hover:underline" @click.stop="handleRetry(res)">重试</span>
                 <span v-else class="text-navy-300 text-[10px]">待生成</span>
@@ -520,7 +534,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { getPlan, updatePlan } from '@/api/plan'
-import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi, deleteResource as deleteResourceApi } from '@/api/resource'
+import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi, deleteResource as deleteResourceApi, markResourceComplete, unmarkResourceComplete, getProgressByPlan } from '@/api/resource'
 import { parseMarkdown, extractCitations } from '@/utils/markdown'
 import { normalizeAnimationHtml } from '@/utils/animationHtml'
 import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
@@ -970,6 +984,7 @@ onUnmounted(() => {
 const plan = ref<LearningPlan | null>(null)
 const resources = ref<LearningResource[]>([])
 const stuckResources = ref(new Set<number>())
+const progressMap = ref<Record<number, number>>({}) // resourceId -> status (0/1/2)
 const selectedModuleIndex = ref(-1)
 const selectedResourceId = ref<number | null>(null)
 const selectedResource = ref<LearningResource | null>(null)
@@ -1025,8 +1040,44 @@ async function loadResources() {
       } catch {}
     }))
     stuckResources.value = stuck
+
+    // 加载资源完成进度
+    await loadProgress()
   } catch (e) {
     console.error('[PlanDetail] 加载资源失败:', e)
+  }
+}
+
+async function loadProgress() {
+  const id = planId.value
+  if (!id) return
+  try {
+    const res = await getProgressByPlan(id)
+    const map: Record<number, number> = {}
+    for (const p of (res.data || [])) {
+      map[p.resourceId] = p.status
+    }
+    progressMap.value = map
+  } catch (e) {
+    console.error('[PlanDetail] 加载进度失败:', e)
+  }
+}
+
+async function toggleResourceComplete(res: LearningResource, e: Event) {
+  e.stopPropagation()
+  const planIdVal = planId.value
+  if (!planIdVal) return
+  const currentStatus = progressMap.value[res.id]
+  try {
+    if (currentStatus === 2) {
+      await unmarkResourceComplete(planIdVal, res.id)
+      progressMap.value = { ...progressMap.value, [res.id]: 1 }
+    } else {
+      await markResourceComplete(planIdVal, res.id)
+      progressMap.value = { ...progressMap.value, [res.id]: 2 }
+    }
+  } catch (err) {
+    console.error('[PlanDetail] 更新完成状态失败:', err)
   }
 }
 
@@ -1244,6 +1295,13 @@ const modules = computed(() => {
     mod.resources.push(r)
   })
   return Array.from(moduleMap.values()).sort((a, b) => a.order - b.order)
+})
+
+// 基于 progressMap 计算计划进度
+const planProgress = computed(() => {
+  const total = resources.value.filter(r => r.status >= 2).length
+  const completed = Object.values(progressMap.value).filter(s => s === 2).length
+  return total > 0 ? Math.round((completed / total) * 100) : 0
 })
 
 function renderMd(text: string) { return parseMarkdown(text) }

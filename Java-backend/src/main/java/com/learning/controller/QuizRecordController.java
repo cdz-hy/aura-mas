@@ -1,9 +1,14 @@
 package com.learning.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.learning.common.Result;
+import com.learning.entity.LearningResource;
 import com.learning.entity.QuizRecord;
+import com.learning.mapper.LearningResourceMapper;
 import com.learning.mapper.QuizRecordMapper;
+import com.learning.service.UserLearningProgressService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +27,9 @@ import java.util.Map;
 public class QuizRecordController {
 
     private final QuizRecordMapper quizRecordMapper;
+    private final LearningResourceMapper resourceMapper;
+    private final UserLearningProgressService progressService;
+    private final ObjectMapper objectMapper;
 
     @Operation(summary = "内部接口：创建答题记录")
     @PostMapping("/quiz/internal/create")
@@ -41,6 +49,34 @@ public class QuizRecordController {
             record.setDifficulty(body.get("difficulty") != null ? Integer.valueOf(body.get("difficulty").toString()) : 3);
             record.setAnswerTime(LocalDateTime.now());
             quizRecordMapper.insert(record);
+
+            // 检查是否所有题目都已答完，自动标记完成
+            try {
+                Long resourceId = record.getResourceId();
+                Long userId = record.getUserId();
+                Long planId = record.getPlanId();
+
+                Long answeredCount = quizRecordMapper.selectCount(
+                        new LambdaQueryWrapper<QuizRecord>()
+                                .eq(QuizRecord::getUserId, userId)
+                                .eq(QuizRecord::getResourceId, resourceId));
+
+                LearningResource resource = resourceMapper.selectById(resourceId);
+                if (resource != null && resource.getModuleData() != null) {
+                    JsonNode moduleData = objectMapper.readTree(resource.getModuleData());
+                    int totalQuestions = moduleData.has("total_questions")
+                            ? moduleData.get("total_questions").asInt()
+                            : (moduleData.has("questions") ? moduleData.get("questions").size() : 0);
+
+                    if (totalQuestions > 0 && answeredCount >= totalQuestions) {
+                        progressService.markComplete(userId, planId, resourceId);
+                        log.info("测验资源 {} 已全部答完，自动标记完成", resourceId);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("测验自动完成检测失败: {}", e.getMessage());
+            }
+
             return Result.success(record);
         } catch (Exception e) {
             log.error("创建答题记录失败: {}", e.getMessage(), e);

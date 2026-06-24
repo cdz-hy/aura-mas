@@ -1369,7 +1369,7 @@ async def submit_quiz(
                 result = await loop.run_in_executor(
                     None, lambda: llm.chat_json_stream(messages, on_chunk=on_token, max_tokens=2048)
                 )
-                record_from_mimo(llm, user_id, "quiz_grading_inline", generation_task_id)
+                record_from_mimo(llm, user_id, "quiz_grading_inline")
             except Exception as e:
                 logger.error(f"[测验批改] Q{idx + 1} LLM 批改异常: {e}")
                 result = {"score": 0, "is_correct": False, "feedback": f"批改异常: {str(e)}",

@@ -80,7 +80,28 @@ const suggestions = ref<Suggestion[]>([])
 const loading = ref(false)
 const error = ref('')
 
-onMounted(() => fetchSuggestions())
+const CACHE_KEY = 'ai_suggestions_cache'
+
+interface CachedSuggestions {
+  date: string
+  suggestions: Suggestion[]
+}
+
+onMounted(() => {
+  // 检查缓存，一天只生成一次
+  try {
+    const raw = localStorage.getItem(CACHE_KEY)
+    if (raw) {
+      const cached: CachedSuggestions = JSON.parse(raw)
+      const today = new Date().toISOString().slice(0, 10)
+      if (cached.date === today && cached.suggestions.length > 0) {
+        suggestions.value = cached.suggestions
+        return
+      }
+    }
+  } catch {}
+  fetchSuggestions()
+})
 
 async function fetchSuggestions() {
   if (loading.value) return
@@ -124,7 +145,17 @@ async function fetchSuggestions() {
           const msg = JSON.parse(line.slice(6))
           if (msg.type === 'done' && msg.content) {
             const parsed = parseSuggestions(msg.content)
-            if (parsed.length > 0) suggestions.value = parsed
+            if (parsed.length > 0) {
+              suggestions.value = parsed
+              // 缓存到 localStorage，一天有效
+              try {
+                const cache: CachedSuggestions = {
+                  date: new Date().toISOString().slice(0, 10),
+                  suggestions: parsed,
+                }
+                localStorage.setItem(CACHE_KEY, JSON.stringify(cache))
+              } catch {}
+            }
           } else if (msg.type === 'error') {
             throw new Error(msg.content)
           }

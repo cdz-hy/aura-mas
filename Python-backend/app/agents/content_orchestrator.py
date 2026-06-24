@@ -114,6 +114,7 @@ def _generate_single_module(
     chat_history: List[Dict[str, str]],
     sse_callback=None,
     resource_id: int = 0,
+    reviewer_criticism: str = None,
 ) -> Dict[str, Any]:
     """
     为单个模块生成内容（用于并行编排）
@@ -221,6 +222,13 @@ def _generate_single_module(
 {type_hint}
 用户个性化内容偏好要求（必须严格遵守且在此模块中体现）:
 {user_pref_text}
+{f'''
+
+---
+{reviewer_criticism}
+
+---
+''' if reviewer_criticism else ''}
 
 检索到的相关知识资料:
 {content_text}
@@ -358,6 +366,7 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
 
         try:
             tasks = []
+            reviewer_criticism = state.get("reviewer_criticism")
             for module_id, module_info in target_modules_info:
                 placeholder = placeholder_map.get(module_id, {})
                 res_id = placeholder.get("id", 0)
@@ -371,6 +380,7 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                     chat_history,
                     sse_cb,
                     res_id,
+                    reviewer_criticism,
                 )
                 tasks.append(task)
             
@@ -515,6 +525,7 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
 
         try:
             tasks = []
+            reviewer_criticism = state.get("reviewer_criticism")
             for i, module in enumerate(modules):
                 module_order = i + 1
                 placeholder = placeholder_map.get(module_order, {})
@@ -529,6 +540,7 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                     chat_history,
                     sse_cb,
                     res_id,
+                    reviewer_criticism,
                 )
                 tasks.append(task)
             
@@ -803,6 +815,72 @@ def _batch_orchestration(
                 "step_description": "内容编排失败"
             }],
         }
+
+
+async def debate_orchestrator_node(state: AgentState) -> Dict[str, Any]:
+    """
+    辩论模式编排节点
+
+    从 debate_messages 读取审查者的批评（而非 state 字段），
+    将批评注入编排 prompt，生成后写出详细修改说明到 debate_messages。
+    """
+    debate_messages = state.get("debate_messages", [])
+    debate_round = state.get("debate_round", 1)
+
+    # ── 从 debate_messages 提取审查者批评 ──
+    reviewer_criticism_text = None
+    for msg in reversed(debate_messages):
+        if msg.get("role") == "reviewer":
+            reviewer_criticism_text = msg.get("content", "")
+            break
+
+    modified_state = dict(state)
+    is_retry = reviewer_criticism_text is not None and debate_round > 1
+
+    if is_retry:
+        # 从 debate_messages 中的批评提取失败模块编号（回退：也查 state）
+        failed_modules = state.get("failed_modules", [])
+        if failed_modules:
+            retry_ids = [m["module_order"] for m in failed_modules]
+            modified_state["retry_mode"] = True
+            modified_state["target_module_ids"] = retry_ids
+
+        # 将审查者在 debate_messages 中写出的批评注入 prompt
+        modified_state["reviewer_criticism"] = (
+            f"## 第{debate_round - 1}轮审查反馈（必须针对性修复）\n\n"
+            f"{reviewer_criticism_text}\n\n"
+            f"请在重新生成时逐一修复上述问题，并在 metadata.fixes_applied 中列出修复项。"
+        )
+        logger.info(f"  [辩论编排] 第{debate_round}轮: 从 debate_messages 读取批评，重试模块 {modified_state.get('target_module_ids', '全量')}")
+    else:
+        logger.info(f"  [辩论编排] 第{debate_round}轮: 首次编排")
+
+    # ── 调用编排逻辑 ──
+    result = await content_orchestrator_node(modified_state)
+
+    # ── 写出详细修改说明到 debate_messages ──
+    module_list = result.get("module_list", [])
+    if is_retry:
+        # 详细说明每个模块改了什么、为什么这样改
+        defense_parts = [f"第{debate_round}轮修改说明:"]
+        for m in module_list:
+            order = m.get("module_order", "?")
+            title = m.get("title", "")
+            fixes = m.get("metadata", {}).get("fixes_applied", [])
+            if fixes:
+                defense_parts.append(f"- 模块{order}({title}): {'; '.join(fixes)}")
+            else:
+                defense_parts.append(f"- 模块{order}({title}): 保持原有内容")
+        defense_text = "\n".join(defense_parts)
+    else:
+        defense_text = f"第{debate_round}轮: 完成 {len(module_list)} 个模块的首次编排。"
+
+    result["debate_messages"] = [{"role": "orchestrator", "content": defense_text}]
+    result["debate_round"] = debate_round
+    result.pop("retry_mode", None)
+    result.pop("target_module_ids", None)
+
+    return result
 
 
 def _merge_modules(
