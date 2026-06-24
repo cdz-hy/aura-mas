@@ -23,6 +23,7 @@ NODE_RESOURCE_TYPE_GENERATOR = "resource_type_generator"
 NODE_ANIMATION_SKILL_GENERATOR = "animation_skill_generator"
 NODE_PROFILE_MAINTAINER = "profile_maintainer"
 NODE_HUMAN_CONFIRM = "human_confirm"
+NODE_DEBATE = "debate"
 
 # 意图类型
 INTENT_GENERATE_RESOURCE = "generate_resource"
@@ -134,6 +135,13 @@ class AgentState(TypedDict, total=False):
     agent_anomaly: bool  # 智能体自主检测到内容偏离/异常，需中断回主控
     anomaly_reason: str  # 异常原因描述
     anomaly_clarify: bool  # 主控已处理异常，简答智能体进入追问澄清模式
+
+    # ==================== 辩论子图 ====================
+    debate_messages: Annotated[List[Dict[str, str]], operator.add]  # 辩论消息黑板（各节点追加）
+    debate_round: int          # 当前辩论轮次
+    debate_status: str         # "ongoing" / "resolved" / "max_rounds"
+    reviewer_criticism: str    # 审查者的结构化批评（注入到编排 prompt）
+    debate_context: str        # 辩论上下文（注入到审查 prompt）
 
     # ==================== 循环控制 ====================
     iteration_count: int  # 当前迭代次数（防止无限循环）

@@ -37,25 +37,36 @@ def _review_single_module(
     module: Dict[str, Any],
     module_order: int,
     task_breakdown_module: Dict[str, Any],
+    debate_context: str = None,
 ) -> Dict[str, Any]:
     """
     审查单个模块的内容质量
-    
+
     Args:
         module: 生成的模块内容
         module_order: 模块顺序
         task_breakdown_module: 任务分解中的模块信息（包含预期的关键点）
-    
+        debate_context: 辩论上下文（编排者对上轮审查的回应）
+
     Returns:
         审查结果
     """
     llm = get_reviewer_llm()
-    
+
     module_title = module.get("title", "")
     module_content = module.get("content", "")
     module_type = module.get("module_type", "text")
     expected_key_points = task_breakdown_module.get("key_points", [])
-    
+
+    debate_section = ""
+    if debate_context:
+        debate_section = f"""
+
+辩论上下文（编排者的修改说明）:
+{debate_context}
+
+请重点检查上述修改是否已体现在本模块内容中。"""
+
     messages = [
         {"role": "system", "content": REVIEWER_MODULE_PROMPT},
         {"role": "user", "content": f"""模块信息:
@@ -65,6 +76,7 @@ def _review_single_module(
 
 模块内容:
 {module_content[:1500]}
+{debate_section}
 
 请审查该模块的内容质量，输出 JSON:"""}
     ]
@@ -113,8 +125,9 @@ async def reviewer_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  学习目标: {learning_goal[:100]}")
     
     # 模块级别审查
+    debate_context = state.get("debate_context")
     if use_module_review:
-        result = await _review_modules(module_list, task_breakdown, learning_goal)
+        result = await _review_modules(module_list, task_breakdown, learning_goal, debate_context)
         extra_records = result.pop("_usage_records", None) or []
         _flush_review_usage(
             result.get("module_review_results", []),
@@ -136,6 +149,7 @@ async def _review_modules(
     module_list: List[Dict[str, Any]],
     task_breakdown: Dict[str, Any],
     learning_goal: str,
+    debate_context: str = None,
 ) -> Dict[str, Any]:
     """模块级别审查：逐个检查已生成的模块"""
     logger.info(f"  待审查模块数: {len(module_list)} 个")
@@ -152,6 +166,7 @@ async def _review_modules(
                 module,
                 i + 1,
                 task_module,
+                debate_context,
             )
             tasks.append(task)
         
@@ -257,6 +272,75 @@ async def _review_modules(
                 "step_description": "审查异常，默认不通过"
             }],
         }
+
+
+async def debate_reviewer_node(state: AgentState) -> Dict[str, Any]:
+    """
+    辩论模式审查节点
+
+    从 debate_messages 读取编排者的修改说明，注入到审查 prompt，
+    审查后将详细批评写入 debate_messages（供下轮编排者读取）。
+    """
+    debate_messages = state.get("debate_messages", [])
+    debate_round = state.get("debate_round", 1)
+    logger.info(f"  [辩论审查] 第{debate_round}轮: 开始审查")
+
+    # ── 从 debate_messages 提取编排者的修改说明 ──
+    orchestrator_defense = None
+    for msg in reversed(debate_messages):
+        if msg.get("role") == "orchestrator":
+            orchestrator_defense = msg.get("content", "")
+            break
+
+    modified_state = dict(state)
+    if orchestrator_defense and debate_round > 1:
+        # 注入辩论上下文：编排者说了什么 + 上轮审查者说了什么
+        last_reviewer_msg = ""
+        for msg in reversed(debate_messages[:-1]):
+            if msg.get("role") == "reviewer":
+                last_reviewer_msg = msg.get("content", "")
+                break
+        context_parts = []
+        if last_reviewer_msg:
+            context_parts.append(f"## 上轮审查意见\n{last_reviewer_msg}")
+        context_parts.append(f"## 编排者修改说明\n{orchestrator_defense}")
+        modified_state["debate_context"] = "\n\n".join(context_parts)
+        logger.info(f"  [辩论审查] 注入辩论上下文")
+
+    # ── 调用审查逻辑 ──
+    result = await reviewer_node(modified_state)
+
+    # ── 将详细批评写入 debate_messages ──
+    passed = result.get("review_passed", False)
+    failed_modules = result.get("failed_modules", [])
+
+    if passed:
+        content = f"第{debate_round}轮审查结论: 全部通过，模块质量合格。"
+    else:
+        criticism_parts = [f"第{debate_round}轮审查结论: {len(failed_modules)} 个模块未通过。"]
+        for fm in failed_modules:
+            order = fm.get("module_order", "?")
+            title = fm.get("module_title", f"模块{order}")
+            feedback = fm.get("feedback", "无具体反馈")
+            missing = fm.get("missing_points", [])
+            issues = fm.get("issues", [])
+            criticism_parts.append(f"\n模块{order}({title}):")
+            criticism_parts.append(f"  问题: {feedback}")
+            if missing:
+                criticism_parts.append(f"  缺失要点: {', '.join(missing)}")
+            for issue in issues:
+                severity = issue.get("severity", "")
+                desc = issue.get("description", "")
+                suggestion = issue.get("suggestion", "")
+                criticism_parts.append(f"  [{severity}] {desc}")
+                if suggestion:
+                    criticism_parts.append(f"    建议: {suggestion}")
+        content = "\n".join(criticism_parts)
+
+    result["debate_messages"] = [{"role": "reviewer", "content": content}]
+    result["debate_round"] = debate_round
+
+    return result
 
 
 def _review_rag_content(
