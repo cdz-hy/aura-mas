@@ -38,6 +38,20 @@ export const getDomainGraph = (domainId: number) => {
   return request.get<UserKnowledgeDomain>(`/knowledge-graph/domain/${domainId}`)
 }
 
+export const updateDomainGraph = (domainId: number, graphData: GraphData) => {
+  return request.put(`/knowledge-graph/domain/${domainId}`, {
+    graphData
+  })
+}
+
+export const deleteKnowledgeDomain = (domainId: number) => {
+  return request.delete(`/knowledge-graph/domain/${domainId}`)
+}
+
+export const deleteKnowledgeNode = (domainId: number, nodeId: string) => {
+  return request.delete(`/knowledge-graph/domain/${domainId}/node/${nodeId}`)
+}
+
 export const patchKnowledgeNode = (domainId: number, nodeId: string, masteryLevel?: number, importance?: number) => {
   return request.patch(`/knowledge-graph/domain/${domainId}/node/${nodeId}`, {
     masteryLevel,

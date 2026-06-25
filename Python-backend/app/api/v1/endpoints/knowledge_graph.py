@@ -75,3 +75,59 @@ async def analyze_resources(payload: AnalyzeRequest, background_tasks: Backgroun
     background_tasks.add_task(_reanalyze_resources_task, payload.user_id, payload.resource_ids)
     
     return {"code": 200, "message": "分析任务已投递后台", "data": True}
+
+
+class OptimizeRequest(BaseModel):
+    domain_id: int
+    instruction: str
+
+from fastapi.responses import StreamingResponse
+import asyncio
+from app.agents.graph_optimizer import optimize_graph
+
+@router.post("/knowledge-graph/optimize")
+async def optimize_knowledge_graph(payload: OptimizeRequest):
+    """
+    智能整理图谱 (SSE流式返回状态)
+    """
+    if not payload.domain_id or not payload.instruction:
+        raise HTTPException(status_code=400, detail="Missing domain_id or instruction")
+
+    async def generate():
+        try:
+            yield f'data: {json.dumps({"type": "progress", "message": "正在连接知识图谱架构师..."}, ensure_ascii=False)}\n\n'
+            await asyncio.sleep(0.5)
+            
+            # 获取当前完整图谱
+            yield f'data: {json.dumps({"type": "progress", "message": "正在提取全量图谱结构..."}, ensure_ascii=False)}\n\n'
+            domain_data = java_client.get_domain_knowledge_graph(payload.domain_id)
+            if not domain_data:
+                yield f'data: {json.dumps({"type": "error", "message": "无法获取知识领域数据"}, ensure_ascii=False)}\n\n'
+                return
+            
+            domain_name = domain_data.get("domainName", "未知领域")
+            current_graph = domain_data.get("graphData", {"nodes": [], "edges": []})
+            if isinstance(current_graph, str):
+                current_graph = json.loads(current_graph)
+                
+            node_count = len(current_graph.get("nodes", []))
+            yield f'data: {json.dumps({"type": "progress", "message": f"提取成功，共 {node_count} 个节点。正在执行大模型重构规划..."}, ensure_ascii=False)}\n\n'
+            
+            # 由于大模型调用可能比较耗时，我们把它放到线程池里执行，避免阻塞主事件循环
+            loop = asyncio.get_event_loop()
+            new_graph = await loop.run_in_executor(None, optimize_graph, current_graph, payload.instruction, domain_name)
+            
+            yield f'data: {json.dumps({"type": "progress", "message": "规划完成，正在将新架构持久化至数据库..."}, ensure_ascii=False)}\n\n'
+            
+            # 保存到数据库
+            java_client.update_knowledge_domain(payload.domain_id, graph_data=new_graph)
+            
+            # 返回成功和新的图谱数据
+            yield f'data: {json.dumps({"type": "done", "graphData": new_graph}, ensure_ascii=False)}\n\n'
+            
+        except Exception as e:
+            logger.error(f"图谱整理失败: {e}", exc_info=True)
+            yield f'data: {json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)}\n\n'
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+

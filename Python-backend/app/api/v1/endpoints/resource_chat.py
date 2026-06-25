@@ -837,16 +837,32 @@ async def plan_chat(
             user_id=user_id, session_id=session_id, plan_id=plan_id_int,
         )), daemon=True).start()
 
-        # 知识图谱异步更新
-        if bs.get("generated_resource_info") and bs.get("orchestrated_content"):
+        # 知识图谱异步更新 (仅限图文类资源)
+        has_text_resource = any(r.get("type") in ["document", "text"] for r in bs.get("generated_resource_info", []))
+        if bs.get("generated_resource_info") and bs.get("orchestrated_content") and has_text_resource:
             from app.graph.knowledge_updater_graph import get_knowledge_updater_graph
             def _async_knowledge_updater():
                 try:
-                    resource_id = min(r["id"] for r in bs["generated_resource_info"] if r.get("id"))
+                    # 优先取图文类资源的ID
+                    text_resources = [r for r in bs["generated_resource_info"] if r.get("type") in ["document", "text"] and r.get("id")]
+                    if not text_resources:
+                        return
+                    resource_id = min(r["id"] for r in text_resources)
+                    
+                    resource_text_to_pass = bs["orchestrated_content"]
+                    if isinstance(resource_text_to_pass, dict):
+                        texts = []
+                        if "title" in resource_text_to_pass:
+                            texts.append(f"# {resource_text_to_pass['title']}")
+                        for m in resource_text_to_pass.get("modules", []):
+                            if "content" in m:
+                                texts.append(m["content"])
+                        resource_text_to_pass = "\n\n".join(texts)
+                    
                     updater_state = {
                         "user_id": user_id,
                         "resource_id": resource_id,
-                        "resource_text": bs["orchestrated_content"]
+                        "resource_text": resource_text_to_pass
                     }
                     updater_graph = get_knowledge_updater_graph()
                     updater_graph.invoke(updater_state)

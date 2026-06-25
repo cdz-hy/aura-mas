@@ -74,6 +74,7 @@ public class KnowledgeGraphController {
         if (req.getGraphData() != null) {
             domain.setGraphData(req.getGraphData());
         }
+        domain.setUpdatedAt(java.time.LocalDateTime.now());
         boolean success = domainService.updateById(domain);
         return success ? Result.success(true) : Result.error("更新失败");
     }
@@ -118,6 +119,7 @@ public class KnowledgeGraphController {
 
                 // 写回更新后的数据
                 domain.setGraphData(graphMap);
+                domain.setUpdatedAt(java.time.LocalDateTime.now());
                 boolean success = domainService.updateById(domain);
                 return success ? Result.success(true) : Result.error("节点更新失败");
             }
@@ -126,5 +128,53 @@ public class KnowledgeGraphController {
         }
 
         return Result.error("图谱中无 nodes 节点");
+    }
+    /**
+     * 删除整个领域知识图谱
+     */
+    @DeleteMapping("/domain/{domainId}")
+    public Result<Boolean> deleteDomain(@PathVariable Long domainId) {
+        boolean success = domainService.removeById(domainId);
+        return success ? Result.success(true) : Result.error("删除知识图谱失败");
+    }
+
+    /**
+     * 删除指定节点及其相连的关系边
+     */
+    @DeleteMapping("/domain/{domainId}/node/{nodeId}")
+    public Result<Boolean> deleteNode(@PathVariable Long domainId, @PathVariable String nodeId) {
+        UserKnowledgeDomain domain = domainService.getById(domainId);
+        if (domain == null) {
+            return Result.error("领域不存在");
+        }
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> graphMap = (Map<String, Object>) domain.getGraphData();
+            if (graphMap == null) {
+                return Result.error("图谱数据为空");
+            }
+
+            List<Map<String, Object>> nodes = (List<Map<String, Object>>) graphMap.get("nodes");
+            List<Map<String, Object>> edges = (List<Map<String, Object>>) graphMap.get("edges");
+
+            if (nodes != null) {
+                nodes.removeIf(node -> nodeId.equals(String.valueOf(node.get("id"))));
+            }
+            if (edges != null) {
+                edges.removeIf(edge -> 
+                    nodeId.equals(String.valueOf(edge.get("source"))) || 
+                    nodeId.equals(String.valueOf(edge.get("target")))
+                );
+            }
+
+            domain.setGraphData(graphMap);
+            domain.setUpdatedAt(java.time.LocalDateTime.now());
+            boolean success = domainService.updateById(domain);
+            return success ? Result.success(true) : Result.error("节点删除失败");
+
+        } catch (Exception e) {
+            return Result.error("删除节点发生异常: " + e.getMessage());
+        }
     }
 }

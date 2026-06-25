@@ -19,10 +19,18 @@
         </button>
       </div>
       <!-- Plan Link -->
-      <div v-if="planData" class="flex items-center gap-1.5 text-[11px]">
-        <span class="text-navy-400">所属计划:</span>
-        <router-link :to="`/plan/${planData.id}`" class="text-purple-600 hover:text-purple-700 hover:underline font-medium truncate flex-1" :title="planData.title">
-          {{ planData.title }}
+      <div v-if="planData" class="flex items-center gap-1.5 text-xs bg-white/60 rounded-md px-2.5 py-1.5 border border-navy-100/40 mt-1">
+        <svg class="w-3 h-3 text-navy-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+        </svg>
+        <span class="text-navy-400 font-medium flex-shrink-0">所属计划:</span>
+        <router-link :to="`/plan/${planData.id}`" class="text-navy-600 hover:text-indigo-600 font-semibold truncate flex-1 flex items-center gap-1 group transition-colors" :title="planData.title">
+          <span class="truncate">{{ planData.title }}</span>
+          <svg class="w-3 h-3 flex-shrink-0 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14"></path>
+            <path d="m12 5 7 7-7 7"></path>
+          </svg>
         </router-link>
       </div>
       <div v-else-if="loadingPlan" class="text-[11px] text-navy-300">加载计划信息...</div>

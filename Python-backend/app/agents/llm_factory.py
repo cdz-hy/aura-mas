@@ -699,5 +699,5 @@ def get_animation_skill_generator_llm() -> MIMOClient:
 
 def get_knowledge_updater_llm() -> MIMOClient:
     """图谱更新智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=8192,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=16384,
                       thinking=THINKING_DISABLED)

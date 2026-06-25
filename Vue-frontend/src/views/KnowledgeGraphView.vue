@@ -11,6 +11,59 @@
           <p class="text-sm text-navy-400 mt-1">可视化你的知识掌握网络</p>
         </div>
         <div class="flex items-center gap-2">
+          <!-- Search Box -->
+          <div ref="searchBoxRef" class="relative group">
+            <div class="flex items-center bg-white rounded-xl border border-navy-100/60 px-3 py-1.5 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100 transition-all shadow-sm h-9">
+              <svg class="w-4 h-4 text-navy-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <input 
+                v-model="searchQuery" 
+                @focus="searchFocused = true"
+                @blur="handleSearchBlur"
+                type="text" 
+                placeholder="搜索节点..." 
+                class="bg-transparent border-none outline-none text-sm text-navy-700 w-32 placeholder:text-navy-300 ml-2 focus:ring-0 p-0"
+              />
+            </div>
+            <!-- Search Results Dropdown -->
+            <Teleport to="body">
+              <transition name="fade-up">
+                <div v-if="searchFocused && searchResults.length > 0" class="kg-search-dropdown" :style="searchDropdownStyle">
+                  <div
+                    v-for="res in searchResults"
+                    :key="res.id"
+                    @mousedown.prevent="handleSearchSelect(res)"
+                    class="px-3 py-2 hover:bg-indigo-50/60 cursor-pointer transition-colors"
+                  >
+                    <div class="text-sm font-semibold text-navy-800 truncate" :title="res.name">
+                      <span v-html="highlightText(res.name, searchQuery)"></span>
+                    </div>
+                    <div v-if="res.description" class="text-[10px] text-navy-400 truncate mt-0.5" :title="res.description">{{ res.description }}</div>
+                  </div>
+                </div>
+              </transition>
+            </Teleport>
+          </div>
+
+          <!-- Actions -->
+          <button
+            @click="optimizeModalVisible = true"
+            v-if="selectedDomainId"
+            class="kg-refresh-btn flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-300"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.21 1.21 0 0 0 1.72 0L21.64 5.36a1.21 1.21 0 0 0 0-1.72Z"/>
+              <path d="m14 7 3 3"/>
+              <path d="M5 6v4"/>
+              <path d="M19 14v4"/>
+              <path d="M10 2v2"/>
+              <path d="M7 8H3"/>
+              <path d="M21 16h-4"/>
+              <path d="M11 3H9"/>
+            </svg>
+            智能整理
+          </button>
           <button
             @click="reanalyzeModalVisible = true"
             class="kg-refresh-btn flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-300"
@@ -37,16 +90,27 @@
           v-for="d in domains"
           :key="d.id"
           @click="selectDomain(d.id)"
-          class="kg-pill transition-all duration-300"
-          :class="selectedDomainId === d.id ? 'kg-pill-active' : 'kg-pill-inactive'"
+          class="kg-pill transition-all duration-300 group flex items-center"
+          :class="selectedDomainId === d.id ? 'kg-pill-active pr-2' : 'kg-pill-inactive'"
         >
-          {{ d.domainName }}
+          <span>{{ d.domainName }}</span>
+          <span 
+            v-if="selectedDomainId === d.id"
+            @click.stop="handleDeleteDomain(d)"
+            class="ml-1.5 p-1 rounded-full text-white/60 hover:text-white hover:bg-white/20 transition-all opacity-0 group-hover:opacity-100"
+            title="删除此图谱"
+          >
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </span>
         </button>
       </div>
     </div>
 
     <!-- Graph container -->
-    <div class="flex-1 relative z-10 px-6 pb-6 animate-fade-in-up" style="animation-delay: 0.1s">
+    <div class="flex-1 relative z-10 px-6 pb-6 animate-fade-in-up min-h-0" style="animation-delay: 0.1s">
       <!-- Empty state -->
       <div v-if="domains.length === 0 && !loading" class="kg-empty h-full flex flex-col items-center justify-center">
         <div class="kg-empty-icon mb-6">
@@ -138,11 +202,22 @@
               <p class="text-xs text-navy-400">查看与编辑知识节点</p>
             </div>
           </div>
-          <button @click="drawerVisible = false" class="kg-drawer-close">
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
+          <div class="flex items-center gap-2">
+            <button 
+              @click="handleDeleteNode" 
+              class="kg-drawer-close text-red-500 hover:bg-red-50 hover:text-red-600 !w-auto !px-2 flex items-center gap-1.5 transition-colors"
+              :disabled="isDeleting"
+            >
+              <svg v-if="isDeleting" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" class="opacity-25" /><path d="M4 12a8 8 0 018-8" class="opacity-75" stroke-linecap="round" /></svg>
+              <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+              <span class="text-[11px] font-bold">删除</span>
+            </button>
+            <button @click="drawerVisible = false" class="kg-drawer-close">
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <!-- Drawer body -->
@@ -231,14 +306,38 @@
               <div
                 v-for="rel in selectedNodeRelations"
                 :key="rel.id"
-                class="kg-relation-item"
+                class="kg-relation-item group"
               >
-                <span class="kg-rel-dot" :style="{ background: rel.color }"></span>
-                <span class="text-xs text-navy-600">{{ rel.fromName }}</span>
-                <span class="kg-rel-arrow">→</span>
-                <span class="text-xs font-medium" :style="{ color: rel.color }">{{ rel.label }}</span>
-                <span class="kg-rel-arrow">→</span>
-                <span class="text-xs text-navy-600">{{ rel.toName }}</span>
+                <div class="flex items-center gap-2 w-full">
+                  <!-- From Node -->
+                  <div class="flex-1 flex justify-end min-w-0">
+                    <span 
+                      class="text-xs line-clamp-1 group-hover:line-clamp-none transition-all duration-300 break-words text-right"
+                      :class="rel.fromName === selectedNode?.name ? 'font-bold text-blue-600 bg-blue-50/80 px-1.5 py-0.5 rounded' : 'font-semibold text-navy-700'"
+                    >
+                      {{ rel.fromName }}
+                    </span>
+                  </div>
+                  
+                  <!-- Relation Badge with Dashed Line -->
+                  <div class="flex-shrink-0 flex items-center justify-center relative px-3 min-w-[72px]">
+                    <div class="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 border-t border-dashed border-navy-300 group-hover:border-navy-400 transition-colors z-0"></div>
+                    <span class="text-[10px] px-2 py-0.5 rounded-full border bg-white shadow-[0_2px_4px_rgba(26,40,71,0.04)] font-bold z-10 whitespace-nowrap"
+                          :style="{ color: rel.color, borderColor: rel.color + '50' }">
+                      {{ rel.label }}
+                    </span>
+                  </div>
+
+                  <!-- To Node -->
+                  <div class="flex-1 flex justify-start min-w-0">
+                    <span 
+                      class="text-xs line-clamp-1 group-hover:line-clamp-none transition-all duration-300 break-words text-left"
+                      :class="rel.toName === selectedNode?.name ? 'font-bold text-blue-600 bg-blue-50/80 px-1.5 py-0.5 rounded' : 'font-semibold text-navy-700'"
+                    >
+                      {{ rel.toName }}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -296,19 +395,101 @@
     <!-- 重新分析模态框 -->
     <ResourceReanalyzeModal 
       v-model:visible="reanalyzeModalVisible" 
-      @success="loadDomainGraph" 
+      @success="handleReanalyzeSuccess" 
     />
+
+    <!-- 图谱智能整理模态框 -->
+    <GraphOptimizeModal
+      v-model:visible="optimizeModalVisible"
+      :domainId="selectedDomainId"
+      @submit="handleOptimizeSubmit"
+    />
+
+    <!-- 删除确认弹窗 -->
+    <ConfirmDialog
+      :visible="deleteConfirmVisible"
+      type="danger"
+      title="删除知识节点"
+      :message="`确定要彻底删除节点 [${selectedNode?.name}] 吗？与此节点相关的所有连线也将被一并删除！该操作不可撤销。`"
+      confirmText="确定删除"
+      @confirm="executeDeleteNode"
+      @cancel="deleteConfirmVisible = false"
+    />
+
+    <!-- 全领域删除确认弹窗 -->
+    <ConfirmDialog
+      :visible="domainDeleteConfirmVisible"
+      type="danger"
+      title="彻底删除知识领域"
+      :message="`确定要彻底删除整个领域 [${domainToDelete?.domainName}] 及其所有图谱节点和关系吗？该操作不可撤销。`"
+      confirmText="确定删除"
+      @confirm="executeDeleteDomain"
+      @cancel="domainDeleteConfirmVisible = false"
+    />
+
+    <!-- Global Task Indicator -->
+    <transition-group name="kg-toast" tag="div" class="fixed bottom-6 right-6 z-[120] flex flex-col gap-3 pointer-events-none">
+      <div 
+        v-for="task in globalTasks" 
+        :key="task.id"
+        class="kg-toast-card pointer-events-auto"
+        :class="{ 'kg-toast-done': task.status === 'done', 'kg-toast-error': task.status === 'error' }"
+      >
+        <!-- Animated icon area -->
+        <div class="relative w-10 h-10 flex-shrink-0">
+          <template v-if="task.status === 'processing'">
+            <div class="kg-toast-orbit">
+              <div class="kg-toast-orbit-dot"></div>
+            </div>
+            <div class="kg-toast-orbit-inner"></div>
+            <div class="absolute inset-0 flex items-center justify-center">
+              <svg class="w-[18px] h-[18px] kg-toast-icon-pulse" viewBox="0 0 24 24" fill="none" stroke="#4164b2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.21 1.21 0 0 0 1.72 0L21.64 5.36a1.21 1.21 0 0 0 0-1.72Z"/>
+                <path d="m14 7 3 3"/>
+              </svg>
+            </div>
+          </template>
+          <div v-else-if="task.status === 'done'" class="kg-toast-status-icon" style="background: rgba(100,155,100,0.12); border-color: rgba(100,155,100,0.25);">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="#649b64" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </div>
+          <div v-else class="kg-toast-status-icon" style="background: rgba(201,100,80,0.1); border-color: rgba(201,100,80,0.2);">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="#c9644f" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </div>
+        </div>
+        <!-- Text -->
+        <div class="flex-1 min-w-0">
+          <div class="text-[13px] font-semibold" style="color: #1a2847;">{{ task.title }}</div>
+          <div class="text-[11px] mt-0.5 leading-snug"
+            :class="{ 'kg-toast-msg-processing': task.status === 'processing', 'kg-toast-msg-done': task.status === 'done', 'kg-toast-msg-error': task.status === 'error' }">
+            {{ task.message }}
+          </div>
+        </div>
+        <!-- Close -->
+        <button @click="removeGlobalTask(task.id)" class="kg-toast-close" title="关闭">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </transition-group>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { PYTHON_AI_BASE } from '@/api/request'
 import { useAuthStore } from '@/stores/auth'
-import { getKnowledgeDomains, getDomainGraph, patchKnowledgeNode } from '@/api/knowledgeGraph'
+import { getKnowledgeDomains, getDomainGraph, patchKnowledgeNode, updateDomainGraph, deleteKnowledgeNode, deleteKnowledgeDomain } from '@/api/knowledgeGraph'
 import { getResource } from '@/api/resource'
 import type { UserKnowledgeDomain, KnowledgeGraphNode } from '@/api/knowledgeGraph'
 import ResourceReanalyzeModal from './ResourceReanalyzeModal.vue'
 import ResourcePreviewDrawer from '@/components/resource/ResourcePreviewDrawer.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import GraphOptimizeModal from '@/components/knowledge/GraphOptimizeModal.vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { GraphChart } from 'echarts/charts'
@@ -372,7 +553,228 @@ const selectedDomainId = ref<number | null>(null)
 const currentGraphData = ref<any>(null)
 const loading = ref(false)
 const reanalyzeModalVisible = ref(false)
+const optimizeModalVisible = ref(false)
 const chartRef = ref<InstanceType<typeof VChart> | null>(null)
+
+// ─── Search State & Logic ───
+const searchQuery = ref('')
+const searchFocused = ref(false)
+const searchBoxRef = ref<HTMLElement | null>(null)
+const searchResults = computed(() => {
+  if (!searchQuery.value.trim() || !currentGraphData.value?.nodes) return []
+  const q = searchQuery.value.toLowerCase()
+  return currentGraphData.value.nodes.filter((n: any) => n.name.toLowerCase().includes(q)).slice(0, 8)
+})
+
+const searchDropdownStyle = computed(() => {
+  const el = searchBoxRef.value
+  if (!el) return {}
+  const rect = el.getBoundingClientRect()
+  return {
+    position: 'fixed' as const,
+    top: rect.bottom + 8 + 'px',
+    left: rect.left + 'px',
+    width: Math.max(rect.width, 200) + 'px',
+    zIndex: 9999,
+  }
+})
+
+const highlightText = (text: string, query: string) => {
+  if (!query.trim()) return text
+  const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
+  return text.replace(regex, '<span class="text-indigo-600 bg-indigo-50">$1</span>')
+}
+
+const handleSearchBlur = () => {
+  setTimeout(() => { searchFocused.value = false }, 200)
+}
+
+const handleSearchSelect = (node: KnowledgeGraphNode) => {
+  searchQuery.value = ''
+  searchFocused.value = false
+  // 模拟点击打开侧边栏
+  handleNodeClick({ dataType: 'node', data: node })
+  // ECharts 高亮
+  const chart = chartRef.value?.chart
+  if (chart) {
+    chart.dispatchAction({ type: 'downplay' })
+    chart.dispatchAction({ type: 'highlight', seriesIndex: 0, name: node.name })
+  }
+}
+
+// ─── Delete Node Logic ───
+const isDeleting = ref(false)
+const deleteConfirmVisible = ref(false)
+
+const handleDeleteNode = () => {
+  if (!selectedNode.value || !currentGraphData.value || !selectedDomainId.value) return
+  deleteConfirmVisible.value = true
+}
+
+const executeDeleteNode = async () => {
+  deleteConfirmVisible.value = false
+  isDeleting.value = true
+  try {
+    const nodeId = selectedNode.value!.id
+    const domainId = selectedDomainId.value!
+    
+    // 调用后端的单节点专属删除 API
+    await deleteKnowledgeNode(domainId, nodeId)
+    
+    // 从本地直接同步清洗，避免再次走网络获取几兆的全量 JSON
+    const newNodes = currentGraphData.value.nodes.filter((n: any) => String(n.id) !== String(nodeId))
+    const newEdges = currentGraphData.value.edges.filter((e: any) => String(e.source) !== String(nodeId) && String(e.target) !== String(nodeId))
+    currentGraphData.value = { nodes: newNodes, edges: newEdges }
+    
+    selectedNode.value = null
+    drawerVisible.value = false
+  } catch (error) {
+    console.error('Failed to delete node', error)
+    alert('删除节点失败，请稍后重试')
+  } finally {
+    isDeleting.value = false
+  }
+}
+
+// ─── Delete Domain Logic ───
+const domainDeleteConfirmVisible = ref(false)
+const domainToDelete = ref<UserKnowledgeDomain | null>(null)
+
+const handleDeleteDomain = (domain: UserKnowledgeDomain) => {
+  domainToDelete.value = domain
+  domainDeleteConfirmVisible.value = true
+}
+
+const executeDeleteDomain = async () => {
+  domainDeleteConfirmVisible.value = false
+  if (!domainToDelete.value) return
+  
+  loading.value = true
+  try {
+    await deleteKnowledgeDomain(domainToDelete.value.id)
+    await loadDomains() // 重新拉取图谱列表
+  } catch (error) {
+    console.error('Failed to delete domain', error)
+    alert('删除图谱失败，请稍后重试')
+    loading.value = false
+  } finally {
+    domainToDelete.value = null
+  }
+}
+
+// ─── Background Tasks Logic ───
+interface GlobalTask {
+  id: string
+  title: string
+  message: string
+  status: 'processing' | 'done' | 'error'
+}
+const globalTasks = ref<GlobalTask[]>([])
+
+const removeGlobalTask = (id: string) => {
+  globalTasks.value = globalTasks.value.filter(t => t.id !== id)
+}
+
+const handleReanalyzeSuccess = () => {
+  const taskId = 'reanalyze_' + Date.now()
+  globalTasks.value.push({
+    id: taskId,
+    title: '重新分析资源',
+    message: '任务已提交至后台，系统将逐步解析新知识...',
+    status: 'processing'
+  })
+  setTimeout(() => {
+    const t = globalTasks.value.find(x => x.id === taskId)
+    if (t) {
+      t.status = 'done'
+      t.message = '后台分析已启动，请稍后手动刷新图谱查看'
+      setTimeout(() => {
+        globalTasks.value = globalTasks.value.filter(x => x.id !== taskId)
+      }, 5000)
+    }
+  }, 3000)
+  loadDomainGraph()
+}
+
+const handleOptimizeSubmit = async (instruction: string) => {
+  const domainId = selectedDomainId.value
+  if (!domainId) return
+  
+  const taskId = 'optimize_' + Date.now()
+  const task: GlobalTask = {
+    id: taskId,
+    title: '图谱智能整理',
+    message: '正在连接知识图谱架构师...',
+    status: 'processing'
+  }
+  globalTasks.value.push(task)
+
+  try {
+    const response = await fetch(`${PYTHON_AI_BASE}/api/ai/knowledge-graph/optimize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain_id: domainId, instruction })
+    })
+
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+    if (!response.body) throw new Error('Response body is null')
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    const processBuffer = (isDone: boolean) => {
+      const messages = buffer.split('\n\n')
+      if (!isDone) {
+        buffer = messages.pop() || ''
+      } else {
+        buffer = ''
+      }
+      for (const message of messages) {
+        if (!message.trim()) continue
+        const lines = message.split('\n')
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const dataStr = line.substring(6)
+              if (!dataStr.trim()) continue
+              const data = JSON.parse(dataStr)
+              
+              if (data.type === 'progress') {
+                task.message = data.message
+              } else if (data.type === 'error') {
+                task.status = 'error'
+                task.message = `整理失败: ${data.message}`
+                setTimeout(() => { globalTasks.value = globalTasks.value.filter(t => t.id !== taskId) }, 5000)
+              } else if (data.type === 'done') {
+                task.status = 'done'
+                task.message = '整理完成！图谱已重构。'
+                currentGraphData.value = data.graphData
+                setTimeout(() => { globalTasks.value = globalTasks.value.filter(t => t.id !== taskId) }, 5000)
+              }
+            } catch (e) {
+              console.error('Failed to parse SSE data', e, line.substring(0, 100) + '...')
+            }
+          }
+        }
+      }
+    }
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done })
+      }
+      processBuffer(done)
+      if (done) break
+    }
+  } catch (err) {
+    console.error('Optimization error:', err)
+    task.status = 'error'
+    task.message = '请求整理失败，请检查网络或后端服务。'
+    setTimeout(() => { globalTasks.value = globalTasks.value.filter(t => t.id !== taskId) }, 5000)
+  }
+}
 
 const windowWidth = ref(window.innerWidth)
 const onResize = () => { windowWidth.value = window.innerWidth }
@@ -552,8 +954,8 @@ const fetchResourceInfo = async (rid: number) => {
           if (parsed.title) title = parsed.title
           else if (parsed.name) title = parsed.name
         } catch {}
-      } else if (data.title) {
-        title = data.title
+      } else if ((data as any).title) {
+        title = (data as any).title
       }
       resourceCache.value[rid] = { title, type: data.moduleType || 'text' }
     }
@@ -867,6 +1269,7 @@ onMounted(() => {
   box-shadow: 0 2px 8px rgba(65, 100, 178, 0.12);
 }
 
+
 /* ─── Domain pills ─── */
 .kg-pill {
   padding: 6px 16px;
@@ -1096,24 +1499,17 @@ onMounted(() => {
 
 /* ─── Relation items in drawer ─── */
 .kg-relation-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.6);
-  border: 1px solid rgba(26, 40, 71, 0.03);
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 1px 4px rgba(26, 40, 71, 0.02), 0 1px 1px rgba(255, 255, 255, 0.6) inset;
+  transition: all 0.2s;
+  cursor: default;
 }
-.kg-rel-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.kg-rel-arrow {
-  font-size: 10px;
-  color: #a0aec0;
-  flex-shrink: 0;
+.kg-relation-item:hover {
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 4px 12px rgba(26, 40, 71, 0.05);
 }
 
 /* ─── Resource cards ─── */
@@ -1164,4 +1560,96 @@ onMounted(() => {
   opacity: 0;
   transform: translateX(40px);
 }
+</style>
+
+<!-- Non-scoped: teleported search dropdown -->
+<style>
+.kg-search-dropdown {
+  background: #fdf9f0;
+  border: 1px solid rgba(26, 40, 71, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(26, 40, 71, 0.12);
+  padding: 6px 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.kg-search-dropdown::-webkit-scrollbar { width: 4px; }
+.kg-search-dropdown::-webkit-scrollbar-thumb { background: rgba(26,40,71,0.1); border-radius: 2px; }
+.fade-up-enter-active { transition: all 0.2s ease; }
+.fade-up-leave-active { transition: all 0.15s ease; }
+.fade-up-enter-from, .fade-up-leave-to { opacity: 0; transform: translateY(-4px); }
+
+/* ─── Global Task Toast ─── */
+.kg-toast-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 340px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(253, 249, 240, 0.92);
+  backdrop-filter: blur(16px) saturate(1.4);
+  border: 1px solid rgba(26, 40, 71, 0.08);
+  box-shadow:
+    0 4px 24px rgba(26, 40, 71, 0.10),
+    0 1px 3px rgba(26, 40, 71, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.kg-toast-card:hover {
+  box-shadow:
+    0 8px 32px rgba(26, 40, 71, 0.14),
+    0 2px 6px rgba(26, 40, 71, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.kg-toast-done { border-color: rgba(100, 155, 100, 0.2); }
+.kg-toast-error { border-color: rgba(201, 100, 80, 0.15); }
+
+.kg-toast-status-icon {
+  position: absolute; inset: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 1.5px solid;
+}
+
+/* Orbital ring */
+.kg-toast-orbit {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 2px solid rgba(65, 100, 178, 0.12);
+  animation: kg-orbit-spin 1.6s linear infinite;
+}
+.kg-toast-orbit-dot {
+  position: absolute; top: -3px; left: 50%; margin-left: -3px;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #4164b2;
+  box-shadow: 0 0 8px rgba(65, 100, 178, 0.5);
+}
+.kg-toast-orbit-inner {
+  position: absolute; inset: 5px; border-radius: 50%;
+  border: 1.5px dashed rgba(65, 100, 178, 0.1);
+  animation: kg-orbit-spin-reverse 3s linear infinite;
+}
+@keyframes kg-orbit-spin { to { transform: rotate(360deg); } }
+@keyframes kg-orbit-spin-reverse { to { transform: rotate(-360deg); } }
+
+.kg-toast-icon-pulse { animation: kg-icon-breathe 2s ease-in-out infinite; }
+@keyframes kg-icon-breathe {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+.kg-toast-msg-processing { color: #4164b2; }
+.kg-toast-msg-done { color: #4a7a4a; }
+.kg-toast-msg-error { color: #b5543e; }
+
+.kg-toast-close {
+  flex-shrink: 0; padding: 5px; border-radius: 8px;
+  color: rgba(26, 40, 71, 0.25); cursor: pointer; transition: all 0.2s;
+}
+.kg-toast-close:hover { color: #4164b2; background: rgba(65, 100, 178, 0.08); }
+
+.kg-toast-enter-active, .kg-toast-leave-active, .kg-toast-move {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.kg-toast-enter-from { opacity: 0; transform: translateX(60px) scale(0.9); }
+.kg-toast-leave-to { opacity: 0; transform: translateY(16px) scale(0.92); }
 </style>

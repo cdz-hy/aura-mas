@@ -86,7 +86,7 @@ def extract_and_merge_node(state: KnowledgeUpdaterState):
     
     current_graph_str = json.dumps(state.get("current_graph", {"nodes": [], "edges": []}), ensure_ascii=False)
     
-    sys_prompt = """你是一个顶级的知识图谱架构专家。你需要基于现有的知识图谱 JSON，从新的学习资源中提取【宏观层面的核心概念和关系】，并将它们合并到现有图谱中。
+    sys_prompt = """你是一个顶级的知识图谱架构专家。你需要基于现有的知识图谱 JSON，从新的学习资源中提取【宏观层面的核心概念和关系】，并输出需要新增或更新的图谱数据。
 
 【核心提取原则：控制粒度，拒绝琐碎】
 1. **高度概括**：只提取该领域的“核心主题”、“关键技术”或“重要思想”（例如“微服务架构”、“深度学习”、“RESTful API”）。
@@ -109,18 +109,64 @@ def extract_and_merge_node(state: KnowledgeUpdaterState):
 - relationship: 关系类型 (必须使用简短的纯中文词汇，如：包含、属于、支撑、依赖、关联、组成、实现等)
 
 【操作要求】:
-1. 如果新提取的宏观概念在现有图谱中已存在（或含义高度相似），请复用现有节点，仅将传入的【当前资源ID】追加到该节点的 resource_ids 数组中。
+1. 如果新提取的宏观概念在现有图谱中已存在（或含义高度相似），请不要修改其原有属性，仅在返回的节点列表中包含该节点，并确保其原有的 resource_ids 加上当前的【资源ID】。
 2. 只有发现真正全新且足够重量级的核心概念时，才创建新节点。
-3. 挖掘核心概念之间的逻辑联系，创建结构清晰的边，避免全连接的网状乱局。
-4. 返回全量的、合并后的完整的 JSON 图谱，格式必须严格为 {"nodes": [...], "edges": [...]}，不要包裹 Markdown 标记（如 ```json）。"""
+3. 挖掘核心概念之间的逻辑联系，创建结构清晰的边。
+
+【输出格式】:
+为了避免输出过长，你**仅需返回需要新增或更新的内容（Patch）**。返回的 JSON 必须严格遵守以下格式，不要包裹 Markdown 标记（如 ```json）：
+{
+  "new_or_updated_nodes": [
+    {
+      "id": "concept_xxx", 
+      "name": "...", 
+      "description": "...", 
+      "resource_ids": [...], 
+      "mastery_level": 0.0, 
+      "importance": 0.9
+    }
+  ],
+  "new_edges": [
+    {
+      "id": "edge_xxx", 
+      "source": "concept_a", 
+      "target": "concept_b", 
+      "relationship": "包含"
+    }
+  ]
+}"""
 
     human_content = f"【当前图谱 JSON】:\n{current_graph_str}\n\n【当前资源ID】: {state['resource_id']}\n【学习资源文本】:\n{state['resource_text']}"
     
     try:
-        new_graph = llm.chat_json([
+        patch_graph = llm.chat_json([
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": human_content}
         ])
+        
+        # Programmatically merge patch_graph into current_graph
+        current_graph = state.get("current_graph", {"nodes": [], "edges": []})
+        nodes_dict = {n["id"]: n for n in current_graph.get("nodes", [])}
+        edges_dict = {e["id"]: e for e in current_graph.get("edges", [])}
+        
+        for n in patch_graph.get("new_or_updated_nodes", []):
+            if n["id"] in nodes_dict:
+                # Merge resource_ids uniquely
+                existing_rids = set(nodes_dict[n["id"]].get("resource_ids", []))
+                existing_rids.update(n.get("resource_ids", []))
+                nodes_dict[n["id"]]["resource_ids"] = list(existing_rids)
+                # optionally update importance or description if AI provided better ones, but mainly just append resource_ids
+            else:
+                nodes_dict[n["id"]] = n
+                
+        for e in patch_graph.get("new_edges", []):
+            edges_dict[e["id"]] = e
+            
+        new_graph = {
+            "nodes": list(nodes_dict.values()),
+            "edges": list(edges_dict.values())
+        }
+        
         return {"new_graph": new_graph, "success": True}
     except Exception as e:
         logger.error(f"解析大模型返回的图谱 JSON 失败: {e}")
