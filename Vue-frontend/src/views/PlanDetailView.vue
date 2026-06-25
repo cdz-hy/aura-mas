@@ -236,6 +236,7 @@
               :initial-answers="quizSubmittedAnswers ?? undefined"
               :initial-submitted="!!quizSubmittedAnswers"
               :grading="quizSubmitting"
+              :grading-tokens="gradingStreamTokens"
               :result-score="gradingResult?.score ?? null"
               :question-results="questionResults"
               @submit="onQuizSubmit"
@@ -393,7 +394,10 @@
                 {{ typeLabels[placeholder.type] || placeholder.type }}
               </span>
             </div>
-            <div v-if="chatStore.resourceStreamBuffers[placeholder.id]" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(chatStore.resourceStreamBuffers[placeholder.id])"></div>
+            <template v-if="placeholder.type === 'quiz'">
+              <QuizStreamPreview :raw-json="chatStore.resourceStreamBuffers[placeholder.id]" />
+            </template>
+            <div v-else-if="chatStore.resourceStreamBuffers[placeholder.id]" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(chatStore.resourceStreamBuffers[placeholder.id])"></div>
             <div v-else class="text-xs text-navy-400 animate-pulse">等待生成...</div>
           </div>
           <span class="inline-block w-0.5 h-4 bg-navy-400 ml-0.5 animate-pulse align-text-bottom"></span>
@@ -547,6 +551,7 @@ import { useHeartbeat } from '@/composables/useHeartbeat'
 import { showToast } from '@/composables/useToast'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
+import QuizStreamPreview from '@/components/resource/QuizStreamPreview.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import VideoPlayer from '@/components/resource/VideoPlayer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
@@ -993,6 +998,7 @@ const quizData = ref<QuizData | null>(null)
 const mindmapData = ref<MindElixirData | null>(null)
 const gradingResult = ref<Record<string, any> | null>(null)
 const quizSubmittedAnswers = ref<Record<number, any> | null>(null)
+const gradingStreamTokens = ref<Record<number, string>>({})
 const showExplanations = ref(false)
 const showCitations = ref(true)
 
@@ -1999,23 +2005,130 @@ async function openResourceById(resourceId: number, resourceType?: string) {
   }
 }
 
+function parsePartialQuizJSON(str: string): QuizData | null {
+  if (!str.trim()) return null
+
+  const quizTitleMatch = str.match(/"quiz_title"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/) ||
+                         str.match(/"title"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+  const title = quizTitleMatch ? quizTitleMatch[1] : '练习题'
+  
+  const descMatch = str.match(/"description"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+  const description = descMatch ? descMatch[1] : ''
+
+  const questionsIndex = str.indexOf('"questions"')
+  if (questionsIndex === -1) {
+    return { title, description, questions: [], totalPoints: 0, estimatedMinutes: 0 }
+  }
+
+  const questionsStr = str.substring(questionsIndex)
+  const parts = questionsStr.split('{')
+  const questions: any[] = []
+
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i]
+
+    // Extract question text
+    const qMatch = part.match(/"question(?:_text)?"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+    const questionText = qMatch ? qMatch[1] : ''
+
+    // Extract question type
+    const tMatch = part.match(/"question_type"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/) ||
+                   part.match(/"type"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+    const type = tMatch ? tMatch[1] : 'single_choice'
+
+    // Extract difficulty
+    const dMatch = part.match(/"difficulty"\s*:\s*(\d+)/)
+    const difficulty = dMatch ? parseInt(dMatch[1]) : 3
+
+    // Extract options
+    const options: string[] = []
+    const optMatch = part.match(/"options"\s*:\s*\[([^\]]*)(?:\]|$)/)
+    if (optMatch) {
+      const optStr = optMatch[1]
+      const optRegex = /"([^"\\]*(?:\\.[^"\\]*)*)"/g
+      let m
+      while ((m = optRegex.exec(optStr)) !== null) {
+        options.push(m[1])
+      }
+    }
+
+    // Extract correct answer
+    const caMatch = part.match(/"correct_answer"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/) ||
+                    part.match(/"correctAnswer"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+    const correctAnswer = caMatch ? caMatch[1] : ''
+
+    // Extract explanation
+    const expMatch = part.match(/"explanation"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+    const explanation = expMatch ? expMatch[1] : ''
+
+    if (questionText || options.length > 0) {
+      questions.push({
+        index: i - 1,
+        type,
+        question: questionText,
+        options,
+        correctAnswer,
+        explanation,
+        difficulty,
+        points: 1,
+      })
+    }
+  }
+
+  return {
+    title,
+    description,
+    questions,
+    totalPoints: questions.length,
+    estimatedMinutes: questions.length * 2
+  }
+}
+
 function parseQuizData(res: LearningResource): QuizData | null {
   const md = res.moduleData
   if (!md) return null
 
   // questions 可能在顶层、md.content 对象里、或 md.content JSON 字符串里
   let rawQuestions = md.questions || []
+  let title = md.title || md.quiz_title || '练习题'
+  let description = md.description || ''
+
   if (rawQuestions.length === 0 && md.content) {
     try {
       const c = typeof md.content === 'string' ? JSON.parse(md.content) : md.content
       rawQuestions = c?.questions || []
-    } catch {}
+      if (c?.quiz_title || c?.title) {
+        title = c.quiz_title || c.title
+      }
+      if (c?.description) {
+        description = c.description
+      }
+    } catch {
+      // JSON.parse failed. If it's a string, try partial parsing.
+      if (typeof md.content === 'string') {
+        const partialData = parsePartialQuizJSON(md.content)
+        if (partialData && partialData.questions.length > 0) {
+          partialData.id = res.id // Add the ID so watch works correctly
+          return partialData
+        }
+      }
+    }
   }
 
   // 如果仍未找到结构化 questions，将 content 文本解析为简答题
   if (rawQuestions.length === 0) {
     const text = typeof md.content === 'string' ? md.content : (md.description || '')
     if (!text.trim()) return null
+    // 如果 text 看起来是一堆以 { 开始的 JSON 文本（说明可能还在流式输出中），不要直接退化为 short_answer
+    if (text.trim().startsWith('{') || text.trim().includes('"questions"')) {
+      // 尝试部分解析，万一有内容了
+      const partialData = parsePartialQuizJSON(text)
+      if (partialData && partialData.questions.length > 0) {
+        partialData.id = res.id
+        return partialData
+      }
+      return null // 还在生成中，返回 null 不渲染 code block
+    }
     rawQuestions = [{
       type: 'short_answer',
       question: text.trim(),
@@ -2038,8 +2151,9 @@ function parseQuizData(res: LearningResource): QuizData | null {
   }))
 
   return {
-    title: md.title || md.quiz_title || '练习题',
-    description: md.description || '',
+    id: res.id,
+    title: title,
+    description: description,
     questions,
     totalPoints: md.totalPoints || md.total_points || questions.length,
     estimatedMinutes: md.estimatedMinutes || questions.length * 2,
@@ -2090,6 +2204,7 @@ function onQuizSubmit(userAnswers: Record<number, any>) {
   if (!selectedResource.value || quizSubmitting.value) return
   quizSubmitting.value = true
   gradingResult.value = null
+  gradingStreamTokens.value = {}
   quizSubmittedAnswers.value = userAnswers
   showExplanations.value = false
 
@@ -2107,6 +2222,12 @@ function onQuizSubmit(userAnswers: Record<number, any>) {
         },
         onQuestionResult(index, result) {
           console.debug(`[Quiz] Q${index + 1}:`, result.is_correct ? 'correct' : 'incorrect')
+        },
+        onToken(index, token) {
+          if (!gradingStreamTokens.value[index]) {
+            gradingStreamTokens.value[index] = ''
+          }
+          gradingStreamTokens.value[index] += token
         },
         onQuizResult(result) {
           gradingResult.value = {
@@ -2274,6 +2395,20 @@ function generateResource(type: string) {
 watch(() => chatStore.lastQuizResource, (data) => {
   if (!data) return
 
+  // 如果当前选中的就是 quiz 资源，直接合并数据，防止流式输出/生成完重复添加
+  if (selectedResource.value && selectedResource.value.moduleType === 'quiz') {
+    const existing = resources.value.find(r => r.id === selectedResource.value!.id)
+    if (existing) {
+      existing.moduleData = {
+        ...existing.moduleData,
+        questions: data.questions,
+      }
+      quizData.value = parseQuizData(existing)
+      chatStore.lastQuizResource = null
+      return
+    }
+  }
+
   const maxOrder = resources.value.length > 0 ? Math.max(...resources.value.map(r => r.moduleOrder)) : 0
   const newResource: LearningResource = {
     id: Date.now(),
@@ -2407,8 +2542,8 @@ watch(() => chatStore.streamingPlaceholders, (placeholders) => {
       id: p.id,
       planId: planId.value,
       parentId: null,
-      moduleOrder: resources.value.length > 0
-        ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1,
+      moduleOrder: p.moduleOrder ?? (resources.value.length > 0
+        ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1),
       moduleType: p.type || 'document',
       moduleData: { title: p.title, content: '' },
       status: 1,
@@ -2440,6 +2575,10 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
     const existing = resources.value.find(r => r.id === resId)
     if (existing) {
       existing.moduleData = { ...existing.moduleData, content }
+      // 如果当前选中该资源，并且它是测验，实时解析更新 quizData
+      if (selectedResourceId.value === resId && existing.moduleType === 'quiz') {
+        quizData.value = parseQuizData(existing)
+      }
     }
   }
 }, { deep: true })

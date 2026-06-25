@@ -21,7 +21,7 @@ interface SessionStreamState {
   awaitingConfirmation: boolean
   skipNextModulesPush: boolean
   resourceStreamBuffers: Record<number, string>
-  streamingPlaceholders: Array<{ id: number; type: string; title: string }>
+  streamingPlaceholders: Array<{ id: number; type: string; title: string; moduleOrder?: number }>
   isResourceStreaming: boolean
 }
 
@@ -68,7 +68,7 @@ export const useChatStore = defineStore('chat', () => {
   const lastGeneratedResources = ref<GeneratedResourceRef[] | null>(null)
   const streamingResources = ref<Array<{ resource: { id: number; type: string; title: string }; content: string }>>([])
   const resourceStreamBuffers = ref<Record<number, string>>({})
-  const streamingPlaceholders = ref<Array<{ id: number; type: string; title: string }>>([])
+  const streamingPlaceholders = ref<Array<{ id: number; type: string; title: string; moduleOrder?: number }>>([])
   const isResourceStreaming = ref(false)
   const resourceStreamBuffer = computed(() => {
     const buffers = resourceStreamBuffers.value

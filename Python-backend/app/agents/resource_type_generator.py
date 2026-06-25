@@ -196,6 +196,9 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
             except Exception:
                 pass
 
+    _emit_thinking_start("类型资源生成智能体", "思考: ")
+    _emit_thinking_chunk(f"收到生成指令，目标类型为 {resource_type}。")
+    _emit_thinking_chunk(f"正在结合用户画像、内容摘要和上下文要求，分析并构造高质量的学习资源。")
     _emit_thinking(f"正在生成{resource_type}类型的学习资源...")
 
     llm = get_resource_type_generator_llm()

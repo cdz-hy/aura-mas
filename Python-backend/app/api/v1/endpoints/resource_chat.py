@@ -288,16 +288,17 @@ async def plan_chat(
 
     current_module_id_int = int(current_module_id) if current_module_id and current_module_id.isdigit() else 0
     source_resource_content = ""
+    current_module_order = 0
     if current_module_id_int:
         try:
             current_resource = await asyncio.to_thread(java_client.get_resource_by_id, current_module_id_int)
-            _, source_resource_content = _extract_source_resource_context(
+            current_module_order, source_resource_content = _extract_source_resource_context(
                 current_resource,
                 fallback_title=current_module_title,
                 fallback_description="",
                 plan_id=plan_id_int,
             )
-            logger.info(f"[计划对话] 获取到当前模块内容长度: {len(source_resource_content)}")
+            logger.info(f"[计划对话] 获取到当前模块内容长度: {len(source_resource_content)}, order: {current_module_order}")
         except Exception as e:
             logger.warning(f"[计划对话] 获取当前模块内容失败: {e}")
 
@@ -629,7 +630,8 @@ async def plan_chat(
             def _create_placeholder_callback(modules: list) -> dict:
                 if not plan_id_int or not modules:
                     return {}
-                ph_map = _create_placeholder_resources(plan_id_int, modules)
+                fixed_order = current_module_order if len(modules) == 1 and current_module_order else None
+                ph_map = _create_placeholder_resources(plan_id_int, modules, fixed_order)
                 if ph_map:
                     bg_state["placeholder_map"] = ph_map
                     stream_registry.update_placeholder_map(session_id, ph_map)
@@ -746,7 +748,7 @@ async def plan_chat(
             new_modules = [m for m in bs["module_list"]
                            if m.get("module_order") not in bs["saved_module_orders"]]
             if new_modules:
-                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"])
+                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"], placeholder_map=bs.get("placeholder_map"))
                 for idx, rid in enumerate(new_ids):
                     mod = new_modules[idx] if idx < len(new_modules) else {}
                     bs["generated_resource_info"].append({
@@ -770,7 +772,7 @@ async def plan_chat(
             new_modules = [m for m in bs["module_list"]
                            if m.get("module_order") not in bs["saved_module_orders"]]
             if new_modules:
-                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"])
+                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"], placeholder_map=bs.get("placeholder_map"))
                 for idx, rid in enumerate(new_ids):
                     mod = new_modules[idx] if idx < len(new_modules) else {}
                     bs["generated_resource_info"].append({
@@ -790,7 +792,19 @@ async def plan_chat(
                 logger.info(f"[资源持久化] 保存 {len(new_modules)} 个网络搜索资源")
 
         if bs["quiz_questions"] and plan_id_int:
-            quiz_res_id = _save_quiz_resource(plan_id_int, bs["quiz_questions"], bs["quiz_config"])
+            placeholder_id = None
+            for key, ph in bs.get("placeholder_map", {}).items():
+                if ph.get("type") == "quiz":
+                    placeholder_id = ph.get("id")
+                    break
+
+            quiz_res_id = _save_quiz_resource(
+                plan_id_int, 
+                bs["quiz_questions"], 
+                bs["quiz_config"], 
+                module_order=current_module_order if current_module_order else None,
+                placeholder_id=placeholder_id
+            )
             if quiz_res_id:
                 bs["generated_resource_info"].append({
                     "id": quiz_res_id,
@@ -1211,16 +1225,39 @@ async def generate_single_resource(
                 loop.call_soon_threadsafe(_queue.put_nowait, data)
 
             initial_state["sse_callback"] = _threadsafe_cb
+            real_placeholder_id = None
+            if is_quiz:
+                # 创建真实 DB 占位符
+                ph_map = _create_placeholder_resources(
+                    plan_id_int, 
+                    [{"title": title, "description": description, "resources": [{"resource_type": type}]}], 
+                    fixed_order=current_module_order if current_module_order else None
+                )
+                
+                real_placeholder_id = list(ph_map.values())[0].get("id") if ph_map else None
+                stream_start_id = real_placeholder_id if real_placeholder_id else module_id_int
+                placeholder_order = list(ph_map.values())[0].get("moduleOrder") if ph_map else current_module_order
+                
+                initial_state["placeholder_resource_map"] = ph_map
+
+                # 注入占位回调（为了 quiz_generator）
+                def _create_placeholder_callback(modules: list) -> dict:
+                    return ph_map
+                initial_state["create_placeholder_callback"] = _create_placeholder_callback
+            else:
+                ph_map = {}
+                stream_start_id = module_id_int
+                placeholder_order = current_module_order
 
             # 提前推送占位记录，通知前端初始化对应的资源流式区域
             _threadsafe_cb(
-                f'data: {json.dumps({"type": "resource_stream_start", "content": json.dumps([{"id": module_id_int, "type": type, "title": title}], ensure_ascii=False)}, ensure_ascii=False)}\n\n'
+                f'data: {json.dumps({"type": "resource_stream_start", "content": json.dumps([{"id": stream_start_id, "type": type, "title": title, "moduleOrder": placeholder_order}], ensure_ascii=False)}, ensure_ascii=False)}\n\n'
             )
             
             stream_registry.register_session(
                 session_id,
                 sse_callback=_threadsafe_cb,
-                placeholder_resource_map={},
+                placeholder_resource_map=ph_map,
             )
 
             def _run_graph():
@@ -1283,6 +1320,7 @@ async def generate_single_resource(
                         generated_content,
                         current_module_order, session_id,
                         bg_state.get("thinkings", []),
+                        placeholder_id=real_placeholder_id,
                     )
                     if res_info:
                         bg_state["generated_resource_info"].extend(res_info)
@@ -1405,6 +1443,17 @@ async def submit_quiz(
         )
 
     logger.info(f"[测验批改] 用户 {user_id}, 资源 {resource_id_int}, 共 {len(raw_questions)} 题")
+
+    try:
+        user_profile = await asyncio.to_thread(java_client.get_user_profile, user_id)
+        if isinstance(user_profile.get("learning_behavior"), str):
+            try:
+                user_profile["learning_behavior"] = json.loads(user_profile["learning_behavior"])
+            except Exception:
+                user_profile["learning_behavior"] = {}
+    except Exception as e:
+        logger.warning(f"[测验批改] 获取用户画像失败: {e}")
+        user_profile = {}
 
     async def stream():
         from app.agents.llm_factory import get_quiz_grader_llm
@@ -1576,7 +1625,7 @@ async def submit_quiz(
                     "user_id": user_id,
                     "user_message": f"完成测验，得分 {overall_score}",
                     "chat_history": [],
-                    "user_profile": {},
+                    "user_profile": user_profile,
                     "quiz_result": summary,
                 }, daemon=True).start()
 
@@ -1951,6 +2000,7 @@ def _persist_generated_resources(
     current_module_order: int = 0,
     session_id: str = "",
     thinkings: list = None,
+    placeholder_id: int = None,
 ) -> list:
     """将生成的资源持久化到数据库（与 SSE 解耦，确保断开连接时也能保存）"""
     generated_resource_info = []
@@ -1992,7 +2042,13 @@ def _persist_generated_resources(
 
     elif is_quiz:
         if quiz_questions and plan_id_int:
-            quiz_res_id = _save_quiz_resource(plan_id_int, quiz_questions, quiz_config, module_order=current_module_order)
+            quiz_res_id = _save_quiz_resource(
+                plan_id_int,
+                quiz_questions,
+                quiz_config,
+                module_order=current_module_order,
+                placeholder_id=placeholder_id
+            )
             if quiz_res_id:
                 generated_resource_info.append({
                     "id": quiz_res_id,
@@ -2168,6 +2224,58 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -
         return 0
 
 
+def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None, module_order: int = None, placeholder_id: int = None) -> int:
+    """将生成的题目保存为 quiz 类型的学习资源，返回资源 ID。如果有 placeholder_id 则覆盖更新。"""
+    try:
+        if not questions:
+            return 0
+        config = quiz_config or {}
+        module_data = {
+            "title": config.get("title", "练习题"),
+            "description": config.get("description", ""),
+            "questions": [
+                {
+                    "index": i,
+                    "type": q.get("question_type", "short_answer"),
+                    "question": q.get("question_text", ""),
+                    "options": q.get("options"),
+                    "correctAnswer": q.get("correct_answer", ""),
+                    "explanation": q.get("explanation", ""),
+                    "difficulty": q.get("difficulty", 3),
+                    "points": 1,
+                }
+                for i, q in enumerate(questions)
+            ],
+            "totalPoints": len(questions),
+            "estimatedMinutes": len(questions) * 2,
+        }
+        
+        if placeholder_id:
+            java_client.update_resource_content(
+                placeholder_id,
+                json.dumps(module_data, ensure_ascii=False),
+                status=2,
+            )
+            return placeholder_id
+
+        # 使用指定的 moduleOrder（与所属模块一致），否则取最大值 +1
+        if module_order is None:
+            existing = java_client.get_plan_resources(plan_id)
+            module_order = max((r.get("moduleOrder", 0) for r in existing), default=0) + 1
+        result = java_client.create_resource(
+            plan_id=plan_id,
+            module_type="quiz",
+            module_data=json.dumps(module_data, ensure_ascii=False),
+            module_order=module_order,
+            status=2,
+            generated_by_agent="quiz_generator",
+        )
+        return result.get("id") if isinstance(result, dict) else 0
+    except Exception as e:
+        logger.warning(f"[资源持久化] 保存题目资源失败: {e}")
+        return 0
+
+
 def _save_plain_text_reply(breakdown_confirmed, generated_resource_info,
                            ai_response_parts, user_id, session_id, plan_id_int, thinkings=None):
     """未生成资源时，保存纯文本 AI 回复"""
@@ -2243,7 +2351,7 @@ def _async_profile_maintenance_sync(
         logger.error(f"[画像维护] 更新失败: {str(e)}", exc_info=True)
 
 
-VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap", "animation"}
+VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap", "animation", "quiz", "video", "podcast"}
 
 
 def _normalize_module_type(module_type) -> str:
@@ -2295,75 +2403,37 @@ def _save_breakdown_dialogue(user_id: int, session_id: str, plan_id: int, breakd
         logger.warning(f"[任务分解持久化] 保存失败: {e}")
 
 
-def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None, module_order: int = None) -> int:
-    """将生成的题目保存为 quiz 类型的学习资源，返回资源 ID"""
-    try:
-        if not questions:
-            return 0
-        config = quiz_config or {}
-        module_data = {
-            "title": config.get("title", "练习题"),
-            "description": config.get("description", ""),
-            "questions": [
-                {
-                    "index": i,
-                    "type": q.get("question_type", "short_answer"),
-                    "question": q.get("question_text", ""),
-                    "options": q.get("options"),
-                    "correctAnswer": q.get("correct_answer", ""),
-                    "explanation": q.get("explanation", ""),
-                    "difficulty": q.get("difficulty", 3),
-                    "points": 1,
-                }
-                for i, q in enumerate(questions)
-            ],
-            "totalPoints": len(questions),
-            "estimatedMinutes": len(questions) * 2,
-        }
-        # 使用指定的 moduleOrder（与所属模块一致），否则取最大值 +1
-        if module_order is None:
-            existing = java_client.get_plan_resources(plan_id)
-            module_order = max((r.get("moduleOrder", 0) for r in existing), default=0) + 1
-        result = java_client.create_resource(
-            plan_id=plan_id,
-            module_type="quiz",
-            module_data=json.dumps(module_data, ensure_ascii=False),
-            module_order=module_order,
-            status=2,
-            generated_by_agent="quiz_generator",
-        )
-        resource_id = result.get("id") if isinstance(result, dict) else 0
-        logger.info(f"[资源持久化] 已保存题目资源到计划 {plan_id}，共 {len(questions)} 题，ID={resource_id}，moduleOrder={module_order}")
-        return resource_id
-    except Exception as e:
-        logger.warning(f"[资源持久化] 保存题目资源失败: {e}")
-        return 0
-
-
-def _create_placeholder_resources(plan_id: int, modules: list) -> dict:
+def _create_placeholder_resources(plan_id: int, modules: list, fixed_order: int = None) -> dict:
     """在 learning_resource 表中创建占位记录，返回 {module_order: {id, type, title}} 映射"""
     placeholder_map = {}
     try:
-        existing = java_client.get_plan_resources(plan_id)
-        max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
+        max_order = 0
+        if fixed_order is None:
+            existing = java_client.get_plan_resources(plan_id)
+            max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
 
         for i, mod in enumerate(modules):
             module_order = mod.get("module_order", i + 1)
-            module_type = "text"
-            resources = mod.get("resources", [])
-            if resources:
-                module_type = _normalize_module_type(resources[0].get("resource_type", "text"))
+            module_type = mod.get("module_type")
+            if not module_type:
+                resources = mod.get("resources", [])
+                if resources:
+                    module_type = resources[0].get("resource_type", "text")
+                else:
+                    module_type = "text"
+            module_type = _normalize_module_type(module_type)
             title = mod.get("title", f"模块 {module_order}")
             module_data = {
                 "title": title,
                 "description": mod.get("description", ""),
             }
             try:
+                final_order = fixed_order if fixed_order is not None else (max_order + module_order)
                 result = java_client.create_resource(
                     plan_id=plan_id,
                     module_type=module_type,
                     module_data=json.dumps(module_data, ensure_ascii=False),
-                    module_order=max_order + module_order,
+                    module_order=final_order,
                     status=1,  # 生成中
                     generated_by_agent="content_orchestrator",
                 )
@@ -2373,6 +2443,7 @@ def _create_placeholder_resources(plan_id: int, modules: list) -> dict:
                         "id": res_id,
                         "type": module_type,
                         "title": title,
+                        "moduleOrder": final_order,
                     }
                     # 立即创建 task 记录（resource_id=真实资源ID），确保后端崩溃后前端能检测到卡死
                     try:
@@ -2389,8 +2460,8 @@ def _create_placeholder_resources(plan_id: int, modules: list) -> dict:
     return placeholder_map
 
 
-def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_content: dict = None) -> list:
-    """将确认后的学习模块保存为 learning_resource 记录，返回创建的资源ID列表"""
+def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_content: dict = None, placeholder_map: dict = None) -> list:
+    """将确认后的学习模块保存为 learning_resource 记录，如果有对应的占位符则优先更新，返回资源ID列表"""
     try:
         if not module_list:
             return []
@@ -2403,6 +2474,7 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
         max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
 
         resources = []
+        resource_ids = []
         for mod in sorted_modules:
             module_order_in_list = mod.get("module_order", 0)
             module_type = _normalize_module_type(mod.get("module_type", "text"))
@@ -2419,21 +2491,39 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
             images = mod.get("images", [])
             if images:
                 module_data["images"] = images
-            resources.append({
-                "planId": plan_id,
-                "moduleType": module_type,
-                "moduleData": json.dumps(module_data, ensure_ascii=False),
-                "moduleOrder": max_order + module_order_in_list,
-                "status": 2,
-                "generatedByAgent": "content_orchestrator",
-            })
+
+            placeholder_id = None
+            if placeholder_map and module_order_in_list in placeholder_map:
+                placeholder_id = placeholder_map[module_order_in_list].get("id")
+
+            if placeholder_id:
+                try:
+                    java_client.update_resource_content(
+                        placeholder_id,
+                        json.dumps(module_data, ensure_ascii=False),
+                        status=2,
+                    )
+                    resource_ids.append(placeholder_id)
+                except Exception as e:
+                    logger.warning(f"更新占位资源失败: {e}")
+            else:
+                resources.append({
+                    "planId": plan_id,
+                    "moduleType": module_type,
+                    "moduleData": json.dumps(module_data, ensure_ascii=False),
+                    "moduleOrder": max_order + module_order_in_list,
+                    "status": 2,
+                    "generatedByAgent": "content_orchestrator",
+                })
 
         if resources:
             result = java_client.create_resources_bulk(resources)
-            resource_ids = [r.get("id") for r in (result or []) if r.get("id")]
-            logger.info(f"[资源持久化] 已保存 {len(resources)} 个学习资源到计划 {plan_id}，编号从 {max_order + 1} 开始")
+            created_ids = [r.get("id") for r in (result or []) if r.get("id")]
+            resource_ids.extend(created_ids)
+            logger.info(f"[资源持久化] 已批量保存 {len(resources)} 个学习资源到计划 {plan_id}，编号从 {max_order + 1} 开始")
             logger.info(f"[资源持久化] 模块顺序: {[mod.get('module_order') for mod in sorted_modules]}")
-            return resource_ids
+            
+        return resource_ids
     except Exception as e:
         logger.warning(f"[资源持久化] 保存模块资源失败: {e}")
     return []

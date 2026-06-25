@@ -52,8 +52,6 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
             except Exception:
                 pass
 
-    _emit_thinking("正在结合薄弱点生成练习题...")
-
     llm = get_quiz_generator_llm()
 
     behavior = user_profile.get("learning_behavior", {})
@@ -137,13 +135,28 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
                 except Exception:
                     pass
 
-        _emit_thinking_start("题目生成智能体", "思考: ")
-        _emit_thinking_chunk("收到题目生成请求，正在结合用户历史记录和薄弱知识点分析出题策略。")
-        _emit_thinking_chunk("将根据要求构造难度分布合适的练习题目。")
-        _emit_thinking("正在结合薄弱点生成练习题...")
+        _emit_thinking("正在结合用户历史记录和薄弱知识点，构造练习题目...")
+
+        _create_ph = state.get("create_placeholder_callback")
+        placeholder_id = None
+        if _create_ph:
+            try:
+                ph_map = _create_ph([{"module_type": "quiz", "title": f"测验: {learning_goal}"[:50], "description": "正在结合薄弱点生成测验..."}])
+                if ph_map:
+                    placeholder_id = list(ph_map.values())[0].get("id")
+                    logger.info(f"  [题目生成智能体] 创建占位成功: {placeholder_id}")
+            except Exception as e:
+                logger.error(f"  [题目生成智能体] 创建占位失败: {e}")
+
+        def on_chunk(chunk: str):
+            if _sse_cb and placeholder_id:
+                try:
+                    _sse_cb(f'data: {json.dumps({"type": "resource_stream_text", "resource_id": placeholder_id, "content": chunk}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
 
         logger.info(f"  [题目生成智能体] 正在调用 LLM...")
-        result = llm.chat_json(messages, max_tokens=4096)
+        result = llm.chat_json_stream(messages, max_tokens=4096, on_chunk=on_chunk)
         record_from_mimo(llm, state.get("user_id", 0), "quiz_generation", state.get("task_id"))
         questions = result.get("questions", [])
 
