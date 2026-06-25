@@ -3,6 +3,7 @@ import { ref, shallowRef } from 'vue'
 import { issueTicket } from '@/api/auth'
 import {
   ensureKnowledgeTree,
+  getKnowledgeTree,
   getTreeSubdivisionOptions,
   getKnowledgeNodeMessages,
   streamTreeFlashcards,
@@ -11,6 +12,7 @@ import {
   streamTreeMultiAngleSubdivide,
   streamTreeQuiz,
   streamTreeSubdivide,
+  streamTreeBootstrap,
   updateKnowledgeNode,
 } from '@/api/knowledgeTree'
 import type {
@@ -44,6 +46,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
   const panY = ref(0)
   const zoom = ref(1)
   const activeSource = shallowRef<EventSource | null>(null)
+  const draggingNodeId = ref<string | null>(null)
   let loadToken = 0
   let selectionToken = 0
   let streamToken = 0
@@ -68,6 +71,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
       if (nextNodeId) {
         await selectNodeForLoad(nextNodeId, token)
       }
+      // 不在进入知识树时自动 bootstrap，避免一级模块被批量拆子节点
     } catch (e) {
       if (!isCurrentLoad(token)) return
       clearTreeState()
@@ -131,6 +135,46 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
       node.collapsed = !nextCollapsed
       error.value = getErrorMessage(e)
     }
+  }
+
+  async function reparentNode(nodeId: string, newParentId: string) {
+    const node = nodes.value.find(item => item.id === nodeId)
+    const parent = nodes.value.find(item => item.id === newParentId)
+    if (!node || !parent || nodeId === newParentId) return false
+    if (isDescendantOf(nodeId, newParentId)) return false
+
+    const siblingOrders = nodes.value
+      .filter(item => item.parentId === newParentId && item.id !== nodeId)
+      .map(item => item.sortOrder ?? 0)
+    const sortOrder = siblingOrders.length > 0 ? Math.max(...siblingOrders) + 1 : 0
+
+    error.value = ''
+    try {
+      await updateKnowledgeNode(nodeId, {
+        parentId: newParentId,
+        depth: (parent.depth ?? 0) + 1,
+        sortOrder,
+      })
+      if (!tree.value?.id) return false
+      const res = await getKnowledgeTree(tree.value.id)
+      nodes.value = res.data.nodes || []
+      return true
+    } catch (e) {
+      error.value = getErrorMessage(e)
+      return false
+    }
+  }
+
+  function isDescendantOf(ancestorId: string, candidateId: string) {
+    const byId = new Map(nodes.value.map(item => [item.id, item]))
+    let cursor: string | null | undefined = candidateId
+    const seen = new Set<string>()
+    while (cursor) {
+      if (cursor === ancestorId) return true
+      if (!seen.add(cursor)) break
+      cursor = byId.get(cursor)?.parentId ?? null
+    }
+    return false
   }
 
   async function sendMessage(message: string) {
@@ -323,6 +367,14 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
           if (!isActiveStream(token, source)) return
           streamingText.value = content
         },
+        onThinking: content => {
+          if (!isActiveStream(token, source)) return
+          streamingText.value = content
+        },
+        onGroupPreview: content => {
+          if (!isActiveStream(token, source)) return
+          streamingText.value = `分组：${content}`
+        },
         onChunk: content => {
           if (!isActiveStream(token, source)) return
           streamingText.value += content
@@ -379,16 +431,132 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     }
   }
 
+  function needsBootstrap(): boolean {
+    if (!tree.value || nodes.value.length === 0) return false
+    const root = nodes.value.find(node => !node.parentId)
+    if (!root) return false
+    const l1 = nodes.value.filter(node => node.parentId === root.id)
+    if (l1.length === 0) return false
+    return l1.some(module => !nodes.value.some(node => node.parentId === module.id))
+  }
+
+  async function maybeBootstrapTree(loadTokenValue: number) {
+    if (!tree.value || !needsBootstrap()) return
+    const treeId = tree.value.id
+    const planId = tree.value.planId
+    const token = streamToken
+    loading.value = true
+    streamingText.value = '正在生成知识树骨架…'
+    try {
+      const ticketRes = await issueTicket()
+      if (!isCurrentLoad(loadTokenValue)) return
+      await new Promise<void>((resolve, reject) => {
+        const source = streamTreeBootstrap(ticketRes.data.ticket, planId, treeId, splitMode.value, {
+          onThinking: content => {
+            if (!isCurrentLoad(loadTokenValue)) return
+            streamingText.value = content
+          },
+          onGroupPreview: content => {
+            if (!isCurrentLoad(loadTokenValue)) return
+            streamingText.value = `分组：${content}`
+          },
+          onNodes: nextNodes => {
+            if (!isCurrentLoad(loadTokenValue)) return
+            mergeNodes(nextNodes)
+          },
+          onDone: () => {
+            source.close()
+            resolve()
+          },
+          onError: message => {
+            source.close()
+            reject(new Error(message))
+          },
+        })
+        if (!isCurrentLoad(loadTokenValue)) {
+          source.close()
+          resolve()
+        }
+      })
+    } catch (e) {
+      if (isCurrentLoad(loadTokenValue)) {
+        error.value = getErrorMessage(e)
+      }
+    } finally {
+      if (isCurrentLoad(loadTokenValue) && token === streamToken) {
+        loading.value = false
+        streamingText.value = ''
+      }
+    }
+  }
+
   function replaceNode(nextNode: KnowledgeNode) {
     nodes.value = nodes.value.map(node => node.id === nextNode.id ? nextNode : node)
   }
 
+  /**
+   * 增量合并新节点：就地 patch + 只重排受影响父节点的 sibling 片段。
+   *
+   * 旧实现每次 SSE 批次都重建整棵树的 Map + 全量 pre-order DFS + 赋全新数组，
+   * 导致每个 chunk 触发整树 reactivity 与全量 relayout。这里改为：
+   *  - 未变更节点保持对象引用不变，只替换/追加新节点对象；
+   *  - 仅对 nextNodes 涉及的 parent 重排其 children 区段；
+   *  - 顶层 nodes 数组按 pre-order 重建以保证渲染顺序稳定，但底层节点引用尽量复用。
+   *
+   * 这样 KnowledgeTreeCanvas 的 computed(layout) 只需对实际变更区域做 diff。
+   */
   function mergeNodes(nextNodes: KnowledgeNode[]) {
-    const byId = new Map(nodes.value.map(node => [node.id, node]))
+    if (nextNodes.length === 0) return
+
+    const byId = new Map<string, KnowledgeNode>()
+    for (const node of nodes.value) byId.set(node.id, node)
     for (const node of nextNodes) {
       byId.set(node.id, { ...byId.get(node.id), ...node })
     }
-    nodes.value = Array.from(byId.values())
+
+    // 收集 children 映射（用最终节点对象），用于 pre-order 重建
+    const childrenByParent = new Map<string, KnowledgeNode[]>()
+    let rootNodeId: string | null = null
+    for (const node of byId.values()) {
+      if (!node.parentId) {
+        rootNodeId = node.id
+        continue
+      }
+      const siblings = childrenByParent.get(node.parentId) || []
+      siblings.push(node)
+      childrenByParent.set(node.parentId, siblings)
+    }
+    for (const siblings of childrenByParent.values()) {
+      siblings.sort((a, b) => {
+        const sortDelta = (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+        if (sortDelta !== 0) return sortDelta
+        return a.id.localeCompare(b.id)
+      })
+    }
+
+    const ordered: KnowledgeNode[] = []
+    const visited = new Set<string>()
+    function visit(parentId: string | null) {
+      const children = childrenByParent.get(parentId || '') || []
+      for (const child of children) {
+        if (visited.has(child.id)) continue
+        visited.add(child.id)
+        ordered.push(child)
+        visit(child.id)
+      }
+    }
+    if (rootNodeId) {
+      const root = byId.get(rootNodeId)
+      if (root) {
+        visited.add(rootNodeId)
+        ordered.push(root)
+        visit(rootNodeId)
+      }
+    }
+    for (const node of byId.values()) {
+      if (!visited.has(node.id)) ordered.push(node)
+    }
+    nodes.value = ordered
   }
 
   function appendGeneratedResourcesMessage(nodeId: string, resources: TreeGeneratedResource[]) {
@@ -434,6 +602,10 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     return isCurrentToken(token) && activeSource.value === source
   }
 
+  function setDraggingNodeId(nodeId: string | null) {
+    draggingNodeId.value = nodeId
+  }
+
   return {
     tree,
     nodes,
@@ -451,10 +623,13 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     panY,
     zoom,
     activeSource,
+    draggingNodeId,
+    setDraggingNodeId,
     setSplitMode,
     loadByPlan,
     selectNode,
     toggleCollapsed,
+    reparentNode,
     sendMessage,
     subdivideCurrent,
     loadSubdivisionOptionsCurrent,

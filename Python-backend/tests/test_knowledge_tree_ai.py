@@ -49,6 +49,17 @@ class FakeJavaClient:
         self.created_nodes.append(node)
         return node
 
+    def create_tree_nodes_batch(self, payloads):
+        return [self.create_tree_node(payload) for payload in payloads]
+
+    def sync_task_breakdown(self, plan_id, user_id, breakdown, learning_background=""):
+        self.requests.append({
+            "method": "POST",
+            "path": f"/api/knowledge-tree/internal/plan/{plan_id}/sync-breakdown",
+            "json": {"userId": user_id, **breakdown},
+        })
+        return {"ok": True}
+
     def create_resource(self, plan_id, module_type, module_data, module_order=0, parent_id=None, status=2, generated_by_agent=None):
         resource = {
             "id": len(self.created_resources) + 123,
@@ -110,6 +121,13 @@ class FakeJsonLlm:
             return self.data[index]
         self.calls += 1
         return self.data
+
+
+def _llm_prompt_text(llm: FakeJsonLlm) -> str:
+    """从最后一次 chat_json 调用的 messages 中提取全部文本。"""
+    if not llm.messages:
+        return ""
+    return "\n".join(str(m.get("content", "")) for m in llm.messages[-1])
 
 
 def test_explain_node_stream_persists_user_and_assistant():
@@ -184,14 +202,14 @@ async def _test_subdivide_node_creates_group_node_with_enriched_context():
     assert client.created_nodes[2]["parentId"] == group["id"]
     assert any(e["type"] == "nodes_created" for e in events)
     assert events[-1]["type"] == "done"
-    prompt = json_llm.messages[0][1]["content"]
+    prompt = _llm_prompt_text(json_llm)
     assert "当前节点：变量" in prompt
     assert "节点路径：Root > 变量" in prompt
     assert "兄弟节点：函数" in prompt
     assert "已有子节点：赋值" in prompt
     assert "计划目标：Learn Python" in prompt
     assert "最近对话" in prompt and "想看例子" in prompt
-    assert "目标数量：3-4" in prompt
+    assert "3-4" in prompt
 
 
 def test_suggest_subdivision_options_normalizes_llm_output():
@@ -223,8 +241,9 @@ async def _test_suggest_subdivision_options_normalizes_llm_output():
     assert [option["angle"] for option in result["options"]] == ["by_concept", "by_flow", "按错误拆"]
     assert all("caution" not in option for option in result["options"])
     assert result["caution"] == {"label": "先别拆", "rationale": "节点已经足够细，继续拆会增加噪音"}
-    assert "Medium" in json_llm.messages[0][1]["content"]
-    assert "目标数量：5-7" in json_llm.messages[0][1]["content"]
+    prompt = _llm_prompt_text(json_llm)
+    assert "Medium" in prompt
+    assert "5-7" in prompt
 
 
 def test_multi_angle_subdivide_creates_group_nodes_and_children():

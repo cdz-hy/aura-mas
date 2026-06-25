@@ -44,16 +44,19 @@
       </svg>
 
       <KnowledgeTreeNode
-        v-for="item in layout.items"
+        v-for="item in visibleItems"
         :key="item.node.id"
         class="absolute"
         :style="nodeStyle(item)"
         :node="item.node"
         :selected="item.node.id === selectedNodeId"
         :has-children="childrenByParent.has(item.node.id)"
+        :root-node-id="rootNodeId"
         @select="$emit('select', $event)"
         @toggle-collapse="$emit('toggle-collapse', $event)"
         @open-subdivide="$emit('open-subdivide', $event)"
+        @drag-start="$emit('node-drag-start', $event)"
+        @drag-end="$emit('node-drag-end')"
       />
     </div>
   </div>
@@ -66,6 +69,7 @@ import {
   buildTreeLayout,
   fitTreeViewport,
   getTreeLayoutBounds,
+  getVisibleItems,
   type TreeLayoutItem,
 } from './useTreeLayout'
 import type { KnowledgeNode } from '@/types/knowledgeTree'
@@ -90,6 +94,8 @@ const emit = defineEmits<{
   select: [nodeId: string]
   'toggle-collapse': [nodeId: string]
   'open-subdivide': [nodeId: string]
+  'node-drag-start': [nodeId: string]
+  'node-drag-end': []
   'update:panX': [value: number]
   'update:panY': [value: number]
   'update:zoom': [value: number]
@@ -102,8 +108,30 @@ const localZoom = ref(clampZoom(props.zoom ?? 1))
 const panning = ref(false)
 const lastPointer = ref({ x: 0, y: 0 })
 let resizeObserver: ResizeObserver | null = null
+/**
+ * 仅在“整树首次加载/切换计划”时自动 fit 一次。
+ * 流式生成（subdivide / first-principles 等增量推送新节点）期间保持 false，
+ * 避免用户正在 pan/zoom 时视口被强行重新居中。
+ * 切换计划时 rootNodeId 变化，会重新置 true 触发一次自动 fit。
+ */
+const autoFitEnabled = ref(true)
+let resizeFitTimer: ReturnType<typeof setTimeout> | null = null
 
 const layout = computed(() => props.rootNodeId ? buildTreeLayout(props.nodes, props.rootNodeId) : { items: [], edges: [] })
+
+const visibleItems = computed(() => {
+  const viewport = viewportRef.value
+  if (!viewport || layout.value.items.length <= 50) {
+    return layout.value.items
+  }
+  return getVisibleItems(
+    layout.value.items,
+    contentBounds.value,
+    { panX: localPanX.value, panY: localPanY.value, zoom: localZoom.value, width: viewport.clientWidth, height: viewport.clientHeight },
+    NODE_WIDTH,
+    NODE_HEIGHT,
+  )
+})
 
 const childrenByParent = computed(() => {
   const map = new Map<string, KnowledgeNode[]>()
@@ -135,22 +163,47 @@ const svgBounds = computed(() => {
   }
 })
 
-const edgePaths = computed(() => layout.value.edges
-  .map(edge => {
-    const from = itemByNodeId.value.get(edge.fromNodeId)
-    const to = itemByNodeId.value.get(edge.toNodeId)
-    if (!from || !to) return null
-    const startX = from.x
-    const startY = from.y + NODE_HEIGHT / 2
-    const endX = to.x
-    const endY = to.y - NODE_HEIGHT / 2
-    const midY = startY + Math.max(40, (endY - startY) * 0.45)
-    return {
-      ...edge,
-      d: `M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`,
-    }
-  })
-  .filter((edge): edge is NonNullable<typeof edge> => Boolean(edge)))
+// 可见节点的 id 集合，用于连线虚拟化：大树（>50 节点）时只渲染两端均在视口内的边。
+// 小树时 visibleItems 等于全部 items，不产生过滤副作用。
+const visibleNodeIds = computed(() => {
+  if (layout.value.items.length <= 50) return null
+  return new Set(visibleItems.value.map(item => item.node.id))
+})
+
+const edgePaths = computed(() => {
+  const visible = visibleNodeIds.value
+  return layout.value.edges
+    .map(edge => {
+      const from = itemByNodeId.value.get(edge.fromNodeId)
+      const to = itemByNodeId.value.get(edge.toNodeId)
+      if (!from || !to) return null
+      // 大树虚拟化：两端节点都不在可见集合内时跳过该边
+      if (visible && !visible.has(edge.fromNodeId) && !visible.has(edge.toNodeId)) return null
+      if (edge.kind === 'main') {
+        const startX = from.x
+        const startY = from.y - NODE_HEIGHT / 2
+        const endX = to.x
+        const endY = to.y + NODE_HEIGHT / 2
+        const midY = endY + (startY - endY) * 0.5
+        return {
+          ...edge,
+          d: `M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`,
+        }
+      }
+
+      const side = to.x >= from.x ? 1 : -1
+      const startX = from.x + side * (NODE_WIDTH / 2 - 8)
+      const startY = from.y
+      const endX = to.x - side * (NODE_WIDTH / 2 - 8)
+      const endY = to.y
+      const midX = startX + (endX - startX) * 0.5
+      return {
+        ...edge,
+        d: `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`,
+      }
+    })
+    .filter((edge): edge is NonNullable<typeof edge> => Boolean(edge))
+})
 
 const stageStyle = computed(() => ({
   transform: `translate(${localPanX.value}px, ${localPanY.value}px) scale(${localZoom.value})`,
@@ -178,20 +231,43 @@ watch(() => props.zoom, value => {
 })
 
 onMounted(() => {
-  resizeObserver = new ResizeObserver(() => fitView())
+  // resize 回调 debounce，避免连续 resize 触发 fit 风暴；且仅在 autoFit 启用时 fit
+  resizeObserver = new ResizeObserver(() => {
+    if (resizeFitTimer) clearTimeout(resizeFitTimer)
+    resizeFitTimer = setTimeout(() => {
+      if (autoFitEnabled.value) fitView()
+    }, 200)
+  })
   if (viewportRef.value) {
     resizeObserver.observe(viewportRef.value)
   }
+  autoFitEnabled.value = true
   fitView()
 })
 
 onBeforeUnmount(() => {
+  if (resizeFitTimer) {
+    clearTimeout(resizeFitTimer)
+    resizeFitTimer = null
+  }
   resizeObserver?.disconnect()
   resizeObserver = null
 })
 
-watch(visibleLayoutKey, () => {
+// 切换计划时 rootNodeId 变化 → 重新启用一次自动 fit（整树首次加载场景）。
+// autoFitEnabled 在 fitView() 完成后由 loadByPlan 流程或 fit 自身置 false，
+// 因此流式增量推送（rootNodeId 不变）不会再触发自动 fit。
+watch(() => props.rootNodeId, () => {
+  autoFitEnabled.value = true
   fitView()
+})
+
+// 布局变化时只在 autoFitEnabled 为 true（整树首次加载）时 fit；
+// 流式增量、用户折叠/展开不再抢视口。
+watch(visibleLayoutKey, () => {
+  if (autoFitEnabled.value) {
+    fitView()
+  }
 })
 
 function nodeStyle(item: TreeLayoutItem) {
@@ -266,6 +342,10 @@ async function fitView() {
   emit('update:panX', localPanX.value)
   emit('update:panY', localPanY.value)
   emit('update:zoom', localZoom.value)
+
+  // 完成一次 fit 后关闭自动 fit，避免后续流式增量/折叠展开抢视口。
+  // 手动"居中"按钮(centerView)与切换计划(watch rootNodeId)会重新触发 fit。
+  autoFitEnabled.value = false
 }
 
 function clampZoom(value: number) {

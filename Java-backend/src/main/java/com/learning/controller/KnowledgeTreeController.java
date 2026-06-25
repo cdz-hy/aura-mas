@@ -88,6 +88,13 @@ public class KnowledgeTreeController {
         return Result.success(treeService.createNodeInternal(request));
     }
 
+    @Operation(summary = "内部接口：批量创建知识树节点")
+    @PostMapping("/internal/nodes/batch")
+    public Result<KnowledgeTreeDtos.BatchCreateNodesResponse> createNodesBatchInternal(
+            @RequestBody KnowledgeTreeDtos.BatchCreateNodesRequest request) {
+        return Result.success(treeService.createNodesBatchInternal(request));
+    }
+
     @Operation(summary = "内部接口：更新知识树节点")
     @PatchMapping("/internal/nodes/{nodeId}")
     public Result<KnowledgeTreeDtos.NodeResponse> updateNodeInternal(
@@ -124,5 +131,25 @@ public class KnowledgeTreeController {
     @GetMapping("/internal/nodes/{nodeId}/messages")
     public Result<List<KnowledgeTreeDtos.MessageResponse>> getMessagesInternal(@PathVariable String nodeId) {
         return Result.success(treeService.getMessagesInternal(nodeId));
+    }
+
+    @Operation(summary = "内部接口：更新知识树元数据")
+    @PatchMapping("/internal/trees/{treeId}")
+    public Result<KnowledgeTreeDtos.TreeResponse> updateTreeInternal(
+            @PathVariable String treeId,
+            @RequestBody KnowledgeTreeDtos.UpdateTreeRequest request) {
+        return Result.success(treeService.updateTreeInternal(treeId, request));
+    }
+
+    @Operation(summary = "内部接口：同步任务分解到知识树")
+    @PostMapping("/internal/plan/{planId}/sync-breakdown")
+    public Result<KnowledgeTreeDtos.TreeResponse> syncTaskBreakdownInternal(
+            @PathVariable Long planId,
+            @RequestBody KnowledgeTreeDtos.SyncTaskBreakdownRequest request) {
+        Long userId = request.getUserId();
+        if (userId == null) {
+            return Result.error("userId required");
+        }
+        return Result.success(treeService.syncTaskBreakdownInternal(planId, userId, request));
     }
 }

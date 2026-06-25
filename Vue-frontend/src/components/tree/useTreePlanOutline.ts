@@ -94,7 +94,40 @@ export function buildTreePlanOutline(
     })
   }
 
-  return [rootItem]
+  const rootResources = rootItem.children.filter((item): item is TreePlanResourceItem => item.kind === 'resource')
+  const outlineItems: TreePlanOutlineItem[] = []
+
+  for (const child of rootItem.children) {
+    if (child.kind === 'node' || child.kind === 'group') {
+      outlineItems.push(child)
+    }
+  }
+
+  if (rootResources.length > 0) {
+    outlineItems.push({
+      kind: 'group',
+      id: 'group:root-resources',
+      title: '计划资源',
+      depth: 1,
+      children: rootResources,
+    })
+  }
+
+  return outlineItems
+}
+
+/** 统计大纲中的知识节点总数（含子节点） */
+export function countOutlineNodes(items: TreePlanOutlineItem[]): number {
+  let count = 0
+  for (const item of items) {
+    if (item.kind === 'node') {
+      count += 1
+      count += countOutlineNodes(item.children)
+    } else if (item.kind === 'group') {
+      count += countOutlineNodes(item.children)
+    }
+  }
+  return count
 }
 
 function mountResources(

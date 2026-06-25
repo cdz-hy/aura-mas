@@ -76,7 +76,7 @@ export const useChatStore = defineStore('chat', () => {
     return keys.length > 0 ? buffers[Number(keys[keys.length - 1])] || '' : ''
   })
 
-  const selectedModuleContext = ref<{ title: string; description: string; moduleId: number; planId: number } | null>(null)
+  const selectedModuleContext = ref<{ title: string; description: string; moduleId: number; planId?: number; nodeId?: string } | null>(null)
 
   let currentPlanId = localStorage.getItem('chat_currentPlanId') || ''
 
@@ -666,7 +666,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function requestSupplementaryResource(
     planId: string,
-    moduleContext: { title: string; description: string; moduleId: number },
+    moduleContext: { title: string; description: string; moduleId: number; nodeId?: string },
     resourceType: string,
   ) {
     if (streaming.value) return
@@ -698,6 +698,7 @@ export const useChatStore = defineStore('chat', () => {
           title: moduleContext.title,
           description: moduleContext.description || '',
           session_id: capturedSessionId,
+          node_id: moduleContext.nodeId || '',
         },
         {
           onStreamText(content) {
@@ -827,6 +828,8 @@ export const useChatStore = defineStore('chat', () => {
     confirmBreakdown,
     stopGeneration,
     requestSupplementaryResource,
+    /** 从知识树大纲节点触发的内容生成（带 node_id） */
+    requestNodeResourceGeneration: requestSupplementaryResource,
     recoverStreaming,
     stopRecovering: _stopRecover,
   }

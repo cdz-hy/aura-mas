@@ -673,6 +673,14 @@ async def plan_chat(
                     except Exception:
                         pass
                 logger.info(f"[资源持久化] 保存 {len(new_modules)} 个新增模块")
+            breakdown_payload = bs.get("new_breakdown") or bs.get("orchestrated_content")
+            if not breakdown_payload and bs.get("module_list"):
+                breakdown_payload = {"modules": bs["module_list"]}
+            if breakdown_payload:
+                profile_bg = ""
+                if isinstance(user_profile, dict):
+                    profile_bg = str(user_profile.get("learning_background") or user_profile.get("background") or "")
+                _try_sync_knowledge_tree(plan_id_int, user_id, breakdown_payload, profile_bg)
 
         if not bs["breakdown_confirmed"] and bs["module_list"] and plan_id_int:
             new_modules = [m for m in bs["module_list"]
@@ -696,6 +704,12 @@ async def plan_chat(
                     except Exception:
                         pass
                 logger.info(f"[资源持久化] 保存 {len(new_modules)} 个网络搜索资源")
+            if bs.get("module_list"):
+                breakdown_payload = {"modules": bs["module_list"]}
+                profile_bg = ""
+                if isinstance(user_profile, dict):
+                    profile_bg = str(user_profile.get("learning_background") or user_profile.get("background") or "")
+                _try_sync_knowledge_tree(plan_id_int, user_id, breakdown_payload, profile_bg)
 
         if bs["quiz_questions"] and plan_id_int:
             quiz_res_id = _save_quiz_resource(plan_id_int, bs["quiz_questions"], bs["quiz_config"])
@@ -777,6 +791,41 @@ async def plan_chat(
     )
 
 
+def _build_knowledge_tree_node_context(plan_id: int, user_id: int, node_id: str) -> str:
+    """从知识树节点构建大纲路径上下文，供内容生成使用。"""
+    if not node_id:
+        return ""
+    try:
+        tree_payload = java_client.get_tree_by_plan(plan_id, user_id)
+        nodes = tree_payload.get("nodes") or []
+        node_map = {n.get("id"): n for n in nodes if n.get("id")}
+        node = node_map.get(node_id)
+        if not node:
+            return ""
+
+        path_titles: list[str] = []
+        current = node
+        seen: set[str] = set()
+        while current and current.get("id") not in seen:
+            seen.add(current["id"])
+            if current.get("title"):
+                path_titles.insert(0, current["title"])
+            parent_id = current.get("parentId")
+            current = node_map.get(parent_id) if parent_id else None
+
+        parts = [f"知识树节点: {node.get('title', '')}"]
+        if path_titles:
+            parts.append(f"大纲路径: {' > '.join(path_titles)}")
+        if node.get("summary"):
+            parts.append(f"节点摘要: {node['summary']}")
+        if node.get("content"):
+            parts.append(f"节点说明: {node['content'][:800]}")
+        return "\n".join(parts)
+    except Exception as e:
+        logger.warning(f"[资源生成] 读取知识树节点上下文失败: {e}")
+        return ""
+
+
 @router.get("/resource/generate")
 async def generate_single_resource(
     ticket: str = Query(..., description="Java 后端签发的短期 Ticket"),
@@ -786,6 +835,7 @@ async def generate_single_resource(
     title: str = Query("", description="模块标题"),
     description: str = Query("", description="模块描述"),
     session_id: str = Query("", description="会话 ID（前端传入，为空时自动生成）"),
+    node_id: str = Query("", description="知识树节点 ID（从大纲生成时传入）"),
 ):
     """
     单资源生成 - SSE 流式输出
@@ -856,10 +906,21 @@ async def generate_single_resource(
     except Exception as e:
         logger.warning(f"[资源生成] 获取当前资源信息失败: {e}")
 
+    # 知识树大纲节点上下文（从左侧大纲触发生成时注入）
+    tree_node_context = ""
+    if node_id:
+        tree_node_context = await asyncio.to_thread(
+            _build_knowledge_tree_node_context, plan_id_int, user_id, node_id
+        )
+        if tree_node_context:
+            logger.info(f"[资源生成] 知识树节点 {node_id} 上下文已注入")
+
     # 构造以资源生成为目标的初始状态
-    resource_message = f"请为以下模块生成{type}类型的学习资源: {title}"
+    resource_message = f"请为以下学习大纲节点生成{type}类型的学习资源: {title}"
     if description:
         resource_message += f"\n模块描述: {description}"
+    if tree_node_context:
+        resource_message += f"\n\n{tree_node_context}"
 
     # quiz 和 video 走独立流程，mindmap/summary/code 走类型资源生成，animation 走动画节点，其他走 RAG + 编排
     is_quiz = (type == "quiz")
@@ -917,6 +978,7 @@ async def generate_single_resource(
                 "module_id": module_id,
                 "title": title,
                 "description": description,
+                "node_id": node_id or None,
                 "resources": [{"resource_type": type}],
             }]
         },
@@ -942,7 +1004,7 @@ async def generate_single_resource(
         "error": None,
         "iteration_count": 0,
         "max_iterations": 10,
-        "accumulated_context": "",
+        "accumulated_context": tree_node_context,
         "source_resource_content": source_resource_content,
         "placeholder_resource_map": {1: {"id": module_id_int, "type": type, "title": title}},
     }
@@ -1954,6 +2016,23 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -
     except Exception as e:
         logger.warning(f"[资源持久化] 保存视频资源失败: {e}")
         return 0
+
+
+def _try_sync_knowledge_tree(plan_id: int, user_id: int, breakdown, learning_background: str = "") -> None:
+    """任务分解确认后，将模块结构同步到知识树。"""
+    if not plan_id or not user_id or not breakdown or not isinstance(breakdown, dict):
+        return
+    try:
+        from app.services.knowledge_tree_ai import get_knowledge_tree_ai_service
+        get_knowledge_tree_ai_service().sync_task_breakdown(
+            user_id=user_id,
+            plan_id=plan_id,
+            breakdown=breakdown,
+            learning_background=learning_background,
+        )
+        logger.info("[知识树] 已同步 task_breakdown 到 plan %s", plan_id)
+    except Exception as exc:
+        logger.warning("[知识树] sync task_breakdown failed: %s", exc)
 
 
 def _save_plain_text_reply(breakdown_confirmed, generated_resource_info,

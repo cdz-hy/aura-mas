@@ -12,12 +12,12 @@
     <div v-else class="flex gap-0 h-full w-full overflow-x-auto overflow-y-hidden flex-1 custom-scrollbar">
     <!-- ==================== 左侧栏：模块列表（可折叠） ==================== -->
     <div
-      class="flex-shrink-0 flex flex-col card overflow-hidden transition-all duration-300 animate-fade-in-up"
-      :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-[280px]'"
+      class="flex-shrink-0 flex flex-col overflow-hidden transition-all duration-300 animate-fade-in-up border-r border-navy-100/60 bg-white"
+      :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-[300px]'"
     >
-      <div class="flex flex-col h-full min-w-[280px]">
+      <div class="flex flex-col h-full min-w-[300px]">
         <!-- Plan header -->
-        <div class="px-4 py-4 border-b border-navy-100/50">
+        <div class="px-4 py-3.5 border-b border-navy-100/60 bg-gradient-to-b from-white to-navy-50/30">
           <div class="flex items-center gap-2">
             <input
               v-if="editingTitle"
@@ -88,68 +88,27 @@
         </div>
 
         <div class="flex-1 min-h-0">
-          <KnowledgeTreeOutline
-            v-if="isTreeMode"
-            :items="treePlanOutline"
-            :selected-node-id="knowledgeTreeStore.currentNodeId"
+          <PlanResourceOutline
+            :modules="outlineModules"
+            :selected-module-id="selectedOutlineModuleId"
+            :selected-resource-id="selectedResourceId"
             :type-labels="typeLabels"
-            @select-node="selectTreeNode"
-            @open-resource="openOutlineResource"
-            @toggle-collapse="toggleTreeNodeCollapse"
+            :loading="outlineLoading"
+            :header-subtitle="isTreeMode ? '由知识树管理 · 在此生成学习内容' : undefined"
+            :meta-text="outlineMetaText"
+            :empty-title="isTreeMode ? '暂无知识树节点' : '暂无学习模块'"
+            :empty-hint="isTreeMode ? '在画布中拆分节点后会出现在这里' : '在右侧对话中描述学习目标，AI 会自动规划'"
+            :drag-hint="isTreeMode && knowledgeTreeStore.draggingNodeId ? '松开鼠标，将节点挂到目标模块下' : undefined"
+            :tree-mode="isTreeMode"
+            :tree-dn-d="isTreeMode"
+            :stuck-resource-ids="stuckResources"
+            @select-module="onOutlineSelectModule"
+            @select-resource="onOutlineSelectResource"
+            @retry-resource="handleRetryById"
+            @generate-content="generateFromTreeNode"
+            @drop-node="handleOutlineDropNode"
+            @mount-resource="handleOutlineMountResource"
           />
-
-          <!-- Module list -->
-          <div v-else class="h-full overflow-y-auto p-3 space-y-2">
-            <div v-if="modules.length === 0" class="text-center py-8 text-navy-300 text-sm">
-              <p>暂无学习模块</p>
-              <p class="text-xs mt-1">在右侧对话中描述学习目标，AI 会自动规划</p>
-            </div>
-            <div
-              v-for="(mod, i) in modules"
-              :key="i"
-              class="rounded-lg cursor-pointer transition-all duration-200 border"
-              :class="selectedModuleIndex === i ? 'border-navy-300 bg-navy-50 shadow-sm' : 'border-transparent hover:bg-navy-50/50'"
-              @click="selectModule(i)"
-            >
-              <div class="p-3">
-                <div class="flex items-center gap-2.5">
-                  <span class="w-6 h-6 rounded-full text-xs flex items-center justify-center font-bold flex-shrink-0"
-                    :class="selectedModuleIndex === i ? 'bg-navy-600 text-white' : 'bg-navy-100 text-navy-500'">
-                    {{ i + 1 }}
-                  </span>
-                  <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-navy-800 truncate">{{ mod.title }}</p>
-                    <p class="text-xs text-navy-400 mt-0.5">{{ mod.estimatedHours || 2 }}学时</p>
-                  </div>
-                </div>
-                <div class="flex flex-wrap gap-1 mt-2 ml-8">
-                  <span v-for="type in mod.resourceTypes" :key="type"
-                    class="text-[10px] px-1.5 py-0.5 rounded-full"
-                    :class="badgeClass(type)">
-                    {{ typeLabels[type] || type }}
-                  </span>
-                </div>
-              </div>
-
-              <!-- 模块资源列表 -->
-              <div v-if="selectedModuleIndex === i && mod.resources.length > 0" class="border-t border-navy-100/50 px-3 py-2 space-y-1.5">
-                <div
-                  v-for="res in mod.resources"
-                  :key="res.id"
-                  class="flex items-center gap-2 p-1.5 rounded-md text-xs transition-colors cursor-pointer"
-                  :class="selectedResourceId === res.id ? 'bg-navy-100' : 'hover:bg-white'"
-                  @click.stop="toggleResource(res)"
-                >
-                  <span class="w-2 h-2 rounded-full flex-shrink-0" :class="res.status === 2 ? 'bg-emerald-400' : res.status === 1 ? 'bg-blue-400' : res.status === 3 ? 'bg-red-400' : 'bg-navy-200'"></span>
-                  <span class="text-navy-600 truncate flex-1">{{ res.moduleData?.title || typeLabels[res.moduleType] || res.moduleType }}</span>
-                  <span v-if="res.status === 2" class="text-emerald-500 text-[10px]">已生成</span>
-                  <span v-else-if="res.status === 1 && !stuckResources.has(res.id)" class="text-blue-500 text-[10px]">生成中</span>
-                  <span v-else-if="res.status === 1 || res.status === 3" class="text-red-500 text-[10px] cursor-pointer hover:underline" @click.stop="handleRetry(res)">重试</span>
-                  <span v-else class="text-navy-300 text-[10px]">待生成</span>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
 
       </div>
@@ -167,7 +126,10 @@
     </button>
 
     <template v-if="isTreeMode">
-      <section class="mx-2 flex min-w-[720px] flex-1 flex-col overflow-hidden rounded-lg border border-navy-100 bg-white shadow-paper">
+      <section
+        v-if="!treeContentVisible"
+        class="mx-2 flex min-w-[720px] flex-1 flex-col overflow-hidden rounded-lg border border-navy-100 bg-white shadow-paper"
+      >
         <header class="flex flex-shrink-0 items-center justify-between gap-3 border-b border-navy-100 px-4 py-3">
           <div class="min-w-0">
             <h3 class="truncate font-display text-sm font-semibold text-navy-800">
@@ -203,6 +165,8 @@
             @select="selectTreeNode"
             @toggle-collapse="toggleTreeNodeCollapse"
             @open-subdivide="openTreeSubdivide"
+            @node-drag-start="knowledgeTreeStore.setDraggingNodeId($event)"
+            @node-drag-end="knowledgeTreeStore.setDraggingNodeId(null)"
           />
           <div
             v-if="knowledgeTreeStore.loading && !knowledgeTreeStore.activeSource"
@@ -232,8 +196,8 @@
       />
     </template>
 
-    <template v-else>
-    <!-- ==================== 中间栏：资源详情（始终在 DOM 中，width 过渡动画） ==================== -->
+    <template v-if="!isTreeMode || treeContentVisible">
+    <!-- ==================== 中间栏：资源详情（学习模式 / 知识树内容预览） ==================== -->
     <div
       class="resource-panel flex flex-col card overflow-hidden"
       :class="{
@@ -248,6 +212,16 @@
         <!-- 标题栏 -->
         <div class="px-4 py-3 border-b border-navy-100/50 flex items-center justify-between">
           <div class="flex items-center gap-2 min-w-0">
+            <button
+              v-if="isTreeMode"
+              class="p-1 rounded text-navy-400 hover:text-navy-700 hover:bg-navy-50 transition-colors flex-shrink-0"
+              title="返回知识树"
+              @click="closeTreeContentPanel"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
             <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0" :class="badgeClass(selectedResource.moduleType)">
               {{ typeLabels[selectedResource.moduleType] || selectedResource.moduleType }}
             </span>
@@ -596,8 +570,8 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getPlan, updatePlan } from '@/api/plan'
-import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi } from '@/api/resource'
-import { parseMarkdown, extractCitations } from '@/utils/markdown'
+import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi, updateResourceContent, bulkCreateResources } from '@/api/resource'
+import { parseMarkdown, extractCitations, normalizeMermaidCode } from '@/utils/markdown'
 import { normalizeAnimationHtml } from '@/utils/animationHtml'
 import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
@@ -611,10 +585,18 @@ import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import VideoPlayer from '@/components/resource/VideoPlayer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
 import KnowledgeTreeCanvas from '@/components/tree/KnowledgeTreeCanvas.vue'
-import KnowledgeTreeOutline from '@/components/tree/KnowledgeTreeOutline.vue'
+import PlanResourceOutline from '@/components/plan/PlanResourceOutline.vue'
+import {
+  buildOutlineFromLearningModules,
+  buildOutlineFromTreeItems,
+  countOutlineModules,
+  countOutlineResources,
+} from '@/components/plan/usePlanResourceOutline'
 import TreeSubdividePopover from '@/components/tree/TreeSubdividePopover.vue'
 import { buildTreePlanOutline } from '@/components/tree/useTreePlanOutline'
 import { useKnowledgeTreeStore } from '@/stores/knowledgeTree'
+import { updateKnowledgeNode } from '@/api/knowledgeTree'
+import type { KnowledgeNode } from '@/types/knowledgeTree'
 import type { LearningPlan, LearningResource } from '@/types/plan'
 import type { Note } from '@/types/note'
 import type { GeneratedResourceRef } from '@/utils/sse'
@@ -1168,7 +1150,7 @@ watch(planId, () => {
 
 // 监听 ?resource= 查询参数变化（同 plan 内跳转不同资源）
 watch(() => route.query.resource, (resId) => {
-  if (resId && resources.value.length > 0 && !isTreeMode.value) {
+  if (resId && resources.value.length > 0) {
     openResourceById(Number(resId))
   }
 })
@@ -1355,8 +1337,44 @@ const treePlanOutline = computed(() =>
   buildTreePlanOutline(knowledgeTreeStore.nodes, resources.value, rootTreeNodeId.value)
 )
 
+const outlineModules = computed(() => {
+  if (isTreeMode.value) {
+    return buildOutlineFromTreeItems(treePlanOutline.value, resources.value)
+  }
+  return buildOutlineFromLearningModules(modules.value)
+})
+
+const selectedOutlineModuleId = computed(() => {
+  if (isTreeMode.value) {
+    const nodeId = knowledgeTreeStore.currentNodeId
+    return nodeId ? `node:${nodeId}` : null
+  }
+  if (selectedModuleIndex.value < 0) return null
+  const mod = modules.value[selectedModuleIndex.value]
+  return mod ? `learning:${mod.order}` : null
+})
+
+const outlineLoading = computed(() =>
+  isTreeMode.value && knowledgeTreeStore.loading && outlineModules.value.length === 0
+)
+
+const outlineMetaText = computed(() => {
+  const mods = outlineModules.value
+  if (mods.length === 0) return ''
+  const moduleCount = countOutlineModules(mods)
+  const resourceCount = countOutlineResources(mods)
+  return isTreeMode.value
+    ? `${moduleCount} 节点 · ${resourceCount} 资源`
+    : `${moduleCount} 模块 · ${resourceCount} 资源`
+})
+
 const selectedTreeNode = computed(() =>
   knowledgeTreeStore.nodes.find(node => node.id === knowledgeTreeStore.currentNodeId) || null
+)
+
+/** 知识树模式下是否展示内容面板（资源预览 / 流式生成） */
+const treeContentVisible = computed(() =>
+  isTreeMode.value && !!(selectedResource.value || showResourceStreamPreview.value)
 )
 
 const treePopoverNode = computed(() =>
@@ -1366,6 +1384,9 @@ const treePopoverNode = computed(() =>
 async function ensureTreeLoaded(force = false) {
   if (!Number.isFinite(planId.value)) return
   if (!force && knowledgeTreeStore.tree?.planId === planId.value && knowledgeTreeStore.nodes.length > 0) return
+  if (force) {
+    await loadResources()
+  }
   await knowledgeTreeStore.loadByPlan(planId.value)
 }
 
@@ -1373,7 +1394,7 @@ async function enterTreeMode() {
   heartbeat.stop()
   clearSelectedResource()
   await router.replace({ query: { ...route.query, view: 'tree', resource: undefined } })
-  await ensureTreeLoaded()
+  await ensureTreeLoaded(true)
 }
 
 async function toggleTreeMode() {
@@ -1400,9 +1421,132 @@ async function toggleTreeNodeCollapse(nodeId: string) {
 }
 
 async function openOutlineResource(resourceId: number) {
-  await exitTreeMode()
-  await nextTick()
   await openResourceById(resourceId)
+  const resource = resources.value.find(item => item.id === resourceId)
+  const nodeId = resource?.moduleData?.nodeId as string | undefined
+  if (nodeId) {
+    await knowledgeTreeStore.selectNode(nodeId)
+  }
+}
+
+function onOutlineSelectModule(moduleId: string, nodeId?: string) {
+  if (isTreeMode.value) {
+    if (nodeId) void selectTreeNode(nodeId)
+    return
+  }
+  const match = /^learning:(\d+)$/.exec(moduleId)
+  if (!match) return
+  const order = Number(match[1])
+  const index = modules.value.findIndex(mod => mod.order === order)
+  if (index >= 0) selectModule(index)
+}
+
+function onOutlineSelectResource(resourceId: number) {
+  if (isTreeMode.value) {
+    void openOutlineResource(resourceId)
+    return
+  }
+  const res = resources.value.find(item => item.id === resourceId)
+  if (res) toggleResource(res)
+}
+
+async function handleRetryById(resourceId: number) {
+  const res = resources.value.find(item => item.id === resourceId)
+  if (res) await handleRetry(res)
+}
+
+function closeTreeContentPanel() {
+  clearSelectedResource()
+}
+
+/** 为知识树节点创建或复用占位资源，供内容生成管线使用 */
+async function ensureNodePlaceholderResource(node: KnowledgeNode): Promise<number> {
+  if (node.resourceId) return node.resourceId
+
+  const linked = resources.value.find(item => {
+    const data = item.moduleData || {}
+    return data.nodeId === node.id || data.node_id === node.id
+  })
+  if (linked?.id) {
+    if (!node.resourceId) {
+      await updateKnowledgeNode(node.id, { resourceId: linked.id })
+      const idx = knowledgeTreeStore.nodes.findIndex(n => n.id === node.id)
+      if (idx >= 0) knowledgeTreeStore.nodes[idx] = { ...knowledgeTreeStore.nodes[idx], resourceId: linked.id }
+    }
+    return linked.id
+  }
+
+  const maxOrder = resources.value.length > 0
+    ? Math.max(...resources.value.map(r => r.moduleOrder))
+    : 0
+  const res = await bulkCreateResources([{
+    planId: planId.value,
+    moduleOrder: maxOrder + 1,
+    moduleType: 'text',
+    moduleData: {
+      title: node.title,
+      description: node.summary || '',
+      nodeId: node.id,
+    },
+    status: 1,
+  }])
+  const created = res.data?.[0]
+  if (!created?.id) throw new Error('创建占位资源失败')
+
+  await updateKnowledgeNode(node.id, { resourceId: created.id })
+  const nodeIdx = knowledgeTreeStore.nodes.findIndex(n => n.id === node.id)
+  if (nodeIdx >= 0) {
+    knowledgeTreeStore.nodes[nodeIdx] = { ...knowledgeTreeStore.nodes[nodeIdx], resourceId: created.id }
+  }
+  parseModuleData([created])
+  resources.value.push(created)
+  return created.id
+}
+
+async function generateFromTreeNode(payload: { nodeId: string; type: string }) {
+  const node = knowledgeTreeStore.nodes.find(item => item.id === payload.nodeId)
+  if (!node) return
+
+  try {
+    await knowledgeTreeStore.selectNode(payload.nodeId)
+    const resourceId = await ensureNodePlaceholderResource(node)
+    const ctx = {
+      title: node.title,
+      description: node.summary || '',
+      moduleId: resourceId,
+      nodeId: node.id,
+      planId: planId.value,
+    }
+    chatStore.selectedModuleContext = ctx
+    await chatStore.requestNodeResourceGeneration(String(planId.value), ctx, payload.type)
+    await openResourceById(resourceId, payload.type)
+  } catch (e) {
+    knowledgeTreeStore.error = e instanceof Error ? e.message : '生成内容失败'
+  }
+}
+
+async function handleOutlineDropNode(payload: { nodeId: string; targetNodeId: string }) {
+  const ok = await knowledgeTreeStore.reparentNode(payload.nodeId, payload.targetNodeId)
+  if (ok) {
+    await knowledgeTreeStore.selectNode(payload.targetNodeId)
+  }
+  knowledgeTreeStore.setDraggingNodeId(null)
+}
+
+async function handleOutlineMountResource(payload: { resourceId: number; targetNodeId: string }) {
+  const resource = resources.value.find(item => item.id === payload.resourceId)
+  if (!resource) return
+  try {
+    const moduleData = {
+      ...(resource.moduleData || {}),
+      nodeId: payload.targetNodeId,
+    }
+    await updateResourceContent(payload.resourceId, moduleData, resource.status ?? 2)
+    await loadResources()
+    await knowledgeTreeStore.selectNode(payload.targetNodeId)
+  } catch (e) {
+    knowledgeTreeStore.error = e instanceof Error ? e.message : '关联资源失败'
+  }
 }
 
 async function openTreeSubdivide(nodeId: string) {
@@ -1526,9 +1670,7 @@ async function renderMermaidInResource() {
 
         try {
           const rawCode = decodeURIComponent(codeBase64)
-          const normalizedCode = rawCode
-            .replace(/[    　]/g, ' ')
-            .replace(/[​‌‍﻿]/g, '')
+          const normalizedCode = normalizeMermaidCode(rawCode)
 
           const id = 'mermaid-' + Math.random().toString(36).substr(2, 9)
           const { svg } = await mermaid.render(id, normalizedCode)
@@ -2038,6 +2180,7 @@ function toggleResource(res: LearningResource) {
     description: moduleDesc,
     moduleId: res.id,
     planId: res.planId || planId.value,
+    nodeId: (res.moduleData?.nodeId || res.moduleData?.node_id) as string | undefined,
   }
   // 仅在非 quiz 资源时提示（quiz 本身已是补充资源）
   if (res.moduleType !== 'quiz') {
@@ -2436,6 +2579,9 @@ watch(() => chatStore.lastGeneratedResources, async (resList) => {
     } else {
       toggleResource(firstUpdatedRes)
     }
+  }
+  if (knowledgeTreeStore.tree?.planId === planId.value || isTreeMode.value) {
+    await ensureTreeLoaded(true)
   }
   chatStore.lastGeneratedResources = null
 })

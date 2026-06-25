@@ -31,9 +31,7 @@ describe('buildTreePlanOutline', () => {
   it('shows the root node and nested child nodes', () => {
     const outline = buildTreePlanOutline(nodes, [], 'root')
 
-    expect(outline[0].kind).toBe('node')
-    expect(outline[0].title).toBe('Python 基础学习')
-    expect(outline[0].children.filter(item => item.kind === 'node').map(item => item.title)).toEqual([
+    expect(outline.filter(item => item.kind === 'node').map(item => item.title)).toEqual([
       'Python 环境搭建与初体验',
       '变量、数据类型与基本操作',
     ])
@@ -49,11 +47,12 @@ describe('buildTreePlanOutline', () => {
       resource({ id: 77, moduleType: 'quiz', moduleData: { title: '直接题目' } }),
     ], 'root')
 
-    expect(outline[0].children[0]).toMatchObject({ kind: 'resource', title: '基础练习', resourceId: 11 })
-    const vars = outline[0].children.find(item => item.kind === 'node' && item.nodeId === 'vars')
+    const vars = outline.find(item => item.kind === 'node' && item.nodeId === 'vars')
     expect(vars?.children[0]).toMatchObject({ kind: 'resource', title: '变量演示', resourceId: 22 })
-    const linked = outline[0].children.find(item => item.kind === 'node' && item.nodeId === 'linked')
+    const linked = outline.find(item => item.kind === 'node' && item.nodeId === 'linked')
     expect(linked?.children[0]).toMatchObject({ kind: 'resource', title: '直接题目', resourceId: 77 })
+    const rootResources = outline.find(item => item.kind === 'group' && item.title === '计划资源')
+    expect(rootResources?.children[0]).toMatchObject({ kind: 'resource', title: '基础练习', resourceId: 11 })
   })
 
   it('falls back to title matching and unmatched resources under root', () => {
@@ -62,9 +61,9 @@ describe('buildTreePlanOutline', () => {
       resource({ id: 44, moduleType: 'video', moduleData: { title: '外部补充视频' } }),
     ], 'root')
 
-    const env = outline[0].children.find(item => item.kind === 'node' && item.nodeId === 'env')
+    const env = outline.find(item => item.kind === 'node' && item.nodeId === 'env')
     expect(env?.children[0]).toMatchObject({ kind: 'resource', title: '环境搭建说明', resourceId: 33 })
-    const uncategorized = outline[0].children.find(item => item.kind === 'group' && item.title === '未归类资源')
+    const uncategorized = outline.find(item => item.kind === 'group' && item.title === '未归类资源')
     expect(uncategorized?.children[0]).toMatchObject({ kind: 'resource', title: '外部补充视频', resourceId: 44 })
   })
 })

@@ -38,12 +38,46 @@ const sampleNodes: KnowledgeNode[] = [
 ]
 
 describe('buildTreeLayout', () => {
-  it('places root, main trunk, and alternating branch children', () => {
+  it('places first-level nodes on a vertical trunk above the root', () => {
     const layout = buildTreeLayout(sampleNodes, 'node_root')
-    expect(layout.items.find(i => i.node.id === 'node_root')?.kind).toBe('root')
-    expect(layout.items.find(i => i.node.id === 'node_m1')?.kind).toBe('main')
-    expect(layout.items.find(i => i.node.id === 'node_c1')?.kind).toBe('branch-right')
-    expect(layout.edges.some(e => e.fromNodeId === 'node_m1' && e.toNodeId === 'node_c1')).toBe(true)
+    const root = layout.items.find(i => i.node.id === 'node_root')
+    const main1 = layout.items.find(i => i.node.id === 'node_m1')
+    const main2 = layout.items.find(i => i.node.id === 'node_m2')
+    const branch = layout.items.find(i => i.node.id === 'node_c1')
+
+    expect(root?.kind).toBe('root')
+    expect(main1?.kind).toBe('main')
+    expect(main2?.kind).toBe('branch-left')
+    expect(branch?.kind).toBe('branch-right')
+    expect(main1?.x).toBe(root?.x)
+    expect(main1!.y).toBeLessThan(root!.y)
+    expect(branch!.x).toBeGreaterThan(main1!.x)
+    expect(main2!.x).toBeLessThan(main1!.x)
+  })
+
+  it('keeps root children on the same center trunk', () => {
+    const nodes: KnowledgeNode[] = [
+      ...sampleNodes,
+      {
+        id: 'node_m3',
+        treeId: 'tree_1',
+        parentId: 'node_root',
+        title: 'Main 3',
+        depth: 1,
+        sortOrder: 1,
+      },
+    ]
+
+    const layout = buildTreeLayout(nodes, 'node_root')
+    const root = layout.items.find(i => i.node.id === 'node_root')!
+    const main1 = layout.items.find(i => i.node.id === 'node_m1')!
+    const main3 = layout.items.find(i => i.node.id === 'node_m3')!
+
+    expect(main1.kind).toBe('main')
+    expect(main3.kind).toBe('main')
+    expect(main1.x).toBe(root.x)
+    expect(main3.x).toBe(root.x)
+    expect(main3.y).toBeLessThan(main1.y)
   })
 
   it('calculates a viewport fit that keeps the whole tree visible', () => {

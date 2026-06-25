@@ -108,7 +108,7 @@ function restoreMermaid(html: string, placeholders: Map<string, string>): string
         <span class="text-sm text-navy-400">正在渲染图表...</span>
       </div>
     </div>`
-    
+
     const pRegex = new RegExp(`<p>\\s*${key}\\s*</p>`, 'g')
     if (pRegex.test(html)) {
       html = html.replace(pRegex, wrapper)
@@ -117,6 +117,21 @@ function restoreMermaid(html: string, placeholders: Map<string, string>): string
     }
   }
   return html
+}
+
+export function normalizeMermaidCode(code: string): string {
+  return quoteMermaidLabels(
+    code
+      .replace(/[    　]/g, ' ')
+      .replace(/[​‌‍﻿]/g, '')
+  )
+}
+
+function quoteMermaidLabels(code: string): string {
+  return code.replace(/(^|[^\w])([A-Za-z][\w-]*)\[(?!")([^\]\n]*[(){}][^\]\n]*)\]/g, (_match, prefix, nodeId, label) => {
+    const escapedLabel = label.replace(/"/g, '#quot;')
+    return `${prefix}${nodeId}["${escapedLabel}"]`
+  })
 }
 
 // 处理流式输出中的不完整 LaTeX（等待更多内容）

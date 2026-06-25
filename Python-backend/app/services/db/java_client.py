@@ -206,6 +206,17 @@ class JavaBackendClient:
     def create_tree_node(self, payload: dict) -> dict:
         return self._request("POST", "/api/knowledge-tree/internal/nodes", json=payload)
 
+    def create_tree_nodes_batch(self, payloads: list) -> list:
+        """批量创建知识树节点，减少 HTTP 往返。
+
+        payloads 是 CreateNodeRequest 列表。返回创建的节点列表。
+        批量创建时，同批次中先创建的节点可以作为后创建节点的 parent。
+        """
+        result = self._request("POST", "/api/knowledge-tree/internal/nodes/batch", json={"nodes": payloads})
+        if isinstance(result, dict):
+            return result.get("nodes", [])
+        return result if isinstance(result, list) else []
+
     def update_tree_node(self, node_id: str, payload: dict) -> dict:
         return self._request("PATCH", f"/api/knowledge-tree/internal/nodes/{node_id}", json=payload)
 
@@ -221,6 +232,30 @@ class JavaBackendClient:
 
     def get_tree_messages(self, node_id: str) -> list:
         return self._request("GET", f"/api/knowledge-tree/internal/nodes/{node_id}/messages")
+
+    def update_tree(self, tree_id: str, payload: dict) -> dict:
+        return self._request("PATCH", f"/api/knowledge-tree/internal/trees/{tree_id}", json=payload)
+
+    def sync_task_breakdown(
+        self,
+        plan_id: int,
+        user_id: int,
+        breakdown: dict,
+        learning_background: str = "",
+    ) -> dict:
+        modules = breakdown.get("modules", []) if isinstance(breakdown, dict) else []
+        payload = {
+            "userId": user_id,
+            "title": breakdown.get("title") if isinstance(breakdown, dict) else None,
+            "description": breakdown.get("description") if isinstance(breakdown, dict) else None,
+            "learningBackground": learning_background or breakdown.get("learning_background", ""),
+            "modules": modules,
+        }
+        return self._request(
+            "POST",
+            f"/api/knowledge-tree/internal/plan/{plan_id}/sync-breakdown",
+            json=payload,
+        )
 
     def update_plan_status(self, plan_id: int, status: int):
         """更新计划状态"""

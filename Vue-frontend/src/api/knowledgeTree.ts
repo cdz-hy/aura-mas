@@ -37,6 +37,20 @@ export function getTreeSubdivisionOptions(
   )
 }
 
+export function streamTreeBootstrap(
+  ticket: string,
+  planId: number,
+  treeId: string,
+  mode: TreeSplitMode,
+  handlers: TreeSseHandlers,
+): EventSource {
+  return createTreeSse(
+    `/api/ai/tree/plan/${planId}/bootstrap`,
+    { ticket, tree_id: treeId, mode },
+    handlers,
+  )
+}
+
 export function streamTreeExplain(
   ticket: string,
   treeId: string,
@@ -138,6 +152,12 @@ function createTreeSse(
         case 'progress':
           handlers.onProgress?.(data.content || '')
           break
+        case 'thinking':
+          handlers.onThinking?.(data.content || '')
+          break
+        case 'group_preview':
+          handlers.onGroupPreview?.(data.content || '')
+          break
         case 'chunk':
           handlers.onChunk?.(data.content || '')
           break
@@ -176,7 +196,7 @@ function createTreeSse(
 
   source.onmessage = (event) => handleData(event.data)
 
-  for (const eventType of ['progress', 'chunk', 'stream_text', 'message', 'message_saved', 'nodes', 'nodes_created', 'resource_generated', 'flashcards_generated', 'done', 'error']) {
+  for (const eventType of ['progress', 'thinking', 'group_preview', 'chunk', 'stream_text', 'message', 'message_saved', 'nodes', 'nodes_created', 'resource_generated', 'flashcards_generated', 'done', 'error']) {
     source.addEventListener(eventType, (event: MessageEvent) => handleData(event.data))
   }
 

@@ -14,8 +14,26 @@
   >
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0 flex-1">
-        <div class="flex items-center gap-2 min-w-0">
-          <h3 class="truncate text-sm font-semibold text-navy-800" :title="node.title">
+        <div class="flex items-center gap-1.5 min-w-0">
+          <span
+            v-if="draggable"
+            class="drag-handle"
+            title="拖到左侧大纲以调整归属"
+            draggable="true"
+            @dragstart="onDragStart"
+            @dragend="emit('drag-end')"
+            @click.stop
+          >
+            <svg viewBox="0 0 10 16" fill="currentColor">
+              <circle cx="2.5" cy="2.5" r="1.2" />
+              <circle cx="7.5" cy="2.5" r="1.2" />
+              <circle cx="2.5" cy="8" r="1.2" />
+              <circle cx="7.5" cy="8" r="1.2" />
+              <circle cx="2.5" cy="13.5" r="1.2" />
+              <circle cx="7.5" cy="13.5" r="1.2" />
+            </svg>
+          </span>
+          <h3 class="truncate text-sm font-semibold text-navy-800 flex-1" :title="node.title">
             {{ node.title || '未命名节点' }}
           </h3>
           <span class="status-badge" :class="statusClass">{{ statusLabel }}</span>
@@ -40,11 +58,24 @@
       </button>
     </div>
 
-    <div class="mt-3 flex items-center justify-between gap-2">
-      <div class="flex items-center gap-2 text-[11px] text-navy-400">
-        <MetricDots title="重要性" :value="node.importance ?? undefined" color-class="bg-amber-400" />
-        <MetricDots title="相关性" :value="node.relevance ?? node.relevanceScore ?? undefined" color-class="bg-blue-400" />
-        <MetricDots title="难度" :value="node.difficulty ?? undefined" color-class="bg-rose-400" />
+    <div class="mt-3 flex items-end justify-between gap-2">
+      <div class="node-metrics">
+        <div
+          v-for="metric in nodeMetrics"
+          :key="metric.key"
+          class="node-metric"
+          :title="`${metric.label} ${metric.display > 0 ? metric.display : '-'} / 3`"
+        >
+          <span class="node-metric__label">{{ metric.label }}</span>
+          <div class="node-metric__dots" aria-hidden="true">
+            <span
+              v-for="level in 3"
+              :key="level"
+              class="node-metric__dot"
+              :class="level <= metric.display ? metric.colorClass : 'node-metric__dot--empty'"
+            />
+          </div>
+        </div>
       </div>
       <div class="flex flex-shrink-0 items-center gap-1">
         <span v-if="hasPrerequisites" class="mini-badge bg-blue-50 text-blue-600" title="有前置知识">前置</span>
@@ -52,7 +83,13 @@
       </div>
     </div>
 
-    <button class="node-action mt-3 w-full" title="拆分当前节点" @click.stop="emit('open-subdivide', node.id)">
+    <button
+      class="node-action mt-3 w-full"
+      :class="{ 'node-action--disabled': atMaxDepth }"
+      :title="atMaxDepth ? '已达 3 层上限，无法继续拆分' : '拆分当前节点'"
+      :disabled="atMaxDepth"
+      @click.stop="!atMaxDepth && emit('open-subdivide', node.id)"
+    >
       <svg class="h-3.5 w-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M8 6h13" />
         <path d="M8 12h13" />
@@ -67,22 +104,63 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h } from 'vue'
+import { computed } from 'vue'
 import type { KnowledgeNode } from '@/types/knowledgeTree'
+import { setNodeDragData } from './useTreeDragDrop'
 
 const props = defineProps<{
   node: KnowledgeNode
   selected?: boolean
   hasChildren?: boolean
+  rootNodeId?: string | null
 }>()
 
 const emit = defineEmits<{
   select: [nodeId: string]
   'toggle-collapse': [nodeId: string]
   'open-subdivide': [nodeId: string]
+  'drag-start': [nodeId: string]
+  'drag-end': []
 }>()
 
+const draggable = computed(() => Boolean(props.rootNodeId && props.node.id !== props.rootNodeId))
+
+/** 知识树最多 3 层：depth 0 根 / 1 主模块 / 2 子知识点 */
+const atMaxDepth = computed(() => (props.node.depth ?? 0) >= 2)
+
 const hasPrerequisites = computed(() => Boolean(props.node.prerequisiteIds?.length))
+
+/** 后端 relevance 为 0/1 标志，展示用 relevanceScore（1-3） */
+function metricLevel(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value) || value <= 0) return 0
+  return Math.max(1, Math.min(3, Math.round(value)))
+}
+
+function relevanceLevel(node: KnowledgeNode) {
+  const score = node.relevanceScore ?? node.relevance
+  return metricLevel(score)
+}
+
+const nodeMetrics = computed(() => [
+  {
+    key: 'importance',
+    label: '重要',
+    display: metricLevel(props.node.importance),
+    colorClass: 'node-metric__dot--importance',
+  },
+  {
+    key: 'relevance',
+    label: '相关',
+    display: relevanceLevel(props.node),
+    colorClass: 'node-metric__dot--relevance',
+  },
+  {
+    key: 'difficulty',
+    label: '难度',
+    display: metricLevel(props.node.difficulty),
+    colorClass: 'node-metric__dot--difficulty',
+  },
+])
 
 const statusLabel = computed(() => {
   const map: Record<string, string> = {
@@ -109,27 +187,17 @@ function selectFromKeyboard(event: KeyboardEvent) {
   emit('select', props.node.id)
 }
 
-const MetricDots = defineComponent({
-  props: {
-    title: { type: String, required: true },
-    value: { type: Number, default: null },
-    colorClass: { type: String, required: true },
-  },
-  setup(metricProps) {
-    return () => {
-      const active = Math.max(0, Math.min(5, Math.round(metricProps.value || 0)))
-      return h('div', { class: 'flex items-center gap-1', title: `${metricProps.title}: ${active || '-'}` }, [
-        h('span', { class: 'w-8 text-[10px]' }, metricProps.title.slice(0, 1)),
-        ...Array.from({ length: 5 }, (_, index) => h('span', {
-          class: [
-            'h-1.5 w-1.5 rounded-full',
-            index < active ? metricProps.colorClass : 'bg-navy-100',
-          ],
-        })),
-      ])
-    }
-  },
-})
+function onDragStart(event: DragEvent) {
+  if (!draggable.value) {
+    event.preventDefault()
+    return
+  }
+  setNodeDragData(event, {
+    nodeId: props.node.id,
+    title: props.node.title || '未命名节点',
+  })
+  emit('drag-start', props.node.id)
+}
 </script>
 
 <style scoped>
@@ -145,6 +213,33 @@ const MetricDots = defineComponent({
 .tree-node:focus-visible {
   outline: 2px solid rgb(51 65 85);
   outline-offset: 3px;
+}
+
+.drag-handle {
+  display: inline-flex;
+  width: 14px;
+  height: 20px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: rgb(148 163 184);
+  cursor: grab;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.drag-handle:hover {
+  color: rgb(71 85 105);
+  background: rgb(241 245 249);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-handle svg {
+  width: 10px;
+  height: 14px;
 }
 
 .status-badge,
@@ -163,6 +258,58 @@ const MetricDots = defineComponent({
   height: 18px;
   padding: 0 6px;
   font-size: 10px;
+}
+
+.node-metrics {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.node-metric {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.node-metric__label {
+  font-size: 10px;
+  line-height: 1;
+  color: rgb(148 163 184);
+  white-space: nowrap;
+}
+
+.node-metric__dots {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.node-metric__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.node-metric__dot--empty {
+  background: rgb(226 232 240);
+}
+
+.node-metric__dot--importance {
+  background: rgb(251 191 36);
+}
+
+.node-metric__dot--relevance {
+  background: rgb(96 165 250);
+}
+
+.node-metric__dot--difficulty {
+  background: rgb(251 113 133);
 }
 
 .icon-button {
@@ -192,6 +339,18 @@ const MetricDots = defineComponent({
 .node-action:hover {
   background: rgb(226 232 240);
   color: rgb(30 41 59);
+}
+
+.node-action--disabled,
+.node-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.node-action--disabled:hover,
+.node-action:disabled:hover {
+  background: rgb(248 250 252);
+  color: rgb(71 85 105);
 }
 
 .line-clamp-2 {

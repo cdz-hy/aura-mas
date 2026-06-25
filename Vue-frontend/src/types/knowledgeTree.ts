@@ -87,6 +87,8 @@ export interface TreeFlashcard {
 
 export interface TreeSseHandlers {
   onProgress?: (content: string) => void
+  onThinking?: (content: string) => void
+  onGroupPreview?: (content: string) => void
   onChunk?: (content: string) => void
   onStreamText?: (content: string) => void
   onMessage?: (message: TreeMessage) => void

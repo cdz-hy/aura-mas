@@ -28,22 +28,24 @@
       </div>
 
       <section v-if="step === 'choice'" class="split-body">
-        <button class="split-choice" @click="loadOptions">
+        <p v-if="atMaxDepth" class="split-depth-hint">已达 3 层上限（计划 → 主模块 → 子知识点），无法继续拆分。</p>
+        <button class="split-choice" :disabled="atMaxDepth" @click="loadOptions">
           <span class="split-choice-title">按知识点拆分</span>
-          <span class="split-choice-desc">先让 AI 给出几个拆分角度，再选择单角度或多角度展开。</span>
+          <span class="split-choice-desc">围绕本领域拆 2-3 个子知识点，不会扩展到物理/化学等无关学科。</span>
         </button>
-        <button class="split-choice" @click="startFirstPrinciples">
-          <span class="split-choice-title">第一性原理 · 拆到底</span>
-          <span class="split-choice-desc">把当前节点继续拆成更基础、不可再省略的组成部分。</span>
+        <button class="split-choice" :disabled="atMaxDepth" @click="startFirstPrinciples">
+          <span class="split-choice-title">前置依赖 · 拆一层</span>
+          <span class="split-choice-desc">只补充本领域内的直接前置知识，不追到理工基础公理。</span>
         </button>
         <div class="split-custom">
           <input
             v-model="customAngle"
             maxlength="60"
             placeholder="自定义拆分角度"
+            :disabled="atMaxDepth"
             @keydown.enter.prevent="submitCustom"
           />
-          <button @click="submitCustom">拆分</button>
+          <button :disabled="atMaxDepth" @click="submitCustom">拆分</button>
         </div>
       </section>
 
@@ -92,7 +94,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type {
   KnowledgeNode,
   TreeSplitMode,
@@ -120,10 +122,11 @@ const emit = defineEmits<{
 
 const step = ref<'choice' | 'loading' | 'options'>('choice')
 const customAngle = ref('')
+const atMaxDepth = computed(() => (props.node?.depth ?? 0) >= 2)
 const splitModes: Array<{ mode: TreeSplitMode; range: string; title: string }> = [
-  { mode: 'Lite', range: '3-4', title: 'Lite：轻量拆分' },
-  { mode: 'Medium', range: '5-7', title: 'Medium：中等拆分' },
-  { mode: 'Zen', range: '8-12', title: 'Zen：深度拆分' },
+  { mode: 'Lite', range: '2-3', title: 'Lite：轻量拆分' },
+  { mode: 'Medium', range: '3-4', title: 'Medium：中等拆分' },
+  { mode: 'Zen', range: '4-5', title: 'Zen：深度拆分' },
 ]
 
 watch(() => props.node?.id, () => {
@@ -142,15 +145,18 @@ watch(() => props.loading, loading => {
 })
 
 function loadOptions() {
+  if (atMaxDepth.value) return
   step.value = 'loading'
   emit('load-options')
 }
 
 function startFirstPrinciples() {
+  if (atMaxDepth.value) return
   emit('first-principles')
 }
 
 function submitCustom() {
+  if (atMaxDepth.value) return
   const angle = customAngle.value.trim()
   if (!angle) return
   emit('single-angle', angle)
@@ -216,6 +222,23 @@ function submitCustom() {
   display: grid;
   gap: 10px;
   padding: 16px;
+}
+
+.split-depth-hint {
+  margin: 0;
+  border-radius: 8px;
+  background: rgb(254 243 199);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgb(146 64 14);
+}
+
+.split-choice:disabled,
+.split-custom button:disabled,
+.split-custom input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .split-mode {

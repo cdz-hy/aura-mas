@@ -50,6 +50,27 @@ async def ensure_tree(plan_id: int, ticket: str = Query(...)):
     return java_client.get_or_create_tree(plan_id, user_id)
 
 
+@router.get("/tree/plan/{plan_id}/bootstrap")
+async def bootstrap_tree(
+    plan_id: int,
+    tree_id: str = Query(...),
+    ticket: str = Query(...),
+    mode: str = Query("Lite"),
+):
+    user_id = _user_id_from_ticket(ticket)
+    _verify_plan_tree_access(plan_id, tree_id, user_id)
+    service = get_knowledge_tree_ai_service()
+    return StreamingResponse(
+        _event_stream(service.bootstrap_tree(
+            user_id=user_id,
+            plan_id=plan_id,
+            tree_id=tree_id,
+            mode=mode,
+        )),
+        media_type="text/event-stream",
+    )
+
+
 @router.get("/tree/{tree_id}/nodes/{node_id}/explain")
 async def explain_node(
     tree_id: str,

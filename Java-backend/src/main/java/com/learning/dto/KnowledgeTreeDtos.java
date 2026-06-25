@@ -90,6 +90,7 @@ public class KnowledgeTreeDtos {
 
     @Data
     public static class UpdateNodeRequest {
+        private String parentId;
         private String title;
         private String summary;
         private String content;
@@ -114,5 +115,33 @@ public class KnowledgeTreeDtos {
         private String content;
         private List<Object> nextActions;
         private List<Object> searchSources;
+    }
+
+    @Data
+    public static class BatchCreateNodesRequest {
+        private List<CreateNodeRequest> nodes;
+    }
+
+    @Data
+    public static class BatchCreateNodesResponse {
+        private List<NodeResponse> nodes;
+    }
+
+    @Data
+    public static class UpdateTreeRequest {
+        private String title;
+        private String field;
+        private String currentProblem;
+        private String learningBackground;
+        private String contextSummary;
+    }
+
+    @Data
+    public static class SyncTaskBreakdownRequest {
+        private Long userId;
+        private String title;
+        private String description;
+        private String learningBackground;
+        private List<Object> modules;
     }
 }

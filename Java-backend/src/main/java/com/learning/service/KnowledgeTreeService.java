@@ -3,6 +3,7 @@ package com.learning.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.learning.common.ErrorCode;
 import com.learning.dto.KnowledgeTreeDtos;
 import com.learning.entity.KnowledgeNode;
@@ -27,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -63,10 +65,10 @@ public class KnowledgeTreeService {
         tree.setPlanId(planId);
         tree.setUserId(userId);
         tree.setTitle(plan.getTitle());
-        tree.setField("");
-        tree.setCurrentProblem("");
-        tree.setLearningBackground("");
-        tree.setContextSummary("");
+        tree.setField(extractField(plan.getLearningGoal()));
+        tree.setCurrentProblem(plan.getTitle());
+        tree.setLearningBackground(extractLearningBackground(plan.getLearningGoal(), plan.getTitle()));
+        tree.setContextSummary(extractContextSummary(plan.getLearningGoal(), plan.getTitle()));
         tree.setCreatedAt(now);
         tree.setUpdatedAt(now);
 
@@ -96,24 +98,93 @@ public class KnowledgeTreeService {
 
         List<KnowledgeNode> nodes = new ArrayList<>();
         nodes.add(root);
-        List<ModuleSeed> moduleSeeds = moduleSeedsFromLearningGoal(plan.getLearningGoal());
+        List<ModuleSeed> moduleSeeds = moduleSeedsFromResources(planId);
         if (moduleSeeds.isEmpty()) {
-            moduleSeeds = moduleSeedsFromResources(planId);
+            moduleSeeds = moduleSeedsFromLearningGoal(plan.getLearningGoal());
         }
         if (moduleSeeds.isEmpty()) {
             moduleSeeds = List.of(new ModuleSeed("学习总览", "从整体目标开始梳理学习路径", null, null));
         }
 
-        for (int i = 0; i < moduleSeeds.size(); i++) {
-            KnowledgeNode node = createModuleNode(tree.getId(), root.getId(), moduleSeeds.get(i), i + 1, now);
-            nodeMapper.insert(node);
-            nodes.add(node);
+        insertModuleNodesBatch(tree.getId(), root.getId(), moduleSeeds, now, nodes);
+        for (KnowledgeNode node : nodes) {
+            if (node.getResourceId() != null && !Objects.equals(node.getId(), root.getId())) {
+                linkResourceToNode(node.getResourceId(), node.getId(), node.getTitle());
+            }
         }
 
         return toTreeResponse(tree, nodes);
     }
 
+    /** 批量创建一级模块节点，减少 DB 往返。 */
+    private void insertModuleNodesBatch(String treeId, String rootId, List<ModuleSeed> moduleSeeds, LocalDateTime now, List<KnowledgeNode> nodes) {
+        if (moduleSeeds.isEmpty()) {
+            return;
+        }
+        KnowledgeTreeDtos.BatchCreateNodesRequest batch = new KnowledgeTreeDtos.BatchCreateNodesRequest();
+        List<KnowledgeTreeDtos.CreateNodeRequest> requests = new ArrayList<>();
+        for (int i = 0; i < moduleSeeds.size(); i++) {
+            ModuleSeed seed = moduleSeeds.get(i);
+            KnowledgeTreeDtos.CreateNodeRequest req = new KnowledgeTreeDtos.CreateNodeRequest();
+            req.setTreeId(treeId);
+            req.setParentId(rootId);
+            req.setResourceId(seed.resourceId());
+            req.setTitle(seed.title());
+            req.setSummary(seed.summary());
+            req.setContent(seed.content());
+            req.setStatus(STATUS_PENDING);
+            req.setRelevance(0);
+            req.setImportance(2);
+            req.setRelevanceScore(2);
+            req.setDifficulty(2);
+            req.setDepth(1);
+            req.setSortOrder(i + 1);
+            req.setCollapsed(false);
+            requests.add(req);
+        }
+        batch.setNodes(requests);
+        List<KnowledgeNode> created = createNodesBatchInternal(batch).getNodes().stream()
+                .map(this::toEntity)
+                .collect(Collectors.toList());
+        nodes.addAll(created);
+    }
+
+    private KnowledgeNode toEntity(KnowledgeTreeDtos.NodeResponse response) {
+        KnowledgeNode node = new KnowledgeNode();
+        node.setId(response.getId());
+        node.setTreeId(response.getTreeId());
+        node.setParentId(response.getParentId());
+        node.setResourceId(response.getResourceId());
+        node.setTitle(response.getTitle());
+        node.setSummary(response.getSummary());
+        node.setContent(response.getContent());
+        node.setStatus(response.getStatus());
+        node.setRelevance(response.getRelevance());
+        node.setImportance(response.getImportance());
+        node.setRelevanceScore(response.getRelevanceScore());
+        node.setDifficulty(response.getDifficulty());
+        node.setDepth(response.getDepth());
+        node.setSortOrder(response.getSortOrder());
+        node.setPrerequisiteIds(toJson(response.getPrerequisiteIds()));
+        node.setIsFundamental(response.getIsFundamental());
+        node.setFpRelation(response.getFpRelation());
+        node.setFpReason(response.getFpReason());
+        node.setCollapsed(response.getCollapsed());
+        node.setCreatedAt(response.getCreatedAt());
+        node.setUpdatedAt(response.getUpdatedAt());
+        return node;
+    }
+
+    /** 将计划资源与知识树一级模块对齐：每个 moduleOrder 对应一个主节点，并双向绑定 resourceId/nodeId。 */
     private List<KnowledgeNode> syncResourceNodes(KnowledgeTree tree, List<KnowledgeNode> nodes) {
+        List<ModuleSeed> seeds = moduleSeedsFromResources(tree.getPlanId());
+        if (seeds.isEmpty()) {
+            return nodes;
+        }
+        return reconcilePrimaryModules(tree, nodes, seeds);
+    }
+
+    private List<KnowledgeNode> reconcilePrimaryModules(KnowledgeTree tree, List<KnowledgeNode> nodes, List<ModuleSeed> seeds) {
         KnowledgeNode root = nodes.stream()
                 .filter(node -> node.getParentId() == null || node.getParentId().isBlank())
                 .findFirst()
@@ -121,55 +192,139 @@ public class KnowledgeTreeService {
                         .filter(node -> defaultInt(node.getDepth(), 0) == 0)
                         .findFirst()
                         .orElse(null));
-        if (root == null) {
+        if (root == null || seeds.isEmpty()) {
             return nodes;
         }
 
-        List<ModuleSeed> resourceSeeds = moduleSeedsFromResources(tree.getPlanId());
-        if (resourceSeeds.isEmpty()) {
-            return nodes;
-        }
+        List<KnowledgeNode> synced = new ArrayList<>(nodes);
+        List<KnowledgeNode> l1Modules = synced.stream()
+                .filter(node -> Objects.equals(root.getId(), node.getParentId()))
+                .sorted(Comparator.comparing(node -> defaultInt(node.getSortOrder(), 0)))
+                .collect(Collectors.toList());
 
-        Set<Long> existingResourceIds = nodes.stream()
-                .map(KnowledgeNode::getResourceId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
-        Set<String> existingRootChildTitles = nodes.stream()
-                .filter(node -> Objects.equals(root.getId(), node.getParentId()))
-                .map(KnowledgeNode::getTitle)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
-        int nextSortOrder = nodes.stream()
-                .filter(node -> Objects.equals(root.getId(), node.getParentId()))
+        boolean changed = false;
+        LocalDateTime now = LocalDateTime.now();
+        int nextSortOrder = l1Modules.stream()
                 .map(KnowledgeNode::getSortOrder)
                 .filter(Objects::nonNull)
                 .max(Integer::compareTo)
                 .orElse(0) + 1;
 
-        List<KnowledgeNode> synced = new ArrayList<>(nodes);
-        boolean changed = false;
-        LocalDateTime now = LocalDateTime.now();
-        for (ModuleSeed seed : resourceSeeds) {
-            if (seed.resourceId() != null && existingResourceIds.contains(seed.resourceId())) {
-                continue;
+        for (int index = 0; index < seeds.size(); index++) {
+            ModuleSeed seed = seeds.get(index);
+            KnowledgeNode target;
+            if (index < l1Modules.size()) {
+                target = l1Modules.get(index);
+                if (shouldReplaceTitle(target.getTitle(), seed.title())) {
+                    target.setTitle(seed.title());
+                    if (seed.summary() != null && !seed.summary().isBlank()) {
+                        target.setSummary(seed.summary());
+                    }
+                    target.setUpdatedAt(now);
+                    nodeMapper.updateById(target);
+                    changed = true;
+                }
+            } else {
+                target = createModuleNode(tree.getId(), root.getId(), seed, nextSortOrder++, now);
+                nodeMapper.insert(target);
+                synced.add(target);
+                l1Modules.add(target);
+                changed = true;
             }
-            if (existingRootChildTitles.contains(seed.title())) {
-                continue;
+
+            if (seed.resourceId() != null && !Objects.equals(target.getResourceId(), seed.resourceId())) {
+                target.setResourceId(seed.resourceId());
+                target.setUpdatedAt(now);
+                nodeMapper.updateById(target);
+                changed = true;
             }
-            KnowledgeNode node = createModuleNode(tree.getId(), root.getId(), seed, nextSortOrder++, now);
-            nodeMapper.insert(node);
-            synced.add(node);
             if (seed.resourceId() != null) {
-                existingResourceIds.add(seed.resourceId());
+                changed |= linkResourceToNode(seed.resourceId(), target.getId(), seed.title());
             }
-            existingRootChildTitles.add(seed.title());
+        }
+
+        // 删除多余的占位一级节点（如单独的「学习模块 1」）
+        for (int index = seeds.size(); index < l1Modules.size(); index++) {
+            KnowledgeNode orphan = l1Modules.get(index);
+            if (!isGenericModuleTitle(orphan.getTitle())) {
+                continue;
+            }
+            if (hasChildNodes(synced, orphan.getId())) {
+                continue;
+            }
+            nodeMapper.deleteById(orphan.getId());
+            synced.removeIf(node -> Objects.equals(node.getId(), orphan.getId()));
             changed = true;
         }
+
         if (changed) {
             tree.setUpdatedAt(now);
             treeMapper.updateById(tree);
         }
         return synced;
+    }
+
+    private boolean hasChildNodes(List<KnowledgeNode> nodes, String parentId) {
+        return nodes.stream().anyMatch(node -> Objects.equals(parentId, node.getParentId()));
+    }
+
+    private boolean shouldReplaceTitle(String currentTitle, String nextTitle) {
+        if (nextTitle == null || nextTitle.isBlank()) {
+            return false;
+        }
+        if (currentTitle == null || currentTitle.isBlank()) {
+            return true;
+        }
+        if (isGenericModuleTitle(currentTitle) && !isGenericModuleTitle(nextTitle)) {
+            return true;
+        }
+        return isGenericModuleTitle(currentTitle)
+                && !normalizeTitle(currentTitle).equals(normalizeTitle(nextTitle));
+    }
+
+    private boolean isGenericModuleTitle(String title) {
+        if (title == null || title.isBlank()) {
+            return true;
+        }
+        String normalized = title.trim();
+        return normalized.matches("^(学习模块|模块|Module)\\s*\\d+$");
+    }
+
+    private boolean linkResourceToNode(Long resourceId, String nodeId, String title) {
+        LearningResource resource = resourceMapper.selectById(resourceId);
+        if (resource == null) {
+            return false;
+        }
+        JsonNode data = parseJson(resource.getModuleData());
+        ObjectNode moduleData = data != null && data.isObject()
+                ? ((ObjectNode) data).deepCopy()
+                : objectMapper.createObjectNode();
+        boolean changed = false;
+        if (!nodeId.equals(moduleData.path("nodeId").asText(null))) {
+            moduleData.put("nodeId", nodeId);
+            changed = true;
+        }
+        if (title != null && !title.isBlank()) {
+            String moduleTitle = moduleData.path("module_title").asText("");
+            if (moduleTitle.isBlank() || isGenericModuleTitle(moduleTitle)) {
+                moduleData.put("module_title", title);
+                changed = true;
+            }
+            if (moduleData.path("title").asText("").isBlank()) {
+                moduleData.put("title", title);
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return false;
+        }
+        try {
+            resource.setModuleData(objectMapper.writeValueAsString(moduleData));
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST);
+        }
+        resourceMapper.updateById(resource);
+        return true;
     }
 
     @Transactional
@@ -245,6 +400,66 @@ public class KnowledgeTreeService {
         node.setUpdatedAt(now);
         nodeMapper.insert(node);
         return toNodeResponse(node);
+    }
+
+    @Transactional
+    public KnowledgeTreeDtos.BatchCreateNodesResponse createNodesBatchInternal(
+            KnowledgeTreeDtos.BatchCreateNodesRequest request) {
+        List<KnowledgeNode> created = new ArrayList<>();
+        for (KnowledgeTreeDtos.CreateNodeRequest nodeRequest : request.getNodes()) {
+            KnowledgeNode parent = null;
+            if (nodeRequest.getParentId() != null && !nodeRequest.getParentId().isBlank()) {
+                parent = nodeMapper.selectById(nodeRequest.getParentId());
+                if (parent == null) {
+                    // 批量创建中父节点可能在同批次中刚创建，从 created 列表查找
+                    parent = created.stream()
+                            .filter(n -> n.getId().equals(nodeRequest.getParentId()))
+                            .findFirst()
+                            .orElse(null);
+                }
+            }
+
+            String treeId = nodeRequest.getTreeId();
+            if (parent != null) {
+                if (treeId != null && !treeId.isBlank() && !treeId.equals(parent.getTreeId())) {
+                    throw new BusinessException(ErrorCode.BAD_REQUEST);
+                }
+                treeId = parent.getTreeId();
+            }
+            if (treeId == null || treeId.isBlank() || nodeRequest.getTitle() == null || nodeRequest.getTitle().isBlank()) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST);
+            }
+
+            LocalDateTime now = LocalDateTime.now();
+            KnowledgeNode node = new KnowledgeNode();
+            node.setId(nodeRequest.getId() != null && !nodeRequest.getId().isBlank() ? nodeRequest.getId() : nextId("node"));
+            node.setTreeId(treeId);
+            node.setParentId(nodeRequest.getParentId());
+            node.setResourceId(nodeRequest.getResourceId());
+            node.setTitle(nodeRequest.getTitle());
+            node.setSummary(nodeRequest.getSummary());
+            node.setContent(nodeRequest.getContent());
+            node.setStatus(defaultString(nodeRequest.getStatus(), STATUS_PENDING));
+            node.setRelevance(defaultInt(nodeRequest.getRelevance(), 0));
+            node.setImportance(defaultInt(nodeRequest.getImportance(), 2));
+            node.setRelevanceScore(defaultInt(nodeRequest.getRelevanceScore(), 2));
+            node.setDifficulty(defaultInt(nodeRequest.getDifficulty(), 2));
+            node.setDepth(defaultInt(nodeRequest.getDepth(), parent != null ? defaultInt(parent.getDepth(), 0) + 1 : 0));
+            node.setSortOrder(defaultInt(nodeRequest.getSortOrder(), 0));
+            node.setPrerequisiteIds(toJson(nodeRequest.getPrerequisiteIds()));
+            node.setIsFundamental(defaultBoolean(nodeRequest.getIsFundamental(), false));
+            node.setFpRelation(defaultString(nodeRequest.getFpRelation(), ""));
+            node.setFpReason(nodeRequest.getFpReason());
+            node.setCollapsed(defaultBoolean(nodeRequest.getCollapsed(), false));
+            node.setCreatedAt(now);
+            node.setUpdatedAt(now);
+            nodeMapper.insert(node);
+            created.add(node);
+        }
+
+        KnowledgeTreeDtos.BatchCreateNodesResponse response = new KnowledgeTreeDtos.BatchCreateNodesResponse();
+        response.setNodes(created.stream().map(this::toNodeResponse).collect(Collectors.toList()));
+        return response;
     }
 
     @Transactional
@@ -331,6 +546,10 @@ public class KnowledgeTreeService {
             }
         }
 
+        if (request.getParentId() != null) {
+            applyReparent(node, request.getParentId(), request.getSortOrder());
+        }
+
         if (request.getTitle() != null) node.setTitle(request.getTitle());
         if (request.getSummary() != null) node.setSummary(request.getSummary());
         if (request.getContent() != null) node.setContent(request.getContent());
@@ -349,6 +568,10 @@ public class KnowledgeTreeService {
         node.setUpdatedAt(LocalDateTime.now());
         nodeMapper.updateById(node);
 
+        if (request.getParentId() != null) {
+            recalcDepthForSubtree(node.getId(), defaultInt(node.getDepth(), 0));
+        }
+
         if (requestedCurrentNodeId != null && !requestedCurrentNodeId.isBlank()) {
             KnowledgeTree tree = treeMapper.selectById(node.getTreeId());
             if (tree != null) {
@@ -358,6 +581,67 @@ public class KnowledgeTreeService {
             }
         }
         return toNodeResponse(node);
+    }
+
+    /** 校验并应用新的父节点（不写库，由 updateNode 统一持久化）。 */
+    private void applyReparent(KnowledgeNode node, String newParentId, Integer requestedSortOrder) {
+        if (newParentId.isBlank()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST);
+        }
+        if (Objects.equals(node.getId(), newParentId)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST);
+        }
+        KnowledgeNode newParent = nodeMapper.selectById(newParentId);
+        if (newParent == null || !Objects.equals(newParent.getTreeId(), node.getTreeId())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST);
+        }
+        if (isDescendantOf(node.getTreeId(), newParentId, node.getId())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST);
+        }
+
+        node.setParentId(newParentId);
+        int parentDepth = defaultInt(newParent.getDepth(), 0);
+        node.setDepth(parentDepth + 1);
+        if (requestedSortOrder != null) {
+            node.setSortOrder(requestedSortOrder);
+        } else {
+            node.setSortOrder(nextSortOrderUnderParent(loadNodes(node.getTreeId()), newParentId));
+        }
+    }
+
+    /** 判断 candidate 是否为 ancestor 的子孙节点。 */
+    private boolean isDescendantOf(String treeId, String candidateId, String ancestorId) {
+        String cursor = candidateId;
+        Set<String> seen = new HashSet<>();
+        while (cursor != null && !cursor.isBlank()) {
+            if (Objects.equals(cursor, ancestorId)) {
+                return true;
+            }
+            if (!seen.add(cursor)) {
+                break;
+            }
+            KnowledgeNode current = nodeMapper.selectById(cursor);
+            if (current == null || !Objects.equals(current.getTreeId(), treeId)) {
+                break;
+            }
+            cursor = current.getParentId();
+        }
+        return false;
+    }
+
+    private void recalcDepthForSubtree(String parentId, int parentDepth) {
+        List<KnowledgeNode> children = nodeMapper.selectList(new LambdaQueryWrapper<KnowledgeNode>()
+                .eq(KnowledgeNode::getParentId, parentId));
+        if (children == null || children.isEmpty()) {
+            return;
+        }
+        for (KnowledgeNode child : children) {
+            int depth = parentDepth + 1;
+            child.setDepth(depth);
+            child.setUpdatedAt(LocalDateTime.now());
+            nodeMapper.updateById(child);
+            recalcDepthForSubtree(child.getId(), depth);
+        }
     }
 
     private LearningPlan requireOwnedPlan(Long planId, Long userId) {
@@ -392,6 +676,108 @@ public class KnowledgeTreeService {
                 .orderByAsc(KnowledgeNode::getSortOrder)
                 .orderByAsc(KnowledgeNode::getCreatedAt));
         return nodes != null ? nodes : List.of();
+    }
+
+    private int nextSortOrderUnderParent(List<KnowledgeNode> nodes, String parentId) {
+        return nodes.stream()
+                .filter(node -> Objects.equals(parentId, node.getParentId()))
+                .map(KnowledgeNode::getSortOrder)
+                .filter(Objects::nonNull)
+                .max(Integer::compareTo)
+                .orElse(0) + 1;
+    }
+
+    @Transactional
+    public KnowledgeTreeDtos.TreeResponse updateTreeInternal(String treeId, KnowledgeTreeDtos.UpdateTreeRequest request) {
+        KnowledgeTree tree = treeMapper.selectById(treeId);
+        if (tree == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND);
+        }
+        if (request.getTitle() != null) tree.setTitle(request.getTitle());
+        if (request.getField() != null) tree.setField(request.getField());
+        if (request.getCurrentProblem() != null) tree.setCurrentProblem(request.getCurrentProblem());
+        if (request.getLearningBackground() != null) tree.setLearningBackground(request.getLearningBackground());
+        if (request.getContextSummary() != null) tree.setContextSummary(request.getContextSummary());
+        tree.setUpdatedAt(LocalDateTime.now());
+        treeMapper.updateById(tree);
+        return toTreeResponse(tree, loadNodes(treeId));
+    }
+
+    @Transactional
+    public KnowledgeTreeDtos.TreeResponse syncTaskBreakdownInternal(Long planId, Long userId,
+                                                                      KnowledgeTreeDtos.SyncTaskBreakdownRequest request) {
+        KnowledgeTreeDtos.TreeResponse treeResponse = createOrGetByPlan(planId, userId);
+        KnowledgeTree tree = treeMapper.selectById(treeResponse.getTree().getId());
+        if (tree == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND);
+        }
+        if (request.getTitle() != null && !request.getTitle().isBlank()) {
+            tree.setTitle(request.getTitle());
+        }
+        if (request.getDescription() != null && !request.getDescription().isBlank()) {
+            tree.setContextSummary(request.getDescription());
+        }
+        if (request.getLearningBackground() != null && !request.getLearningBackground().isBlank()) {
+            tree.setLearningBackground(request.getLearningBackground());
+        }
+        tree.setUpdatedAt(LocalDateTime.now());
+        treeMapper.updateById(tree);
+
+        List<KnowledgeNode> nodes = loadNodes(tree.getId());
+        KnowledgeNode root = nodes.stream()
+                .filter(node -> node.getParentId() == null || node.getParentId().isBlank())
+                .findFirst()
+                .orElse(null);
+        if (root == null || request.getModules() == null || request.getModules().isEmpty()) {
+            return toTreeResponse(tree, nodes);
+        }
+
+        List<ModuleSeed> breakdownSeeds = new ArrayList<>();
+        for (Object rawModule : request.getModules()) {
+            JsonNode module = rawModule instanceof JsonNode
+                    ? (JsonNode) rawModule
+                    : objectMapper.valueToTree(rawModule);
+            String title = firstText(module, "title", "module_title", "name");
+            if (title == null || title.isBlank()) {
+                if (module.isTextual()) {
+                    title = module.asText();
+                } else {
+                    title = "学习模块 " + (breakdownSeeds.size() + 1);
+                }
+            }
+            String summary = firstText(module, "description", "summary", "content");
+            breakdownSeeds.add(new ModuleSeed(title, summary, module.isObject() ? module.toString() : null, null));
+        }
+
+        List<ModuleSeed> resourceSeeds = moduleSeedsFromResources(planId);
+        List<ModuleSeed> seeds = !resourceSeeds.isEmpty() ? resourceSeeds : breakdownSeeds;
+        List<KnowledgeNode> synced = reconcilePrimaryModules(tree, nodes, seeds);
+        tree.setUpdatedAt(LocalDateTime.now());
+        treeMapper.updateById(tree);
+        return toTreeResponse(tree, synced);
+    }
+
+    private String extractField(String learningGoal) {
+        JsonNode root = parseJson(learningGoal);
+        return firstText(root, "field", "domain", "subject");
+    }
+
+    private String extractContextSummary(String learningGoal, String fallback) {
+        JsonNode root = parseJson(learningGoal);
+        String summary = firstText(root, "description", "summary", "goal", "learning_goal");
+        if (summary != null && !summary.isBlank()) {
+            return summary;
+        }
+        return fallback != null ? fallback : "";
+    }
+
+    private String extractLearningBackground(String learningGoal, String fallback) {
+        JsonNode root = parseJson(learningGoal);
+        String background = firstText(root, "background", "learning_background", "user_background");
+        if (background != null && !background.isBlank()) {
+            return background;
+        }
+        return fallback != null ? fallback : "";
     }
 
     private KnowledgeNode createModuleNode(String treeId, String rootId, ModuleSeed seed, int sortOrder, LocalDateTime now) {
@@ -429,7 +815,11 @@ public class KnowledgeTreeService {
         for (JsonNode module : modules) {
             String title = firstText(module, "title", "module_title", "name");
             if (title == null || title.isBlank()) {
-                title = module.isTextual() ? module.asText() : "学习模块 " + (seeds.size() + 1);
+                if (module.isTextual()) {
+                    title = module.asText();
+                } else {
+                    title = "学习模块 " + (seeds.size() + 1);
+                }
             }
             String summary = firstText(module, "description", "summary", "content");
             seeds.add(new ModuleSeed(title, summary, module.isObject() ? module.toString() : null, null));
@@ -461,6 +851,14 @@ public class KnowledgeTreeService {
             String title = firstText(moduleData, "module_title", "title", "name");
             if (title == null || title.isBlank()) {
                 title = "模块 " + index;
+            }
+            if (isGenericModuleTitle(title) && entry.getValue().size() == 1) {
+                LearningResource only = entry.getValue().get(0);
+                JsonNode onlyData = parseJson(only.getModuleData());
+                String better = firstText(onlyData, "module_title", "title", "name");
+                if (better != null && !better.isBlank() && !isGenericModuleTitle(better)) {
+                    title = better;
+                }
             }
             String summary = firstText(moduleData, "description", "summary", "content");
             seeds.add(new ModuleSeed(title, summary, first.getModuleData(), first.getId()));
@@ -628,6 +1026,14 @@ public class KnowledgeTreeService {
 
     private String nextId(String prefix) {
         return prefix + "_" + UUID.randomUUID().toString().replace("-", "");
+    }
+
+    /** 标题归一化，用于去重比对 */
+    private String normalizeTitle(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replaceAll("\\s+", "").trim().toLowerCase();
     }
 
     private String defaultString(String value, String fallback) {
