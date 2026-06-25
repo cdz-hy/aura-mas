@@ -195,6 +195,45 @@ class JavaBackendClient:
         """获取学习计划"""
         return self._request("GET", f"/api/plan/internal/{plan_id}")
 
+    def get_generation_task(self, task_id: int) -> Dict[str, Any]:
+        """获取资源生成任务"""
+        return self._request("GET", f"/api/resource-generation/internal/{task_id}")
+
+    # ==================== 知识图谱 ====================
+
+    def get_user_knowledge_domains(self, user_id: int) -> List[Dict[str, Any]]:
+        """获取用户所有的领域列表及图谱概览"""
+        return self._request("GET", f"/api/knowledge-graph/user/{user_id}")
+
+    def get_domain_knowledge_graph(self, domain_id: int) -> Dict[str, Any]:
+        """获取某个具体领域的完整 JSON 图谱"""
+        return self._request("GET", f"/api/knowledge-graph/domain/{domain_id}")
+
+    def create_knowledge_domain(self, user_id: int, domain_name: str, graph_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """新建领域图谱初始化数据"""
+        body = {"userId": user_id, "domainName": domain_name}
+        if graph_data:
+            body["graphData"] = graph_data
+        return self._request("POST", "/api/knowledge-graph/domain", json=body)
+
+    def update_knowledge_domain(self, domain_id: int, domain_name: Optional[str] = None, graph_data: Optional[Dict[str, Any]] = None) -> bool:
+        """保存/全量更新指定的领域图谱"""
+        body = {}
+        if domain_name:
+            body["domainName"] = domain_name
+        if graph_data is not None:
+            body["graphData"] = graph_data
+        return self._request("PUT", f"/api/knowledge-graph/domain/{domain_id}", json=body)
+
+    def patch_knowledge_graph_node(self, domain_id: int, node_id: str, mastery_level: Optional[float] = None, importance: Optional[float] = None) -> bool:
+        """更新某个节点的属性"""
+        body = {}
+        if mastery_level is not None:
+            body["masteryLevel"] = mastery_level
+        if importance is not None:
+            body["importance"] = importance
+        return self._request("PATCH", f"/api/knowledge-graph/domain/{domain_id}/node/{node_id}", json=body)
+
     def update_plan_status(self, plan_id: int, status: int):
         """更新计划状态"""
         self._request("PUT", f"/api/plan/{plan_id}/status", params={"status": status})

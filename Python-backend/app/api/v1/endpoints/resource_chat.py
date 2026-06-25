@@ -837,6 +837,23 @@ async def plan_chat(
             user_id=user_id, session_id=session_id, plan_id=plan_id_int,
         )), daemon=True).start()
 
+        # 知识图谱异步更新
+        if bs.get("generated_resource_info") and bs.get("orchestrated_content"):
+            from app.graph.knowledge_updater_graph import get_knowledge_updater_graph
+            def _async_knowledge_updater():
+                try:
+                    resource_id = min(r["id"] for r in bs["generated_resource_info"] if r.get("id"))
+                    updater_state = {
+                        "user_id": user_id,
+                        "resource_id": resource_id,
+                        "resource_text": bs["orchestrated_content"]
+                    }
+                    updater_graph = get_knowledge_updater_graph()
+                    updater_graph.invoke(updater_state)
+                except Exception as e:
+                    logger.error(f"知识图谱异步更新失败: {e}")
+            threading.Thread(target=_async_knowledge_updater, daemon=True).start()
+
         # 最终事件
         if bs["generated_resource_info"]:
             _emit(

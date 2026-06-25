@@ -696,3 +696,8 @@ def get_animation_skill_generator_llm() -> MIMOClient:
     return MIMOClient(model=MIMOClient.MODEL_PRO_SPEED, temperature=0.5, max_tokens=8192,
                       thinking=THINKING_DISABLED, base_url=settings.MIMO_BASE_URL_SPEED,
                       api_key=settings.MIMO_API_KEY_SPEED)
+
+def get_knowledge_updater_llm() -> MIMOClient:
+    """图谱更新智能体 - pro 模型"""
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=8192,
+                      thinking=THINKING_DISABLED)

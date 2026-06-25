@@ -322,3 +322,16 @@ CREATE TABLE IF NOT EXISTS `daily_study_time` (
     UNIQUE KEY `uk_user_date` (`user_id`, `study_date`),
     KEY `idx_user_date` (`user_id`, `study_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日学习时长表';
+
+CREATE TABLE IF NOT EXISTS `user_knowledge_domain` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `domain_name` VARCHAR(100) NOT NULL,
+    `graph_data` JSON DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_deleted` TINYINT DEFAULT 0,
+    PRIMARY KEY (`id`),
+    KEY `idx_user_id` (`user_id`),
+    UNIQUE KEY `uk_user_domain` (`user_id`, `domain_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户知识领域图谱表';

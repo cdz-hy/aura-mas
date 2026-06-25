@@ -13,6 +13,7 @@ const componentMap: Record<string, () => Promise<Component>> = {
   'kb-management':     () => import('@/views/admin/KBManagement.vue'),
   'user-management':   () => import('@/views/admin/UserManagement.vue'),
   'token-analysis':    () => import('@/views/admin/TokenAnalysis.vue'),
+  'knowledge-graph':   () => import('@/views/KnowledgeGraphView.vue'),
 }
 
 function collectCodes(menus: MenuItem[]): Set<string> {
@@ -80,7 +81,10 @@ export function buildRoutes(menus: MenuItem[]): RouteRecordRaw[] {
           path: menu.path.replace(/^\//, ''),
           name: menu.code,
           component: componentMap[menu.code],
-          meta: { title: menu.name },
+          meta: { 
+            title: menu.name,
+            fullWidth: menu.code === 'knowledge-graph'
+          },
         })
       }
       if (menu.children?.length) {
