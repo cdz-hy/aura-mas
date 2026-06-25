@@ -35,8 +35,7 @@
       <div
         v-for="plan in plans"
         :key="plan.id"
-        class="card p-5 cursor-pointer transition-all duration-200 hover:border-navy-300 hover:shadow-paper-hover group border-l-4"
-        :class="statusBorderColor(plan.status)"
+        class="card p-5 cursor-pointer transition-all duration-200 hover:border-navy-300 hover:shadow-paper-hover group"
         @click="router.push(`/plan/${plan.id}`)"
       >
         <div class="flex items-start justify-between">
@@ -44,14 +43,11 @@
             <h3 class="font-display text-base font-semibold text-navy-800 group-hover:text-navy-900 truncate">
               {{ plan.title || '未命名计划' }}
             </h3>
-            <p v-if="extractGoal(plan)" class="text-sm text-navy-400 mt-1 truncate">
-              {{ extractGoal(plan).slice(0, 60) }}{{ extractGoal(plan).length > 60 ? '...' : '' }}
-            </p>
             <div class="flex items-center gap-3 mt-2">
               <span class="text-xs px-2.5 py-1 rounded-full" :class="statusClass(plan.status)">
                 {{ statusText(plan.status) }}
               </span>
-              <span class="text-xs text-navy-400">{{ relativeTime(plan.updatedAt) }}</span>
+              <span class="text-xs text-navy-400">{{ formatDate(plan.createdAt) }}</span>
             </div>
           </div>
           <div class="flex items-center gap-2 ml-4">
@@ -67,16 +63,14 @@
           </div>
         </div>
 
-        <!-- Resource stats + Progress bar -->
-        <div class="mt-3 flex items-center justify-between gap-4">
-          <span class="text-xs text-navy-400 flex-shrink-0">
-            {{ planResourceStats[plan.id]?.total || 0 }} 个资源 · {{ planResourceStats[plan.id]?.completed || 0 }} 已完成
-          </span>
-          <div class="flex items-center gap-2 flex-1 max-w-[200px]">
-            <div class="flex-1 h-1.5 bg-navy-100 rounded-full overflow-hidden">
-              <div class="h-full bg-gradient-to-r from-navy-400 to-sage-500 rounded-full transition-all duration-500" :style="{ width: `${getPlanProgress(plan)}%` }"></div>
-            </div>
-            <span class="text-xs font-medium text-navy-600 w-8 text-right">{{ getPlanProgress(plan) }}%</span>
+        <!-- Progress bar -->
+        <div class="mt-3">
+          <div class="flex items-center justify-between text-xs mb-1">
+            <span class="text-navy-400">学习进度</span>
+            <span class="font-medium text-navy-600">{{ getPlanProgress(plan) }}%</span>
+          </div>
+          <div class="h-1.5 bg-navy-100 rounded-full overflow-hidden">
+            <div class="h-full bg-gradient-to-r from-navy-400 to-sage-500 rounded-full transition-all duration-500" :style="{ width: `${getPlanProgress(plan)}%` }"></div>
           </div>
         </div>
       </div>
@@ -96,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getPlans, createPlan, deletePlan } from '@/api/plan'
 import { getPlanResources, getProgressByPlan } from '@/api/resource'
@@ -105,48 +99,8 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const router = useRouter()
 const plans = ref<LearningPlan[]>([])
-const planProgressMap = ref<Record<number, number>>({})
-const planResourceStats = ref<Record<number, { total: number; completed: number }>>({})
+const planProgressMap = ref<Record<number, number>>({}) // planId -> progress percentage
 const loading = ref(true)
-
-function extractGoal(plan: LearningPlan): string {
-  const lg = plan.learningGoal
-  if (!lg) return ''
-  let obj: any = lg
-  if (typeof lg === 'string') {
-    try { obj = JSON.parse(lg) } catch { return '' }
-  }
-  if (typeof obj === 'string') return obj
-  return obj.initial || obj.raw || obj.final_goal || ''
-}
-
-function relativeTime(dateStr: string): string {
-  if (!dateStr) return ''
-  const d = new Date(dateStr)
-  const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
-  const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1) return '刚刚'
-  if (diffMin < 60) return `${diffMin}分钟前`
-  const diffHour = Math.floor(diffMin / 60)
-  if (diffHour < 24) return `${diffHour}小时前`
-  const diffDay = Math.floor(diffHour / 24)
-  if (diffDay === 1) return '昨天'
-  if (diffDay < 30) return `${diffDay}天前`
-  return `${d.getMonth() + 1}月${d.getDate()}日`
-}
-
-function statusBorderColor(status: number): string {
-  const map: Record<number, string> = {
-    0: 'border-l-navy-300',
-    1: 'border-l-amber-400',
-    2: 'border-l-blue-400',
-    3: 'border-l-blue-500',
-    4: 'border-l-emerald-500',
-  }
-  return map[status] || map[0]
-}
-
 const creating = ref(false)
 const showDeleteConfirm = ref(false)
 const deletingPlanId = ref<number | null>(null)
@@ -167,7 +121,6 @@ async function loadPlans() {
 
 async function loadAllProgress() {
   const map: Record<number, number> = {}
-  const stats: Record<number, { total: number; completed: number }> = {}
   await Promise.all(plans.value.map(async (plan) => {
     try {
       const [resRes, progRes] = await Promise.all([
@@ -177,14 +130,11 @@ async function loadAllProgress() {
       const total = (resRes.data || []).filter((r: any) => r.status >= 2).length
       const completed = (progRes.data || []).filter((p: any) => p.status === 2).length
       map[plan.id] = total > 0 ? Math.round((completed / total) * 100) : 0
-      stats[plan.id] = { total, completed }
     } catch {
       map[plan.id] = 0
-      stats[plan.id] = { total: 0, completed: 0 }
     }
   }))
   planProgressMap.value = map
-  planResourceStats.value = stats
 }
 
 function getPlanProgress(plan: LearningPlan): number {
@@ -248,6 +198,12 @@ function statusText(status: number) {
     0: '待规划', 1: '生成中', 2: '待确认', 3: '学习中', 4: '已完成',
   }
   return map[status] || '未知'
+}
+
+function formatDate(dateStr: string) {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 onMounted(loadPlans)
