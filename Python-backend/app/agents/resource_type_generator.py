@@ -236,6 +236,9 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
     # 构造用户消息
     user_content = f"""学习目标: {learning_goal}
 
+用户具体指令 (最重要，请务必严格遵循此指令的格式、数量、语气等要求):
+{user_message if user_message else "按照该类型的默认规则生成高质量内容"}
+
 对话历史:
 {history_text if history_text else "无历史记录"}
 

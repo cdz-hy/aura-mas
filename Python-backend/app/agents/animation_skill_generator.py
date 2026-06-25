@@ -633,6 +633,7 @@ def _assemble_user_message(
     source_content: str,
     user_profile: dict,
     selected_style: str,
+    user_message: str = "",
 ) -> str:
     """组装 user message"""
     behavior = user_profile.get("learning_behavior", {})
@@ -643,6 +644,9 @@ def _assemble_user_message(
     sg_text = "序列型" if sg < -0.3 else ("全局型" if sg > 0.3 else "均衡型")
 
     return f"""请基于以下内容生成科普动画 HTML。
+
+用户具体指令 (最重要，请务必严格遵循此指令的任何定制化要求):
+{user_message if user_message else "按照该类型的默认规则生成动画"}
 
 ## 口播稿/源内容标题
 {source_title}
@@ -793,6 +797,7 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
         source_content=processed_content,
         user_profile=user_profile,
         selected_style=selected_style,
+        user_message=state.get("user_message", ""),
     )
 
     messages = [

@@ -286,6 +286,21 @@ async def plan_chat(
     logger.info(f"[计划对话] 用户 {user_id}, 计划 {plan_id}, 会话 {session_id}")
     logger.info(f"[计划对话] 消息: {message[:100]}")
 
+    current_module_id_int = int(current_module_id) if current_module_id and current_module_id.isdigit() else 0
+    source_resource_content = ""
+    if current_module_id_int:
+        try:
+            current_resource = await asyncio.to_thread(java_client.get_resource_by_id, current_module_id_int)
+            _, source_resource_content = _extract_source_resource_context(
+                current_resource,
+                fallback_title=current_module_title,
+                fallback_description="",
+                plan_id=plan_id_int,
+            )
+            logger.info(f"[计划对话] 获取到当前模块内容长度: {len(source_resource_content)}")
+        except Exception as e:
+            logger.warning(f"[计划对话] 获取当前模块内容失败: {e}")
+
     # 获取用户画像（同步调用，放到线程池）
     user_profile = {}
     try:
@@ -576,6 +591,7 @@ async def plan_chat(
             "max_iterations": 15,
             "accumulated_context": "",
             "placeholder_resource_map": placeholder_map,
+            "source_resource_content": source_resource_content,
         }
 
         bg_state = {
@@ -899,6 +915,7 @@ async def generate_single_resource(
     title: str = Query("", description="模块标题"),
     description: str = Query("", description="模块描述"),
     session_id: str = Query("", description="会话 ID（前端传入，为空时自动生成）"),
+    user_message: str = Query("", description="用户自定义指令，如果为空则使用默认模板"),
 ):
     """
     单资源生成 - SSE 流式输出
@@ -970,9 +987,25 @@ async def generate_single_resource(
         logger.warning(f"[资源生成] 获取当前资源信息失败: {e}")
 
     # 构造以资源生成为目标的初始状态
-    resource_message = f"请为以下模块生成{type}类型的学习资源: {title}"
-    if description:
-        resource_message += f"\n模块描述: {description}"
+    if user_message:
+        resource_message = f"用户指令: {user_message}\n目标模块: {title}"
+        if description:
+            resource_message += f"\n模块描述: {description}"
+        db_resource_message = user_message
+    else:
+        resource_message = f"请为以下模块生成{type}类型的学习资源: {title}"
+        if description:
+            resource_message += f"\n模块描述: {description}"
+        type_name_map = {
+            "quiz": "测验",
+            "mindmap": "思维导图",
+            "code": "代码示例",
+            "summary": "总结",
+            "video": "教学视频",
+            "animation": "动画",
+            "podcast": "播客"
+        }
+        db_resource_message = f"请为模块「{title}」生成{type_name_map.get(type, type)}资源"
 
     # quiz 和 video 走独立流程，mindmap/summary/code 走类型资源生成，animation 走动画节点，其他走 RAG + 编排
     is_quiz = (type == "quiz")
@@ -995,7 +1028,7 @@ async def generate_single_resource(
         next_node = "rag_retriever"
 
     # 优先使用前端传入的 session_id，保持会话连续性
-    effective_session_id = session_id if session_id else f"resource-{plan_id_int}-{module_id_int}"
+    session_id = session_id if session_id else f"resource-{plan_id_int}-{module_id_int}"
 
     # 创建资源生成任务，用于关联 Token 消耗记录
     generation_task_id = None
@@ -1011,11 +1044,21 @@ async def generate_single_resource(
     except Exception as e:
         logger.warning(f"[资源生成] 创建生成任务失败: {e}")
 
+    # 记录用户消息（单资源生成通过按钮点击触发，也计入对话历史）
+    try:
+        await asyncio.to_thread(
+            java_client.create_dialogue,
+            user_id, session_id, db_resource_message, "USER", plan_id_int,
+            intent_type="generate_resource",
+        )
+    except Exception as e:
+        logger.warning(f"记录用户生成资源消息失败: {e}")
+
     initial_state: AgentState = {
         "user_id": user_id,
         "plan_id": plan_id_int,
         "task_id": generation_task_id,
-        "session_id": effective_session_id,
+        "session_id": session_id,
         "user_message": resource_message,
         "human_feedback": None,
         "chat_history": chat_history,
@@ -1060,7 +1103,6 @@ async def generate_single_resource(
         "placeholder_resource_map": {1: {"id": module_id_int, "type": type, "title": title}},
     }
 
-    session_id = effective_session_id
 
     # SSE 实时回调 + 业务状态追踪（复用与 /chat 一致的 bg_state 模式）
     bg_state = {
@@ -1123,7 +1165,26 @@ async def generate_single_resource(
                 if videos:
                     res_id = _save_video_resource(plan_id_int, videos, current_module_order)
                     if res_id:
-                        yield f'data: {json.dumps({"type": "resource_generated", "resources": [{"id": res_id, "type": "video", "title": f"{title} - 教学视频"}]}, ensure_ascii=False)}\n\n'
+                        res_info = [{"id": res_id, "type": "video", "title": f"{title} - 教学视频"}]
+                        yield f'data: {json.dumps({"type": "resource_generated", "resources": res_info}, ensure_ascii=False)}\n\n'
+                        # 记录AI回复对话
+                        try:
+                            summary = f"为您找到 {len(videos)} 个相关的教学视频。"
+                            dialogue_data = {
+                                "type": "resource_generated",
+                                "summary": summary,
+                                "resources": res_info,
+                            }
+                            result = java_client.create_dialogue(
+                                user_id=user_id, session_id=session_id,
+                                conversation_text=json.dumps(dialogue_data, ensure_ascii=False),
+                                dialogue_type="AI", plan_id=plan_id_int, intent_type="resource_generated",
+                            )
+                            dialogue_id = result.get("data", {}).get("id") if isinstance(result, dict) else None
+                            if dialogue_id:
+                                java_client.update_dialogue_resource_id(dialogue_id, res_id)
+                        except Exception as e:
+                            logger.warning(f"记录视频资源生成AI对话失败: {e}")
                 else:
                     yield f'data: {json.dumps({"type": "progress", "content": "未找到相关教学视频，建议直接在视频平台搜索"}, ensure_ascii=False)}\n\n'
                 yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
@@ -1136,6 +1197,8 @@ async def generate_single_resource(
                 return
 
             # quiz 和其他类型走 LangGraph
+            clear_stop(session_id)
+            update_stream_text(session_id, "", "chat")
             yield f'data: {json.dumps({"type": "progress", "content": "开始生成资源..."}, ensure_ascii=False)}\n\n'
 
             _sentinel = object()
@@ -1152,6 +1215,12 @@ async def generate_single_resource(
             # 提前推送占位记录，通知前端初始化对应的资源流式区域
             _threadsafe_cb(
                 f'data: {json.dumps({"type": "resource_stream_start", "content": json.dumps([{"id": module_id_int, "type": type, "title": title}], ensure_ascii=False)}, ensure_ascii=False)}\n\n'
+            )
+            
+            stream_registry.register_session(
+                session_id,
+                sse_callback=_threadsafe_cb,
+                placeholder_resource_map={},
             )
 
             def _run_graph():
@@ -1213,10 +1282,12 @@ async def generate_single_resource(
                         quiz_questions, quiz_config,
                         generated_content,
                         current_module_order, session_id,
+                        bg_state.get("thinkings", []),
                     )
                     if res_info:
                         bg_state["generated_resource_info"].extend(res_info)
                         _threadsafe_cb(f'data: {json.dumps({"type": "resource_generated", "resources": res_info}, ensure_ascii=False)}\n\n')
+                        # 记录AI回复对话已由 _persist_generated_resources 内部处理
                     _threadsafe_cb(f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n')
 
                     if generation_task_id:
@@ -1233,6 +1304,7 @@ async def generate_single_resource(
                             plan_id_int, user_id, is_quiz, type, title, description,
                             [], None, None, None, None,
                             current_module_order, session_id,
+                            bg_state.get("thinkings", []),
                         )
                     if generation_task_id:
                         try:
@@ -1240,6 +1312,9 @@ async def generate_single_resource(
                         except Exception:
                             pass
                 finally:
+                    stream_registry.unregister_session(session_id)
+                    mark_stream_done(session_id)
+                    clear_stop(session_id)
                     _threadsafe_cb(_sentinel)
 
             threading.Thread(target=_run_graph, daemon=True).start()
@@ -1875,6 +1950,7 @@ def _persist_generated_resources(
     generated_content: dict = None,
     current_module_order: int = 0,
     session_id: str = "",
+    thinkings: list = None,
 ) -> list:
     """将生成的资源持久化到数据库（与 SSE 解耦，确保断开连接时也能保存）"""
     generated_resource_info = []
@@ -1976,14 +2052,25 @@ def _persist_generated_resources(
             "resources": generated_resource_info,
         }
         try:
-            java_client.create_dialogue(
+            conversation_context = None
+            if thinkings:
+                conversation_context = json.dumps({"thinkings": thinkings}, ensure_ascii=False)
+            result = java_client.create_dialogue(
                 user_id=user_id,
                 session_id=session_id,
                 conversation_text=json.dumps(dialogue_data, ensure_ascii=False),
                 dialogue_type="AI",
                 plan_id=plan_id_int,
                 intent_type="resource_generated",
+                conversation_context=conversation_context,
             )
+            dialogue_id = result.get("data", {}).get("id") if isinstance(result, dict) else None
+            if dialogue_id:
+                min_resource_id = min(r["id"] for r in generated_resource_info if r.get("id"))
+                try:
+                    java_client.update_dialogue_resource_id(dialogue_id, min_resource_id)
+                except Exception as e:
+                    logger.warning(f"[资源生成对话] 关联资源ID失败: {e}")
         except Exception as e:
             logger.warning(f"记录资源生成对话失败: {e}")
 
@@ -2440,6 +2527,8 @@ async def stop_generation(
     前端调用后，后台线程会在下一个节点边界检查到停止信号并终止
     """
     request_stop(session_id)
+    # 立即将 stream-state 缓存标记为非流式，防止前端恢复轮询再次检测到 is_streaming=true
+    mark_stream_done(session_id)
     logger.info(f"[停止] 会话 {session_id} 收到停止请求")
 
     # 记录一条对话说明用户主动停止

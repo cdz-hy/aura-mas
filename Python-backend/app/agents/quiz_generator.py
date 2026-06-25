@@ -98,6 +98,9 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
         {"role": "system", "content": QUIZ_GENERATOR_PROMPT},
         {"role": "user", "content": f"""学习目标: {learning_goal}
 
+用户具体指令 (最重要，请务必遵循):
+{user_message if user_message else "按照默认规则出题"}
+
 对话历史（请结合上下文理解用户意图）:
 {history_text if history_text else "无历史记录"}
 
@@ -111,7 +114,35 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
     ]
 
     try:
-        logger.info(f"  [题目生成智能体] 正在调用 LLM 生成题目...")
+        _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+        
+        def _emit_thinking_start(agent: str, prefix: str = ""):
+            if _sse_cb:
+                try:
+                    _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
+
+        def _emit_thinking_chunk(chunk: str):
+            if _sse_cb:
+                try:
+                    _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
+
+        def _emit_thinking(content: str):
+            if _sse_cb:
+                try:
+                    _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "题目生成智能体", "content": content}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
+
+        _emit_thinking_start("题目生成智能体", "思考: ")
+        _emit_thinking_chunk("收到题目生成请求，正在结合用户历史记录和薄弱知识点分析出题策略。")
+        _emit_thinking_chunk("将根据要求构造难度分布合适的练习题目。")
+        _emit_thinking("正在结合薄弱点生成练习题...")
+
+        logger.info(f"  [题目生成智能体] 正在调用 LLM...")
         result = llm.chat_json(messages, max_tokens=4096)
         record_from_mimo(llm, state.get("user_id", 0), "quiz_generation", state.get("task_id"))
         questions = result.get("questions", [])

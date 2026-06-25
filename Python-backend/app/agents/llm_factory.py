@@ -51,6 +51,8 @@ class MIMOClient:
         self.thinking = thinking
         # Token 消耗记录
         self._usage_records = []
+        # 停止回调：流式循环中每个 token 检查，返回 True 时中断
+        self.stop_callback: Optional[callable] = None
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
@@ -254,6 +256,10 @@ class MIMOClient:
         for line in resp.iter_lines():
             if not line:
                 continue
+            # 检查停止信号
+            if self.stop_callback and self.stop_callback():
+                resp.close()
+                return
             line = line.decode("utf-8")
             if line.startswith("data: "):
                 data = line[6:]
@@ -593,6 +599,18 @@ class MIMOClient:
                         result.append('\\"')
                 i += 1
                 continue
+            if in_string:
+                if ch == '\n':
+                    result.append('\\n')
+                    i += 1
+                    continue
+                elif ch == '\r':
+                    i += 1
+                    continue
+                elif ch == '\t':
+                    result.append('\\t')
+                    i += 1
+                    continue
             result.append(ch)
             i += 1
         return ''.join(result)
