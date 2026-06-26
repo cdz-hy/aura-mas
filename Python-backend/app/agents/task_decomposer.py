@@ -270,6 +270,21 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
         modules = result.get("modules", [])
         needs_decomposition = result.get("needs_decomposition", len(modules) > 1)
         analysis = result.get("analysis", "")
+        clarification_needed = result.get("clarification_needed")
+
+        if clarification_needed:
+            logger.warning(f"  [任务分解智能体] 目标不明确/存在歧义，请求追问: {clarification_needed}")
+            return {
+                "agent_anomaly": True,
+                "anomaly_reason": clarification_needed,
+                "current_step": f"任务分解智能体: 目标不明确/存在歧义，返回主控追问",
+                "stream_events": [{
+                    "event_type": "thinking",
+                    "agent": "task_decomposer",
+                    "data": {"message": f"目标存在歧义，需要澄清: {clarification_needed}"},
+                    "step_description": "目标存在歧义，请求澄清"
+                }],
+            }
 
         logger.info(f"  [任务分解智能体] 学习路径生成成功!")
         logger.info(f"    需分解: {'是' if needs_decomposition else '否 (单模块直接生成)'}")

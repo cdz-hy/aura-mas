@@ -13,6 +13,7 @@ from app.agents.schemas import (
     NODE_HUMAN_CONFIRM,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
     INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP,
+    INTENT_CANCEL,
 )
 from app.agents.llm_factory import get_controller_llm
 from app.prompts import CONTROLLER_REACT_PROMPT
@@ -339,6 +340,8 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     has_rag_results = bool(state.get("rag_results"))
     needs_confirm = state.get("needs_human_confirm", False)
     checkpoint_goal = state.get("_checkpoint_learning_goal", "")
+    asked_profile_question = state.get("_asked_profile_question", "")
+    pending_question = state.get("_pending_question", False)
 
     # 上下文增强：告知主控当前状态
     context_info = ""
@@ -350,6 +353,10 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         context_info += "\n[系统状态] 当前已有 RAG 检索结果。"
     if needs_confirm and state.get("human_feedback"):
         context_info += "\n[系统状态] 用户已给出确认/补充反馈。"
+    if asked_profile_question:
+        context_info += f"\n[系统状态] 上一轮简答智能体询问了用户关于「{asked_profile_question}」的画像问题，用户当前输入很可能是回答，应归类为 simple_qa 而非生成资源。"
+    elif pending_question:
+        context_info += "\n[系统状态] 上一轮简答智能体主动向用户提出了澄清或跟进问题，用户当前输入很可能是对该问题的回答，应当维持在简答对话（归类为 simple_qa）除非用户明确要求生成资源。"
 
     if context_info:
         logger.info(f"  [主控智能体] 系统状态: {context_info.strip()}")
@@ -580,6 +587,8 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         "current_step": f"主控智能体: 意图=[{intent}], 目标=[{final_goal[:40]}], {reasoning[:80]}",
         "iteration_count": iteration + 1,
         "stream_events": new_events,
+        "_pending_question": False,          # 消费完毕后清除，防止状态污染
+        "_asked_profile_question": "",       # 消费完毕后清除，防止状态污染
     }
     
     if resource_type:
@@ -588,7 +597,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     if intent == "confirm":
         result["task_breakdown_confirmed"] = True
         result["human_feedback"] = None
-    if intent == "simple_qa" or intent == "clarify":
+    if intent == "simple_qa" or intent == "clarify" or intent == INTENT_CANCEL:
         result["task_breakdown"] = None
         result["task_breakdown_confirmed"] = False
         result["needs_human_confirm"] = False
@@ -664,6 +673,10 @@ def _route_by_intent(intent: str, state: AgentState) -> str:
             logger.info(f"  [主控路由] 跟随 + 需确认 -> RAG检索")
             return NODE_RAG_RETRIEVER
         logger.info(f"  [主控路由] 跟随 -> 简答智能体")
+        return NODE_SIMPLE_ANSWER
+
+    elif intent == INTENT_CANCEL:
+        logger.info(f"  [主控路由] 用户取消 -> 简答智能体")
         return NODE_SIMPLE_ANSWER
 
     else:  # ambiguous

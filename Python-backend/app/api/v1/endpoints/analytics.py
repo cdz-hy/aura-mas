@@ -1,17 +1,22 @@
 """
-学习分析 API - AI学习报告生成
+学习分析 API - AI学习报告生成 + 首页个性化问候
 """
 import json
 import logging
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from app.agents.llm_factory import get_simple_answer_llm
+from app.services.db.java_client import java_client
+from app.services.cache import _get_redis
 from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# 首页问候语缓存 TTL（3分钟）
+GREETING_TTL = 180
 
 
 class LearningReportRequest(BaseModel):
@@ -217,3 +222,116 @@ async def generate_learning_report(request: LearningReportRequest):
             "X-Accel-Buffering": "no",
         }
     )
+
+
+# ==================== 首页个性化问候语 ====================
+
+GREETING_PROMPT = """你是一个温暖的学习助手。根据用户的学习数据，生成一句简短的个性化问候语。
+
+## 用户学习数据
+- 当前时间: {time_of_day}
+- 学习计划数: {total_plans}个（进行中{active_plans}个，已完成{completed_plans}个）
+- 今日学习时长: {today_minutes}分钟
+- 累计学习时长: {total_hours}小时
+- 连续学习天数: {streak}天
+- 待复习闪卡: {due_cards}张
+- 最近学习内容: {recent_topics}
+
+## 要求
+- 20-35字，简洁温暖
+- 根据数据动态生成，不要每次都一样
+- 语气像朋友打招呼，自然亲切
+- 可以适当鼓励或提醒
+- 不要用emoji
+- 直接输出问候语，不要添加引号或额外解释"""
+
+
+@router.get("/greeting")
+async def get_greeting(user_id: int):
+    """获取首页个性化问候语（带3分钟Redis缓存）"""
+    try:
+        # 1. 尝试从缓存获取
+        redis = _get_redis()
+        cache_key = f"aura:greeting:{user_id}"
+        if redis:
+            try:
+                cached = redis.get(cache_key)
+                if cached:
+                    return {"greeting": cached}
+            except Exception as e:
+                logger.warning(f"读取问候语缓存失败: {e}")
+
+        # 2. 缓存未命中，获取用户数据
+        from datetime import datetime
+        hour = datetime.now().hour
+        if hour < 6:
+            time_of_day = "深夜"
+        elif hour < 12:
+            time_of_day = "上午"
+        elif hour < 14:
+            time_of_day = "中午"
+        elif hour < 18:
+            time_of_day = "下午"
+        else:
+            time_of_day = "晚上"
+
+        # 获取用户画像和学习数据
+        profile = {}
+        try:
+            profile = java_client.get_user_profile(user_id)
+        except Exception:
+            pass
+
+        # 从画像中提取学习数据
+        behavior = profile.get("learning_behavior", {})
+        if isinstance(behavior, str):
+            try:
+                behavior = json.loads(behavior)
+            except Exception:
+                behavior = {}
+
+        # 构建学习数据摘要
+        total_plans = len(behavior.get("knowledge_base", [])) + 2  # 估算
+        active_plans = max(1, total_plans // 2)
+        completed_plans = max(0, total_plans - active_plans)
+        today_minutes = 0  # 可从Java后端获取
+        total_hours = behavior.get("study_hours", 0)
+        streak = behavior.get("streak_days", 0)
+        due_cards = behavior.get("due_cards", 0)
+        recent_topics = "、".join(behavior.get("interest_tags", [])[:3]) or "暂无"
+
+        # 3. 调用LLM生成问候语
+        prompt = GREETING_PROMPT.format(
+            time_of_day=time_of_day,
+            total_plans=total_plans,
+            active_plans=active_plans,
+            completed_plans=completed_plans,
+            today_minutes=today_minutes,
+            total_hours=total_hours,
+            streak=streak,
+            due_cards=due_cards,
+            recent_topics=recent_topics,
+        )
+
+        llm = get_simple_answer_llm()
+        greeting = ""
+        for chunk in llm.chat_stream([{"role": "user", "content": prompt}]):
+            if chunk:
+                greeting += chunk
+        record_from_mimo(llm, user_id, "greeting")
+
+        greeting = greeting.strip().strip('"').strip("'")
+
+        # 4. 写入缓存
+        if redis and greeting:
+            try:
+                redis.setex(cache_key, GREETING_TTL, greeting)
+            except Exception as e:
+                logger.warning(f"写入问候语缓存失败: {e}")
+
+        return {"greeting": greeting}
+
+    except Exception as e:
+        logger.error(f"生成问候语失败: {e}")
+        # 降级返回默认问候语
+        return {"greeting": "继续你的学习之旅"}

@@ -2055,6 +2055,17 @@ def _persist_generated_resources(
                     "type": "quiz",
                     "title": (quiz_config or {}).get("title", title),
                 })
+        elif placeholder_id:
+            # 题目生成失败：标记占位为失败状态，避免卡在"生成中"
+            try:
+                java_client.update_resource_content(
+                    placeholder_id,
+                    json.dumps({"title": title, "content": "题目生成失败"}, ensure_ascii=False),
+                    status=3,
+                )
+                logger.warning(f"[资源持久化] 题目生成失败，占位 {placeholder_id} 已标记为失败")
+            except Exception as e:
+                logger.warning(f"[资源持久化] 标记占位失败: {e}")
     else:
         if (orchestrated_content or module_list) and plan_id_int:
             module_data = {}

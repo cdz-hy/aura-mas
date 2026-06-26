@@ -5,7 +5,9 @@
       <h1 class="section-title">
         {{ greeting }}，{{ authStore.user?.nickname || '同学' }}
       </h1>
-      <p class="mt-1 text-navy-400">继续你的学习之旅</p>
+      <p class="mt-1 text-navy-400 h-6">
+        <span class="typewriter" :class="{ 'typewriter-typing': isTyping }">{{ displayedGreeting }}</span>
+      </p>
     </div>
 
     <!-- Stats cards -->
@@ -133,7 +135,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { getPlans, deletePlan } from '@/api/plan'
-import { getDashboardStats } from '@/api/stats'
+import { getDashboardStats, getGreeting } from '@/api/stats'
 import { getPlanResources, getProgressByPlan } from '@/api/resource'
 import type { DashboardStats } from '@/api/stats'
 import type { LearningPlan } from '@/types/plan'
@@ -147,6 +149,9 @@ const planProgressMap = ref<Record<number, number>>({})
 const statsData = ref<DashboardStats | null>(null)
 const showDeleteConfirm = ref(false)
 const deletingPlanId = ref<number | null>(null)
+const dynamicGreeting = ref('继续你的学习之旅')
+const displayedGreeting = ref('继续你的学习之旅')
+const isTyping = ref(false)
 
 const greeting = computed(() => {
   const h = new Date().getHours()
@@ -223,9 +228,46 @@ async function loadDashboard() {
     if (statsRes) statsData.value = statsRes.data
     // 加载每个计划的进度
     await loadAllProgress()
+    // 获取个性化问候语
+    loadGreeting()
   } catch {
     // Use empty state
   }
+}
+
+async function loadGreeting() {
+  try {
+    const userId = authStore.user?.id
+    if (userId) {
+      const greeting = await getGreeting(userId)
+      if (greeting) {
+        dynamicGreeting.value = greeting
+        // 启动打字机动画
+        typewriterEffect(greeting)
+      }
+    }
+  } catch (e) {
+    console.warn('获取个性化问候语失败，使用默认值', e)
+  }
+}
+
+function typewriterEffect(text: string) {
+  displayedGreeting.value = ''
+  isTyping.value = true
+  let i = 0
+  const speed = 60 // 每个字符的间隔时间（毫秒）
+
+  function type() {
+    if (i < text.length) {
+      displayedGreeting.value += text.charAt(i)
+      i++
+      setTimeout(type, speed)
+    } else {
+      isTyping.value = false
+    }
+  }
+
+  type()
 }
 
 async function loadAllProgress() {
@@ -265,3 +307,22 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
+
+<style scoped>
+.typewriter {
+  display: inline;
+}
+
+.typewriter-typing::after {
+  content: '|';
+  animation: blink 0.7s infinite;
+  color: var(--color-navy-400);
+  font-weight: 300;
+  margin-left: 1px;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+</style>
