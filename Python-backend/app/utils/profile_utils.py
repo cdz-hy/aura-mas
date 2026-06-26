@@ -29,6 +29,11 @@ def get_default_learning_behavior() -> Dict[str, Any]:
         # 学习偏好
         "preferred_resource_types": [],    # 偏好的资源类型
         "preferred_quiz_types": [],        # 偏好的题目类型
+        "preferred_quiz_preference": {      # 偏好题目配置
+            "types": [],
+            "count": None,
+            "difficulty": None
+        },
         "goal_orientation": "exam",        # 目标导向: career/exam/interest/skill
         
         # 扩展字段（可选，根据用户行为自动分析）
@@ -75,6 +80,29 @@ def ensure_learning_behavior_fields(learning_behavior: Dict[str, Any]) -> Dict[s
         if list_field in learning_behavior:
             if not isinstance(learning_behavior[list_field], list):
                 learning_behavior[list_field] = []
+
+    # 确保 preferred_quiz_preference 字段结构完整
+    if "preferred_quiz_preference" not in learning_behavior:
+        learning_behavior["preferred_quiz_preference"] = {
+            "types": [],
+            "count": None,
+            "difficulty": None
+        }
+    else:
+        pref = learning_behavior["preferred_quiz_preference"]
+        if not isinstance(pref, dict):
+            learning_behavior["preferred_quiz_preference"] = {
+                "types": [],
+                "count": None,
+                "difficulty": None
+            }
+        else:
+            if "types" not in pref or not isinstance(pref["types"], list):
+                pref["types"] = []
+            if "count" not in pref:
+                pref["count"] = None
+            if "difficulty" not in pref:
+                pref["difficulty"] = None
 
     # === 清理已废弃的冗余字段 ===
     learning_behavior.pop("felder_silverman", None)
@@ -198,6 +226,29 @@ def update_learning_behavior(
                 if value not in existing:
                     existing.append(value)
                 current[key] = existing
+
+        # 字典合并字段，如 preferred_quiz_preference
+        elif key == "preferred_quiz_preference":
+            if isinstance(value, dict):
+                current_pref = current.get("preferred_quiz_preference", {})
+                if not isinstance(current_pref, dict):
+                    current_pref = {}
+                
+                # 合并 types 列表
+                new_types = value.get("types", [])
+                existing_types = current_pref.get("types", [])
+                if not isinstance(existing_types, list):
+                    existing_types = []
+                merged_types = list(existing_types)
+                for t in new_types:
+                    if t not in merged_types:
+                        merged_types.append(t)
+                
+                current["preferred_quiz_preference"] = {
+                    "types": merged_types,
+                    "count": value.get("count") if value.get("count") is not None else current_pref.get("count"),
+                    "difficulty": value.get("difficulty") if value.get("difficulty") is not None else current_pref.get("difficulty")
+                }
 
         # 分类字段：直接替换（如 goal_orientation）
         else:

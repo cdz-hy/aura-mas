@@ -23,6 +23,11 @@ export interface ProfileDimensions {
   goal_orientation?: 'exam' | 'career' | 'interest' | 'research' | 'skill'
   weak_areas?: string[]
   preferred_resource_types?: string[]
+  preferred_quiz_preference?: {
+    types?: string[]
+    count?: number | string | null
+    difficulty?: string | null
+  }
 }
 
 export const PROFILE_DIMENSION_LABELS: Record<string, string> = {
@@ -35,6 +40,7 @@ export const PROFILE_DIMENSION_LABELS: Record<string, string> = {
   goal_orientation: '目标导向',
   weak_areas: '薄弱环节',
   preferred_resource_types: '偏好资源',
+  preferred_quiz_preference: '偏好题目配置',
 }
 
 export const GOAL_ORIENTATION_LABELS: Record<string, string> = {

@@ -70,6 +70,16 @@ def profile_maintainer_node(state: AgentState) -> Dict[str, Any]:
     current_behavior = user_profile.get("learning_behavior", {})
     current_behavior = ensure_learning_behavior_fields(current_behavior)
 
+    detected_quiz_requirements = state.get("_detected_quiz_requirements")
+    quiz_req_text = ""
+    if detected_quiz_requirements:
+        quiz_req_text = f"""
+用户本次出题的专门要求:
+- 题型: {detected_quiz_requirements.get('types', [])}
+- 数量: {detected_quiz_requirements.get('count')}
+- 难度: {detected_quiz_requirements.get('difficulty')}"""
+        logger.info(f"  [画像维护智能体] 接收到出题专门要求上下文")
+
     quiz_text = ""
     if quiz_result:
         quiz_text = f"""
@@ -93,6 +103,8 @@ def profile_maintainer_node(state: AgentState) -> Dict[str, Any]:
 - 感官-直觉: {current_behavior.get('sensing_vs_intuitive', 0.0)}
 - 序列-全局: {current_behavior.get('sequential_vs_global', 0.0)}
 - 偏好资源类型: {current_behavior.get('preferred_resource_types', [])}
+- 偏好题目类型: {current_behavior.get('preferred_quiz_types', [])}
+- 偏好题目配置: {current_behavior.get('preferred_quiz_preference', {})}
 - 目标导向: {current_behavior.get('goal_orientation', 'exam')}
 
 对话历史:
@@ -100,6 +112,7 @@ def profile_maintainer_node(state: AgentState) -> Dict[str, Any]:
 
 当前用户输入: {user_message}
 {quiz_text}
+{quiz_req_text}
 
 请分析是否有需要更新的画像信息，输出 JSON:"""}
     ]
@@ -149,7 +162,8 @@ def profile_maintainer_node(state: AgentState) -> Dict[str, Any]:
                         "analysis": analysis,
                     },
                     "step_description": f"画像更新: {result.get('update_reason', '')}"
-                }]
+                }],
+                "_detected_quiz_requirements": None,  # 清除临时出题要求，防止状态污染
             }
             
             return return_data
@@ -158,6 +172,7 @@ def profile_maintainer_node(state: AgentState) -> Dict[str, Any]:
             return {
                 "profile_update_needed": False,
                 "current_step": f"画像维护智能体: 无需更新",
+                "_detected_quiz_requirements": None,  # 清除临时出题要求，防止状态污染
             }
 
     except Exception as e:
@@ -166,4 +181,5 @@ def profile_maintainer_node(state: AgentState) -> Dict[str, Any]:
         return {
             "profile_update_needed": False,
             "current_step": f"画像维护智能体: 分析异常 - {str(e)}",
+            "_detected_quiz_requirements": None,  # 清除临时出题要求，防止状态污染
         }

@@ -90,7 +90,7 @@ const felderAxes = [
   { key: 'sequential_vs_global', label: '循序-全局', negLabel: '循序型', posLabel: '全局型' },
 ]
 
-const auxiliaryKeys = ['knowledge_base', 'interest_tags', 'goal_orientation', 'weak_areas', 'preferred_resource_types']
+const auxiliaryKeys = ['knowledge_base', 'interest_tags', 'goal_orientation', 'weak_areas', 'preferred_resource_types', 'preferred_quiz_preference']
 
 const auxiliaryDetails = computed(() => {
   const details: Record<string, { label: string; display: string; filled: boolean }> = {}
@@ -102,12 +102,25 @@ const auxiliaryDetails = computed(() => {
 
     if (val !== undefined && val !== null) {
       filled = true
-      if (key === 'goal_orientation') display = GOAL_ORIENTATION_LABELS[val] || val
-      else if (Array.isArray(val)) {
+      if (key === 'goal_orientation') {
+        display = GOAL_ORIENTATION_LABELS[val] || val
+      } else if (key === 'preferred_quiz_preference') {
+        if (typeof val === 'object') {
+          const typesStr = Array.isArray(val.types) && val.types.length > 0 ? val.types.join('、') : '无';
+          const countStr = val.count !== null && val.count !== undefined ? `${val.count}道` : '未设定';
+          const diffStr = val.difficulty || '未设定';
+          display = `题型: ${typesStr} | 数量: ${countStr} | 难度: ${diffStr}`;
+          filled = (Array.isArray(val.types) && val.types.length > 0) || val.count !== null || !!val.difficulty;
+        } else {
+          display = '暂未收集';
+          filled = false;
+        }
+      } else if (Array.isArray(val)) {
         filled = val.length > 0
         display = val.length > 0 ? val.join('、') : '暂未收集'
+      } else {
+        display = String(val)
       }
-      else display = String(val)
     }
     details[key] = { label, display, filled }
   }

@@ -1082,6 +1082,8 @@ async def generate_single_resource(
         "needs_human_confirm": False,
         "profile_update_needed": False,
         "learning_goal": resource_message,
+        "current_module_id": module_id_int,
+        "current_module_title": title,
         "task_breakdown": {
             "modules": [{
                 "module_id": module_id,

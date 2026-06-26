@@ -230,6 +230,10 @@ def route_after_quiz_generator(state: AgentState) -> str:
     if anomaly:
         return anomaly
 
+    if state.get("_detected_quiz_requirements"):
+        logger.info(f"  [路由] 题目生成完成 + 检测到专门要求 -> 进入画像维护")
+        return NODE_PROFILE_MAINTAINER
+
     logger.info(f"  [路由] 题目生成完成 -> END")
     return END
 

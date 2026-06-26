@@ -18,10 +18,16 @@ logger = logging.getLogger("agents.quiz_generator")
 def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
     """题目生成智能体节点"""
     user_message = state.get("user_message", "")
+    current_module_title = state.get("current_module_title", "")
     learning_goal = state.get("learning_goal", user_message)
+
+    # 优先使用当前选择的模块标题作为出题目标
+    quiz_target = current_module_title if current_module_title else learning_goal
+
     rag_chunks = state.get("rag_context_chunks", [])
     user_profile = state.get("user_profile", {})
     orchestrated_content = state.get("orchestrated_content")
+    source_resource_content = state.get("source_resource_content", "")
     chat_history = state.get("chat_history", [])
 
     logger.info(f"{'='*60}")
@@ -57,6 +63,7 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
     behavior = user_profile.get("learning_behavior", {})
     weak_points = behavior.get("weak_areas", [])
     pref_types = behavior.get("preferred_quiz_types", [])
+    pref_quiz_pref = behavior.get("preferred_quiz_preference", {})
 
     if weak_points:
         logger.info(f"  [题目生成智能体] 用户薄弱点: {', '.join(weak_points)}")
@@ -64,7 +71,10 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"  [题目生成智能体] 偏好题型: {', '.join(pref_types)}")
 
     content_summary = ""
-    if orchestrated_content:
+    if source_resource_content:
+        content_summary = source_resource_content
+        logger.info(f"  [题目生成智能体] 使用选择的源资源内容作为出题上下文 ({len(source_resource_content)} 字符)")
+    elif orchestrated_content:
         modules = orchestrated_content.get("modules", [])
         content_summary = "\n".join([
             f"模块{i+1} - {m.get('title', '')}: {m.get('content', '')[:200]}"
@@ -78,7 +88,19 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
         ])
         logger.info(f"  [题目生成智能体] 使用 RAG 检索内容: {len(rag_chunks)} 块")
 
-    pref_text = f"偏好题型: {', '.join(pref_types)}" if pref_types else "无特殊偏好"
+    # 题目偏好上下文构建
+    pref_quiz_text = ""
+    if isinstance(pref_quiz_pref, dict) and pref_quiz_pref:
+        pref_types_list = pref_quiz_pref.get("types") or pref_types
+        pref_count = pref_quiz_pref.get("count")
+        pref_diff = pref_quiz_pref.get("difficulty")
+        pref_quiz_text = f"""已有的偏好题目配置:
+- 偏好题型: {', '.join(pref_types_list) if pref_types_list else '暂无'}
+- 偏好题目数量: {f"{pref_count}道" if pref_count else '暂无'}
+- 偏好难度: {pref_diff if pref_diff else '暂无'}"""
+    else:
+        pref_quiz_text = f"已有的偏好题型: {', '.join(pref_types) if pref_types else '暂无'}"
+
     weak_text = f"薄弱知识点: {', '.join(weak_points)}" if weak_points else "暂无薄弱点记录"
 
     # 构造对话历史上下文
@@ -94,7 +116,8 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
 
     messages = [
         {"role": "system", "content": QUIZ_GENERATOR_PROMPT},
-        {"role": "user", "content": f"""学习目标: {learning_goal}
+        {"role": "user", "content": f"""大纲学习目标: {learning_goal}
+当前选择资源/模块: {current_module_title if current_module_title else '无特定模块（基于大纲出题）'}
 
 用户具体指令 (最重要，请务必遵循):
 {user_message if user_message else "按照默认规则出题"}
@@ -102,10 +125,10 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
 对话历史（请结合上下文理解用户意图）:
 {history_text if history_text else "无历史记录"}
 
-学习内容摘要:
+学习内容摘要 (出题的绝对基础与核心范围):
 {content_summary}
 
-{pref_text}
+{pref_quiz_text}
 {weak_text}
 
 请根据以上信息生成练习题目，输出 JSON:"""}
@@ -141,7 +164,7 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
         placeholder_id = None
         if _create_ph:
             try:
-                ph_map = _create_ph([{"module_type": "quiz", "title": f"测验: {learning_goal}"[:50], "description": "正在结合薄弱点生成测验..."}])
+                ph_map = _create_ph([{"module_type": "quiz", "title": f"测验: {quiz_target}"[:50], "description": "正在结合薄弱点生成测验..."}])
                 if ph_map:
                     placeholder_id = list(ph_map.values())[0].get("id")
                     logger.info(f"  [题目生成智能体] 创建占位成功: {placeholder_id}")
@@ -159,6 +182,15 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
         result = llm.chat_json_stream(messages, max_tokens=4096, on_chunk=on_chunk)
         record_from_mimo(llm, state.get("user_id", 0), "quiz_generation", state.get("task_id"))
         questions = result.get("questions", [])
+        custom_reqs = result.get("user_custom_requirements")
+
+        has_custom = False
+        if isinstance(custom_reqs, dict):
+            has_custom = (
+                bool(custom_reqs.get("types"))
+                or custom_reqs.get("count") is not None
+                or custom_reqs.get("difficulty") is not None
+            )
 
         logger.info(f"  [题目生成智能体] 题目生成完成!")
         logger.info(f"    测验标题: {result.get('quiz_title', '未命名')}")
@@ -172,7 +204,7 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"    难度分布: 简单={dist.get('easy', 0)}, 中等={dist.get('medium', 0)}, 困难={dist.get('hard', 0)}")
         logger.info(f"{'='*60}")
 
-        return {
+        return_data = {
             "quiz_questions": questions,
             "quiz_config": {
                 "title": result.get("quiz_title", ""),
@@ -187,6 +219,11 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
                 "step_description": f"已生成 {len(questions)} 道练习题"
             }],
         }
+        if has_custom:
+            return_data["_detected_quiz_requirements"] = custom_reqs
+            logger.info(f"  [题目生成智能体] 检测到用户专门出题要求，标记转画像更新: {custom_reqs}")
+
+        return return_data
 
     except Exception as e:
         logger.error(f"  [题目生成智能体] 生成失败: {str(e)}")
