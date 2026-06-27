@@ -591,7 +591,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { getPlan, updatePlan } from '@/api/plan'
+import { getPlan, updatePlan, generatePlanIcon } from '@/api/plan'
 import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi, deleteResource as deleteResourceApi, markResourceComplete, unmarkResourceComplete, getProgressByPlan } from '@/api/resource'
 import { parseMarkdown, extractCitations } from '@/utils/markdown'
 import { normalizeAnimationHtml } from '@/utils/animationHtml'
@@ -1203,12 +1203,57 @@ const editTitle = ref('')
 
 function saveTitle() {
   if (!editTitle.value.trim() || !plan.value) return
-  plan.value.title = editTitle.value.trim()
+  const newTitle = editTitle.value.trim()
+  plan.value.title = newTitle
   editingTitle.value = false
-  updatePlan(planId.value, { title: plan.value.title }).catch(e =>
+  updatePlan(planId.value, { title: newTitle }).catch(e =>
     console.error('[PlanDetail] 保存标题失败:', e)
   )
+  // 异步生成计划图标
+  regeneratePlanIcon()
 }
+
+async function regeneratePlanIcon() {
+  if (!plan.value) return
+  try {
+    const resourceTitles = resources.value.map(r => {
+      try {
+        const md = typeof r.moduleData === 'string' ? JSON.parse(r.moduleData) : r.moduleData
+        return md?.title || (r as any).title || ''
+      } catch { return (r as any).title || '' }
+    }).filter(Boolean)
+
+    // Python后端会直接更新Java后端，无需前端再更新
+    const result = await generatePlanIcon(planId.value, plan.value.title, resourceTitles)
+    if (result.svg && plan.value) {
+      // 本地更新planConfig用于立即显示
+      const config = plan.value.planConfig ? (typeof plan.value.planConfig === 'string' ? JSON.parse(plan.value.planConfig) : plan.value.planConfig) : {}
+      config.iconSvg = result.svg
+      config.iconDescription = result.description
+      plan.value.planConfig = config
+
+      // 发送自定义广播事件让其他界面（如列表页）自动同步更新图标
+      window.dispatchEvent(new CustomEvent('plan-icon-updated', {
+        detail: { planId: planId.value, planConfig: config }
+      }))
+    }
+  } catch (e) {
+    console.warn('[PlanDetail] 生成图标失败:', e)
+  }
+}
+
+// 从planConfig中提取图标SVG
+const planIconSvg = computed(() => {
+  if (!plan.value?.planConfig) return null
+  try {
+    const config = typeof plan.value.planConfig === 'string'
+      ? JSON.parse(plan.value.planConfig)
+      : plan.value.planConfig
+    return config?.iconSvg || null
+  } catch {
+    return null
+  }
+})
 
 function statusClass(status: number) {
   return status === 2 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
@@ -1368,9 +1413,12 @@ const modules = computed(() => {
 
 // 基于 progressMap 计算计划进度
 const planProgress = computed(() => {
-  const total = resources.value.filter(r => r.status >= 2).length
-  const completed = Object.values(progressMap.value).filter(s => s === 2).length
-  return total > 0 ? Math.round((completed / total) * 100) : 0
+  const validResourceIds = new Set(resources.value.filter(r => r.status >= 2).map(r => r.id))
+  const total = validResourceIds.size
+  const completed = Object.entries(progressMap.value).filter(
+    ([id, status]) => status === 2 && validResourceIds.has(Number(id))
+  ).length
+  return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
 })
 
 function renderMd(text: string) { return parseMarkdown(text) }

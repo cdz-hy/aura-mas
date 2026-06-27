@@ -35,6 +35,7 @@ INTENT_FOLLOW_UP = "follow_up"
 INTENT_GENERATE_ANIMATION = "generate_animation"
 INTENT_GENERATE_TYPE_RESOURCE = "generate_type_resource"
 INTENT_CLARIFY = "clarify"
+INTENT_CANCEL = "cancel"  # 用户取消/退出生成流程
 def reduce_current_step(left: str, right: str) -> str:
     """合并并行节点的状态步骤描述，避免并发冲突"""
     if not left:

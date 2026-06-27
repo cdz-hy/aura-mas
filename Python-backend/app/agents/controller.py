@@ -13,6 +13,7 @@ from app.agents.schemas import (
     NODE_HUMAN_CONFIRM,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
     INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP,
+    INTENT_CANCEL,
 )
 from app.agents.llm_factory import get_controller_llm
 from app.prompts import CONTROLLER_REACT_PROMPT
@@ -339,9 +340,17 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     has_rag_results = bool(state.get("rag_results"))
     needs_confirm = state.get("needs_human_confirm", False)
     checkpoint_goal = state.get("_checkpoint_learning_goal", "")
+    asked_profile_question = state.get("_asked_profile_question", "")
+    pending_question = state.get("_pending_question", False)
 
     # 上下文增强：告知主控当前状态
     context_info = ""
+    current_module_title = state.get("current_module_title")
+    if current_module_title:
+        context_info += f"\n[当前前端已选择的模块/资源标题] {current_module_title}"
+    source_resource_content = state.get("source_resource_content")
+    if source_resource_content:
+        context_info += f"\n[系统状态] 已提取到当前选择资源的全文正文，长度: {len(source_resource_content)} 字符"
     if checkpoint_goal:
         context_info += f"\n[上一轮 learning_goal] {checkpoint_goal}"
     if has_task_breakdown:
@@ -350,6 +359,10 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         context_info += "\n[系统状态] 当前已有 RAG 检索结果。"
     if needs_confirm and state.get("human_feedback"):
         context_info += "\n[系统状态] 用户已给出确认/补充反馈。"
+    if asked_profile_question:
+        context_info += f"\n[系统状态] 上一轮简答智能体询问了用户关于「{asked_profile_question}」的画像问题，用户当前输入很可能是回答，应归类为 simple_qa 而非生成资源。"
+    elif pending_question:
+        context_info += "\n[系统状态] 上一轮简答智能体主动向用户提出了澄清、追问或跟进问题，用户当前输入很可能是对该问题的回答。如果用户提供了具体的知识点、模块名等补充信息以回应上一轮的澄清追问，你应该根据其补充的主题识别为对应的生成意图（如 generate_quiz / generate_resource / generate_type_resource 等），否则应当维持在简答对话（归类为 simple_qa）。"
 
     if context_info:
         logger.info(f"  [主控智能体] 系统状态: {context_info.strip()}")
@@ -371,6 +384,11 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     managed_learning_goal = None
     resource_type = None
     new_events = []
+
+    # 语言指令触发时，主控通过工具查询到的模块详情（用于更新状态）
+    fetched_module_id = None
+    fetched_module_title = None
+    fetched_module_content = None
 
     for round_num in range(1, MAX_REACT_ROUNDS + 1):
         logger.info(f"  [主控智能体] ReAct - 第 {round_num} 轮")
@@ -425,13 +443,30 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
                     _emit_thinking(f"调用工具: {tool_cn_name}")
 
                     if act_name == "get_resource_content":
-                        rid = act.get("resource_id")
+                        rid = act.get("resource_id") or act.get("resourceId")
                         try:
                             res = java_client.get_resource_by_id(int(rid))
-                            content = (res.get("moduleData") or "")[:2000]
-                            react_history.append(f"工具 get_resource_content(id={rid}) 结果: 标题={res.get('title')}, 内容片段={content}...")
+                            
+                            # 提取正文内容并缓存
+                            md = res.get("moduleData")
+                            if isinstance(md, str) and md:
+                                try:
+                                    md = json.loads(md)
+                                except Exception:
+                                    md = {}
+                            content = ""
+                            if isinstance(md, dict):
+                                content = md.get("content") or md.get("html") or ""
+                            if not content:
+                                content = res.get("title", "")
+                                
+                            fetched_module_id = int(rid)
+                            fetched_module_title = res.get("title") or "未知"
+                            fetched_module_content = content
+
+                            react_history.append(f"工具 get_resource_content(id={rid}) 结果: 标题={fetched_module_title}, 内容片段={content[:2000]}...")
                             # 推送结果概述
-                            _emit_thinking(f"{tool_cn_name}完成: 获取到资源「{res.get('title', '未知')}」，内容长度{len(content)}字")
+                            _emit_thinking(f"{tool_cn_name}完成: 获取到资源「{fetched_module_title}」，内容长度{len(content)}字")
                         except Exception as e:
                             react_history.append(f"工具 get_resource_content 失败: {e}")
                             _emit_thinking(f"{tool_cn_name}失败: {e}")
@@ -516,7 +551,8 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     # 确定下一个节点
     
     # 【空载拦截】：如果用户想生成动画、播客、类型资源或题目，但上下文中没有任何资源，强行拦截转为追问
-    if intent in ["generate_type_resource", "generate_animation", INTENT_GENERATE_QUIZ] and not state.get("source_resource_content"):
+    has_source_content = bool(state.get("source_resource_content") or fetched_module_content)
+    if intent in ["generate_type_resource", "generate_animation", INTENT_GENERATE_QUIZ] and not has_source_content:
         logger.info(f"  [主控智能体] 空载拦截：缺少源文本，将 {intent} 强行转为追问")
         intent = "clarify"
         reasoning = "用户请求生成动画、导图、播客、题目等特定类型资源，但在当前的对话上下文中，由于没有明确挂载之前的资源文本，系统处于'空载'状态。请委婉地询问用户：具体想要基于哪个知识点或刚刚学过的哪个主题来生成？并建议用户先选择一个具体的模块资源。"
@@ -547,8 +583,13 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     resolved_learning_goal = None
     current_goal = state.get("learning_goal", "")
     checkpoint_goal = state.get("_checkpoint_learning_goal", "")
+    current_module_title = fetched_module_title if fetched_module_title else state.get("current_module_title")
 
-    if managed_learning_goal and len(managed_learning_goal) >= 2:
+    if intent in [INTENT_GENERATE_QUIZ, "generate_type_resource", "generate_animation"] and current_module_title:
+        # 针对具体模块的资源/题目生成，核心学习目标应限定为该模块的标题
+        resolved_learning_goal = current_module_title
+        logger.info(f"  [主控智能体] 模块特异性生成，自动重置目标为模块标题: '{current_module_title}'")
+    elif managed_learning_goal and len(managed_learning_goal) >= 2:
         if managed_learning_goal != current_goal:
             resolved_learning_goal = managed_learning_goal
             logger.info(f"  [主控智能体] LLM 智能管理目标: '{current_goal[:40]}' → '{managed_learning_goal[:80]}'")
@@ -580,7 +621,13 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         "current_step": f"主控智能体: 意图=[{intent}], 目标=[{final_goal[:40]}], {reasoning[:80]}",
         "iteration_count": iteration + 1,
         "stream_events": new_events,
+        "_pending_question": False,          # 消费完毕后清除，防止状态污染
+        "_asked_profile_question": "",       # 消费完毕后清除，防止状态污染
     }
+    if fetched_module_id is not None:
+        result["current_module_id"] = fetched_module_id
+        result["current_module_title"] = fetched_module_title
+        result["source_resource_content"] = fetched_module_content
     
     if resource_type:
         result["resource_type"] = resource_type
@@ -588,7 +635,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     if intent == "confirm":
         result["task_breakdown_confirmed"] = True
         result["human_feedback"] = None
-    if intent == "simple_qa" or intent == "clarify":
+    if intent == "simple_qa" or intent == "clarify" or intent == INTENT_CANCEL:
         result["task_breakdown"] = None
         result["task_breakdown_confirmed"] = False
         result["needs_human_confirm"] = False
@@ -596,9 +643,9 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         
     # 自动伪造 task_breakdown 以便下游生成补充资源
     if intent in ["generate_type_resource", "generate_animation"]:
-        current_module_id = state.get("current_module_id")
+        current_module_id = fetched_module_id if fetched_module_id is not None else state.get("current_module_id")
         if current_module_id and not state.get("task_breakdown"):
-            current_title = state.get("current_module_title") or "当前学习模块"
+            current_title = fetched_module_title if fetched_module_title else (state.get("current_module_title") or "当前学习模块")
             logger.info(f"  [主控智能体] 自动伪造 task_breakdown (module_id={current_module_id})")
             result["task_breakdown"] = {
                 "title": current_title,
@@ -664,6 +711,10 @@ def _route_by_intent(intent: str, state: AgentState) -> str:
             logger.info(f"  [主控路由] 跟随 + 需确认 -> RAG检索")
             return NODE_RAG_RETRIEVER
         logger.info(f"  [主控路由] 跟随 -> 简答智能体")
+        return NODE_SIMPLE_ANSWER
+
+    elif intent == INTENT_CANCEL:
+        logger.info(f"  [主控路由] 用户取消 -> 简答智能体")
         return NODE_SIMPLE_ANSWER
 
     else:  # ambiguous

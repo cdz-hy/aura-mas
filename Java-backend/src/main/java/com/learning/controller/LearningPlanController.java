@@ -102,4 +102,15 @@ public class LearningPlanController {
         planService.upsertSessionLearningGoal(planId, sessionId, goal, action, reasoning);
         return Result.success();
     }
+
+    @Operation(summary = "内部接口：更新计划配置")
+    @PutMapping("/internal/{planId}/config")
+    public Result<Void> updatePlanConfigInternal(@PathVariable Long planId,
+                                                  @RequestBody java.util.Map<String, Object> body) {
+        Object planConfig = body.get("planConfig");
+        if (planConfig != null) {
+            planService.updatePlanConfig(planId, planConfig);
+        }
+        return Result.success();
+    }
 }

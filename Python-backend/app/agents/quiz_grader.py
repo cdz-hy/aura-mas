@@ -8,6 +8,7 @@ from app.agents.llm_factory import get_quiz_grader_llm
 from app.prompts import QUIZ_GRADER_PROMPT
 from app.utils.token_recorder import record_from_mimo
 from app.utils import stream_registry
+from app.services.db.java_client import JavaBackendClient as _JC
 import json
 
 logger = logging.getLogger("agents.quiz_grader")
@@ -124,6 +125,17 @@ def quiz_grader_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"    遗漏要点: {', '.join(missed)}")
         logger.info(f"    反馈: {feedback[:150]}")
         logger.info(f"{'='*60}")
+
+        # 批改完成，更新占位资源为已完成
+        if placeholder_id:
+            try:
+                _JC().update_resource_content(
+                    placeholder_id,
+                    json.dumps({"title": "批改解析", "feedback": feedback, "score": score}, ensure_ascii=False),
+                    status=2,
+                )
+            except Exception as e:
+                logger.warning(f"  [题目判定智能体] 更新占位状态失败: {e}")
 
         return {
             "quiz_result": {

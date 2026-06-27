@@ -38,19 +38,41 @@ PROFILE_QUESTIONS = {
         "当面对一个复杂的知识体系时，你更希望先看到完整的知识地图，还是从第一个知识点开始逐步学习？",
         "你是否经常在学到后面的内容时，突然对前面的知识有了更深的理解？",
     ],
-    "knowledge_base": [
-        "在当前学习的领域中，你之前已经学过哪些相关的课程或知识？",
-        "你对这个领域的基础概念了解程度如何？有没有特别熟悉或特别陌生的部分？",
-    ],
-    "preferred_quiz_types": [
-        "你平时做练习题时，更喜欢选择题、填空题还是简答题？",
-        "你觉得自己在哪类题型上表现更好？哪类题型需要加强练习？",
-    ],
-    "preferred_resource_types": [
-        "在学习资源方面，你更偏好视频讲解、图文教程、流程图，还是代码示例？",
-        "你学习时更喜欢看实际案例分析，还是理论知识的系统梳理？",
-    ],
 }
+
+# 目标导向问题
+GOAL_QUESTIONS = [
+    "你目前学习的主要目标是什么？是为了考试、职业发展、兴趣探索，还是提升某项具体技能？",
+    "你希望在学习中达到什么样的效果？是掌握理论基础，还是能实际应用解决问题？",
+    "你学习的动力更多来自外部要求（如考试、工作）还是内在兴趣？",
+]
+
+# 偏好资源类型问题
+RESOURCE_QUESTIONS = [
+    "在学习资源方面，你更偏好视频讲解、图文教程、流程图，还是代码示例？",
+    "你学习时更喜欢看实际案例分析，还是理论知识的系统梳理？",
+    "如果要学一个新概念，你会优先选择看视频、读文章、还是动手做实验？",
+]
+
+
+def _build_knowledge_question(profile: Dict[str, Any]) -> str:
+    """基于用户已有知识生成问题"""
+    behavior = profile.get("learning_behavior", {})
+    knowledge = behavior.get("knowledge_base", [])
+    if knowledge:
+        sample = random.sample(knowledge, min(3, len(knowledge)))
+        return f"你之前学过「{'、'.join(sample)}」这些内容，现在对它们的掌握程度如何？有没有哪些已经忘了或者想重新复习的？"
+    return "你之前有学过哪些相关的课程或知识吗？对当前学习的内容了解程度如何？"
+
+
+def _build_interest_question(profile: Dict[str, Any]) -> str:
+    """基于用户兴趣标签生成问题，询问是否还感兴趣"""
+    behavior = profile.get("learning_behavior", {})
+    tags = behavior.get("interest_tags", [])
+    if tags:
+        sample = random.sample(tags, min(3, len(tags)))
+        return f"你之前的兴趣方向包括「{'、'.join(sample)}」，现在还对这些感兴趣吗？有没有不感兴趣的可以去掉，或者想新增的？"
+    return "你目前对哪些学习方向或话题比较感兴趣？可以告诉我，我会帮你记录偏好。"
 
 
 def simple_answer_node(state: AgentState) -> Dict[str, Any]:
@@ -99,13 +121,15 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
         role = "用户" if msg["role"] == "user" else "助手"
         history_text += f"{role}: {msg['content']}\n"
 
-    # 判断是否应该主动询问画像（低频率触发）
+    # 判断是否应该主动询问画像
     should_ask_profile = _should_ask_profile(chat_history, user_profile)
     profile_hint = ""
+    asked_profile_dim = None  # 记录本次询问的画像维度
 
     if should_ask_profile:
         dim, question = _pick_profile_question(user_profile)
-        profile_hint = f"\n\n[系统建议] 可以考虑询问用户关于 {dim} 维度的学习风格，参考问题: {question}"
+        profile_hint = f"\n\n[系统建议] 可以自然地询问用户关于「{dim}」的问题，参考问题: {question}\n如果是兴趣标签问题，用户说不感兴趣的标签需要记录删除。"
+        asked_profile_dim = dim
         logger.info(f"  [简答智能体] 建议询问画像: 维度={dim}")
 
     messages = [
@@ -160,17 +184,47 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
             "current_step": f"简答智能体: {action}",
         }
 
+        # 如果问了画像问题，添加标记让主控智能体知道
+        if asked_profile_dim:
+            return_data["_asked_profile_question"] = asked_profile_dim
+            logger.info(f"  [简答智能体] 标记询问画像维度: {asked_profile_dim}")
+        else:
+            # 没有问画像问题，清除标记
+            return_data["_asked_profile_question"] = ""
+
+        # 添加通用提问标记：如果 LLM 的 action 是 clarify/ask_profile，或者回复以疑问语气结尾
+        has_question = False
+        if action in ["clarify", "ask_profile"]:
+            has_question = True
+        elif response:
+            clean_resp = response.strip()
+            if clean_resp and clean_resp[-1] in ["?", "？"]:
+                has_question = True
+            elif clean_resp and any(clean_resp.endswith(q) for q in ["吗", "呢", "吗？", "呢？"]):
+                has_question = True
+        
+        return_data["_pending_question"] = has_question
+        if has_question:
+            logger.info(f"  [简答智能体] 检测到主动提问，已设置 _pending_question=True")
+        else:
+            return_data["_pending_question"] = False
+
         # 更新对话历史
         new_history = list(chat_history)
         new_history.append({"role": "user", "content": user_message})
         new_history.append({"role": "assistant", "content": response})
         return_data["chat_history"] = new_history
 
-        # 如果检测到画像信息，标记需要更新
-        if should_update and profile_dimension:
-            # 映射维度名称到标准字段名
-            mapped_dimension = map_dimension_name(profile_dimension)
-            
+        # 如果检测到画像信息，标记需要更新（支持所有画像特征维度）
+        valid_dimensions = [
+            "visual_vs_verbal", "active_vs_reflective", "sensing_vs_intuitive", "sequential_vs_global",
+            "visual_verbal", "active_reflective", "sensing_intuitive", "sequential_global",
+            "knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types", "preferred_quiz_types", "goal_orientation"
+        ]
+        has_profile_info = should_update or (profile_dimension in valid_dimensions)
+
+        if has_profile_info:
+            mapped_dimension = map_dimension_name(profile_dimension) if profile_dimension else "general_profile"
             return_data["profile_update_needed"] = True
             return_data["stream_events"].append({
                 "event_type": "profile_update",
@@ -178,7 +232,7 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
                 "data": {
                     "dimension": mapped_dimension,
                     "answer": user_message,
-                    "analysis": profile_analysis,
+                    "analysis": profile_analysis or "检测到画像相关对话",
                 },
                 "step_description": f"检测到画像信息: {mapped_dimension}"
             })
@@ -304,44 +358,52 @@ def _generate_anomaly_clarification(
 
 
 def _should_ask_profile(chat_history: List[Dict[str, str]], profile: Dict[str, Any]) -> bool:
-    """判断是否应该主动询问画像问题（低频率触发）"""
-    user_turns = sum(1 for m in chat_history if m["role"] == "user")
-    if user_turns < 3:
-        return False
-
-    # 检查最近是否询问过画像问题
-    recent = chat_history[-20:]
-    for msg in recent:
-        content = msg.get("content", "").lower()
-        if any(kw in content for kw in ["学习风格", "偏好", "喜欢", "习惯", "更倾向"]):
-            return False
-
-    # 低频率随机触发
-    return random.random() < 0.3
+    """判断是否应该主动询问画像问题（总概率60%）"""
+    # 总概率60%
+    return random.random() < 0.6
 
 
 def _pick_profile_question(profile: Dict[str, Any]) -> tuple:
-    """选择一个画像维度的问题（尽量不重复）"""
+    """选择一个画像维度的问题（按概率分配）"""
     behavior = profile.get("learning_behavior", {})
 
-    candidates = []
-    dimension_map = {
-        "sensing_vs_intuitive": abs(behavior.get("sensing_vs_intuitive", 0)) < 0.01,
-        "visual_vs_verbal": abs(behavior.get("visual_vs_verbal", 0)) < 0.01,
-        "active_vs_reflective": abs(behavior.get("active_vs_reflective", 0)) < 0.01,
-        "sequential_vs_global": abs(behavior.get("sequential_vs_global", 0)) < 0.01,
-    }
+    # 概率分配：学习风格20%，目标导向10%，偏好资源10%，知识基础10%，兴趣标签10%
+    rand = random.random()
 
-    for dim, is_none in dimension_map.items():
-        if is_none:
-            candidates.append(dim)
+    # 20% 概率询问学习风格维度
+    if rand < 0.20:
+        # 优先询问数据缺失的维度
+        candidates = []
+        dimension_map = {
+            "sensing_vs_intuitive": abs(behavior.get("sensing_vs_intuitive", 0)) < 0.01,
+            "visual_vs_verbal": abs(behavior.get("visual_vs_verbal", 0)) < 0.01,
+            "active_vs_reflective": abs(behavior.get("active_vs_reflective", 0)) < 0.01,
+            "sequential_vs_global": abs(behavior.get("sequential_vs_global", 0)) < 0.01,
+        }
+        for dim, is_none in dimension_map.items():
+            if is_none:
+                candidates.append(dim)
+        if not candidates:
+            candidates = list(dimension_map.keys())
+        chosen = random.choice(candidates)
+        questions = PROFILE_QUESTIONS.get(chosen, ["你觉得自己的学习风格是怎样的？"])
+        return chosen, random.choice(questions)
 
-    if not candidates:
-        candidates = list(dimension_map.keys())
+    # 10% 概率询问目标导向
+    if rand < 0.30:
+        return "goal_orientation", random.choice(GOAL_QUESTIONS)
 
-    for dim in ["knowledge_base", "preferred_quiz_types", "preferred_resource_types"]:
-        candidates.append(dim)
+    # 10% 概率询问偏好资源
+    if rand < 0.40:
+        return "preferred_resource_types", random.choice(RESOURCE_QUESTIONS)
 
-    chosen = random.choice(candidates)
-    questions = PROFILE_QUESTIONS.get(chosen, ["你觉得自己的学习风格是怎样的？"])
-    return chosen, random.choice(questions)
+    # 10% 概率询问知识基础
+    if rand < 0.50:
+        return "knowledge_base", _build_knowledge_question(profile)
+
+    # 10% 概率询问兴趣标签
+    if rand < 0.60:
+        return "interest_tags", _build_interest_question(profile)
+
+    # 兜底（不会触发，因为总概率是60%）
+    return "goal_orientation", random.choice(GOAL_QUESTIONS)
