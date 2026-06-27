@@ -21,7 +21,7 @@ interface SessionStreamState {
   awaitingConfirmation: boolean
   skipNextModulesPush: boolean
   resourceStreamBuffers: Record<number, string>
-  streamingPlaceholders: Array<{ id: number; type: string; title: string }>
+  streamingPlaceholders: Array<{ id: number; type: string; title: string; moduleOrder?: number }>
   isResourceStreaming: boolean
 }
 
@@ -68,7 +68,7 @@ export const useChatStore = defineStore('chat', () => {
   const lastGeneratedResources = ref<GeneratedResourceRef[] | null>(null)
   const streamingResources = ref<Array<{ resource: { id: number; type: string; title: string }; content: string }>>([])
   const resourceStreamBuffers = ref<Record<number, string>>({})
-  const streamingPlaceholders = ref<Array<{ id: number; type: string; title: string }>>([])
+  const streamingPlaceholders = ref<Array<{ id: number; type: string; title: string; moduleOrder?: number }>>([])
   const isResourceStreaming = ref(false)
   const resourceStreamBuffer = computed(() => {
     const buffers = resourceStreamBuffers.value
@@ -579,12 +579,19 @@ export const useChatStore = defineStore('chat', () => {
             isResourceStreaming.value = false
             if (resources.length) {
               const summary = resources.map(r => r.title).join('、')
-              messages.value.push({
-                role: 'assistant',
-                content: `已生成学习资源：${summary}`,
-                type: 'resource_generated',
-                resources,
-              })
+              const _last = messages.value[messages.value.length - 1]
+              if (_last && _last.role === 'assistant' && (!_last.type || _last.type === 'resource_generated')) {
+                _last.content = `已生成学习资源：${summary}`
+                _last.type = 'resource_generated'
+                _last.resources = resources
+              } else {
+                messages.value.push({
+                  role: 'assistant',
+                  content: `已生成学习资源：${summary}`,
+                  type: 'resource_generated',
+                  resources,
+                })
+              }
             }
           },
           onResourceTypeGenerated(resource) {
@@ -734,6 +741,9 @@ export const useChatStore = defineStore('chat', () => {
     const sessionId = activeSessionId.value
     if (!sessionId) return
 
+    // 停止恢复轮询
+    _stopRecover()
+
     // 通知后端停止处理
     if (planId) {
       requestStopGeneration(sessionId, planId)
@@ -765,9 +775,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function requestSupplementaryResource(
-    planId: string,
+    planId: string | number,
     moduleContext: { title: string; description: string; moduleId: number },
     resourceType: string,
+    customMessage?: string
   ) {
     if (streaming.value) return
 
@@ -778,7 +789,7 @@ export const useChatStore = defineStore('chat', () => {
     const capturedSessionId = activeSessionId.value
     persistSessionState()
 
-    messages.value.push({ role: 'user', content: `请为「${moduleContext.title}」生成${typeLabel}` })
+    messages.value.push({ role: 'user', content: customMessage || `请为「${moduleContext.title}」生成${typeLabel}` })
     messages.value.push({ role: 'assistant', content: '', thinkings: [] })
     streaming.value = true
     _syncStreamingSessions()
@@ -797,8 +808,9 @@ export const useChatStore = defineStore('chat', () => {
           module_id: String(moduleContext.moduleId),
           type: resourceType,
           title: moduleContext.title,
-          description: moduleContext.description || '',
-          session_id: capturedSessionId,
+          description: moduleContext.description,
+          session_id: capturedSessionId || '',
+          user_message: customMessage || ''
         },
         {
           onStreamText(content) {
@@ -807,21 +819,21 @@ export const useChatStore = defineStore('chat', () => {
           },
           onThinking(agent, content) {
             const lastMsg = messages.value[messages.value.length - 1]
-            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type) {
+            if (lastMsg && lastMsg.role === 'assistant' && (!lastMsg.type || lastMsg.type === 'resource_generated')) {
               if (!lastMsg.thinkings) lastMsg.thinkings = []
               lastMsg.thinkings.push({ agent, content })
             }
           },
           onThinkingStart(agent, content) {
             const lastMsg = messages.value[messages.value.length - 1]
-            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type) {
+            if (lastMsg && lastMsg.role === 'assistant' && (!lastMsg.type || lastMsg.type === 'resource_generated')) {
               if (!lastMsg.thinkings) lastMsg.thinkings = []
               lastMsg.thinkings.push({ agent, content })
             }
           },
           onThinkingChunk(content) {
             const lastMsg = messages.value[messages.value.length - 1]
-            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type && lastMsg.thinkings?.length) {
+            if (lastMsg && lastMsg.role === 'assistant' && (!lastMsg.type || lastMsg.type === 'resource_generated') && lastMsg.thinkings?.length) {
               lastMsg.thinkings[lastMsg.thinkings.length - 1].content += content
             }
           },
@@ -855,12 +867,20 @@ export const useChatStore = defineStore('chat', () => {
             isResourceStreaming.value = false
             if (resources.length) {
               const summary = resources.map(r => r.title).join('、')
-              messages.value.push({
-                role: 'assistant',
-                content: `已为「${moduleContext.title}」生成${typeLabel}：${summary}`,
-                type: 'resource_generated',
-                resources,
-              })
+              const summaryText = `已为「${moduleContext.title}」生成${typeLabel}：${summary}`
+              const _last = messages.value[messages.value.length - 1]
+              if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                _last.content = summaryText
+                _last.type = 'resource_generated'
+                _last.resources = resources
+              } else {
+                messages.value.push({
+                  role: 'assistant',
+                  content: summaryText,
+                  type: 'resource_generated',
+                  resources,
+                })
+              }
             }
           },
           onResourceTypeGenerated(resource) {

@@ -213,6 +213,11 @@
             <!-- Resource generated card -->
             <div v-else-if="msg.type === 'resource_generated' && msg.resources?.length" class="max-w-[85%]">
               <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3">
+                <ThinkingProcess 
+                  v-if="msg.thinkings && msg.thinkings.length > 0" 
+                  :thinkings="msg.thinkings" 
+                  :isStreaming="chatStore.streaming && i === chatStore.messages.length - 1"
+                />
                 <p class="text-navy-700 mb-3">{{ msg.content }}</p>
                 <div class="flex flex-wrap gap-2">
                   <button
@@ -563,19 +568,18 @@ function handleSendAssistant(text?: string) {
   showModifyInput.value = false
 
   const ctx = chatStore.selectedModuleContext
-  if (ctx) {
-    const resourceType = detectResourceType(msg)
-    if (resourceType) {
-      chatStore.requestSupplementaryResource(props.planId, ctx, resourceType)
-      return
-    }
-  }
   // 确认状态下，底部输入也走 confirmBreakdown 以携带 task_breakdown 上下文
   if (chatStore.awaitingConfirmation && chatStore.pendingTaskBreakdown) {
     chatStore.confirmBreakdown(props.planId, msg)
     return
   }
-  chatStore.sendMessage(msg, props.planId)
+  
+  const extraParams: Record<string, string> = {}
+  if (ctx) {
+    extraParams.current_module_id = String(ctx.moduleId)
+    extraParams.current_module_title = ctx.title
+  }
+  chatStore.sendMessage(msg, props.planId, extraParams)
 }
 
 function handleSendTutor() {
@@ -678,18 +682,6 @@ function badgeClass(type: string) {
   return { text: 'bg-blue-50 text-blue-500', document: 'bg-blue-50 text-blue-500', mindmap: 'bg-purple-50 text-purple-500', quiz: 'bg-amber-50 text-amber-500', code: 'bg-emerald-50 text-emerald-500', reading: 'bg-rose-50 text-rose-500', video: 'bg-red-50 text-red-500', summary: 'bg-sky-50 text-sky-500', image: 'bg-pink-50 text-pink-500', diagram: 'bg-indigo-50 text-indigo-500', animation: 'bg-orange-50 text-orange-500', podcast: 'bg-emerald-50 text-emerald-500' }[type] || 'bg-navy-50 text-navy-500'
 }
 
-function detectResourceType(msg: string): string | null {
-  const lower = msg.toLowerCase()
-  if (/测验|题目|练习|quiz|做题|出题/.test(lower)) return 'quiz'
-  if (/思维导图|导图|mindmap|脑图/.test(lower)) return 'mindmap'
-  if (/代码|code|示例代码|编程/.test(lower)) return 'code'
-  if (/总结|摘要|summary|复习|要点/.test(lower)) return 'summary'
-  if (/视频|video|教程|教学视频/.test(lower)) return 'video'
-  if (/动画|animation|动效/.test(lower)) return 'animation'
-  if (/播客|电台|podcast|博客|文章|blog|网页/.test(lower)) return 'podcast'
-  if (/ppt|幻灯片|演示|presentation|slides/.test(lower)) return 'pptx'
-  return null
-}
 
 // Load tutor sessions when switching to tutor mode
 watch(() => props.mode, (newMode) => {

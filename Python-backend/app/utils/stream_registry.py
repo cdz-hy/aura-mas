@@ -26,6 +26,7 @@ def register_session(
             "sse_callback": sse_callback,
             "create_placeholder_callback": create_placeholder_callback,
             "placeholder_resource_map": placeholder_resource_map or {},
+            "stop_event": threading.Event(),
         }
 
 

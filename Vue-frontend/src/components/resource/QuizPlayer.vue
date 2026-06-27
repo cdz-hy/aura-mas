@@ -81,7 +81,17 @@
         </div>
 
         <!-- 批改结果（每题内联显示） -->
-        <div v-if="submitted && questionResults?.[qi]" class="mt-3 ml-10 space-y-2">
+        <div v-if="grading && gradingTokens?.[qi]" class="mt-3 ml-10 space-y-2">
+          <div class="text-xs mb-1 flex items-center gap-2" :class="parseGradingToken(gradingTokens[qi]).is_correct === true ? 'text-emerald-500' : (parseGradingToken(gradingTokens[qi]).is_correct === false ? 'text-red-500' : 'text-amber-500')">
+            <span class="w-1.5 h-1.5 rounded-full animate-pulse" :class="parseGradingToken(gradingTokens[qi]).is_correct === true ? 'bg-emerald-500' : (parseGradingToken(gradingTokens[qi]).is_correct === false ? 'bg-red-500' : 'bg-amber-500')"></span>
+            智能体正在深度解析中...
+          </div>
+          <div class="p-3 rounded-lg text-sm transition-colors border" :class="parseGradingToken(gradingTokens[qi]).is_correct === true ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : (parseGradingToken(gradingTokens[qi]).is_correct === false ? 'bg-red-50 border-red-200 text-red-800' : 'bg-navy-50 border-navy-100 text-navy-700')">
+            <div class="markdown-body leading-relaxed" v-html="renderMd(parseGradingToken(gradingTokens[qi]).feedback || '正在思考批改意见...')"></div>
+          </div>
+        </div>
+
+        <div v-if="!grading && submitted && questionResults?.[qi]" class="mt-3 ml-10 space-y-2">
           <!-- 批改反馈 -->
           <div class="p-2 rounded-lg text-xs" :class="questionResults[qi].is_correct ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'">
             <p :class="questionResults[qi].is_correct ? 'text-emerald-700' : 'text-red-700'">
@@ -136,6 +146,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { parseMarkdown as renderMd } from '@/utils/markdown'
 import type { QuizData } from '@/types/quiz'
 import { QUESTION_TYPE_LABELS } from '@/types/quiz'
 
@@ -144,6 +155,7 @@ const props = defineProps<{
   initialAnswers?: Record<number, any>
   initialSubmitted?: boolean
   grading?: boolean
+  gradingTokens?: Record<number, string>
   resultScore?: number | null
   questionResults?: Record<number, any> | null
 }>()
@@ -198,7 +210,7 @@ function getCorrectIndices(q: { type: string; correctAnswer: string | string[]; 
 
   if (q.type === 'true_false') {
     const trueVals = [true, 'true', '正确', 'A', 'a', '1']
-    return trueVals.includes(raw) ? [0] : [1] // 0=正确, 1=错误
+    return trueVals.includes(raw as any) ? [0] : [1] // 0=正确, 1=错误
   }
 
   // 数组直接处理
@@ -241,8 +253,8 @@ function applyInitial() {
   }
 }
 
-// 仅在 data 变化时（切换题目资源）应用初始状态，避免与本地 reset 冲突
-watch(() => props.data, () => {
+// 仅在 data 的 ID 变化时（切换题目资源）应用初始状态，避免与本地 reset 冲突及流式更新冲突
+watch(() => props.data?.id, () => {
   if (props.initialSubmitted && props.initialAnswers) {
     applyInitial()
   } else {
@@ -260,6 +272,45 @@ const answeredCount = computed(() => {
 
 function typeLabel(type: string) {
   return QUESTION_TYPE_LABELS[type as keyof typeof QUESTION_TYPE_LABELS] || type
+}
+
+const isOptionCorrectResult = (qIndex: number, optionIndex: number) => {
+  if (!props.questionResults) return false
+  const result = props.questionResults[qIndex]
+  if (!result) return false
+  // For single choice, check if user_answer matches the selected option
+  if (typeof result.user_answer === 'string' && props.data?.questions[qIndex]?.options) {
+    return result.user_answer === props.data.questions[qIndex].options![optionIndex]
+  }
+  return false
+}
+
+const parseGradingToken = (str: string) => {
+  if (!str) return { feedback: '', is_correct: null }
+  let is_correct = null
+  const isCorrectMatch = str.match(/"is_correct"\s*:\s*(true|false)/)
+  if (isCorrectMatch) is_correct = isCorrectMatch[1] === 'true'
+
+  let feedback = ''
+  const fbIdx = str.indexOf('"feedback"')
+  if (fbIdx !== -1) {
+    const colonIdx = str.indexOf(':', fbIdx)
+    if (colonIdx !== -1) {
+      const quoteIdx = str.indexOf('"', colonIdx)
+      if (quoteIdx !== -1) {
+        let endIdx = -1
+        for (let i = quoteIdx + 1; i < str.length; i++) {
+          if (str[i] === '"' && str[i-1] !== '\\') {
+            endIdx = i
+            break
+          }
+        }
+        if (endIdx === -1) endIdx = str.length
+        feedback = str.substring(quoteIdx + 1, endIdx).replace(/\\n/g, '\n').replace(/\\"/g, '"')
+      }
+    }
+  }
+  return { feedback, is_correct }
 }
 
 function selectOption(qi: number, oi: number) {
@@ -346,7 +397,7 @@ function isCorrect(qi: number) {
   }
   if (q.type === 'true_false') {
     const trueVals = [true, 'true', '正确', 'A', 'a', '1']
-    const correctVal = trueVals.includes(q.correctAnswer) ? '正确' : '错误'
+    const correctVal = trueVals.includes(q.correctAnswer as any) ? '正确' : '错误'
     return a === correctVal
   }
   return String(a).trim().toLowerCase() === String(q.correctAnswer).trim().toLowerCase()

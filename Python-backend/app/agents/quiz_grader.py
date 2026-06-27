@@ -50,6 +50,18 @@ def quiz_grader_node(state: AgentState) -> Dict[str, Any]:
 
     _emit_thinking("正在批改你的答案...")
 
+    # 创建占位资源用于流式显示批改解析
+    _create_ph = state.get("create_placeholder_callback")
+    placeholder_id = None
+    if _create_ph:
+        try:
+            ph_map = _create_ph([{"module_type": "quiz", "title": "批改解析", "description": "正在批改并生成解析..."}])
+            if ph_map:
+                placeholder_id = list(ph_map.values())[0].get("id")
+                logger.info(f"  [题目判定智能体] 创建占位成功: {placeholder_id}")
+        except Exception as e:
+            logger.error(f"  [题目判定智能体] 创建占位失败: {e}")
+
     if not quiz_questions:
         logger.warning(f"  [题目判定智能体] 无待批改题目")
         logger.info(f"{'='*60}")
@@ -87,7 +99,17 @@ def quiz_grader_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [题目判定智能体] 正在调用 LLM 进行批改...")
-        result = llm.chat_json(messages)
+
+
+        def on_chunk(chunk: str):
+            if _sse_cb and placeholder_id:
+                try:
+                    _sse_cb(f'data: {json.dumps({"type": "resource_stream_text", "resource_id": placeholder_id, "content": chunk}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
+
+        result = llm.chat_json_stream(messages, max_tokens=2048, on_chunk=on_chunk)
+
         record_from_mimo(llm, state.get("user_id", 0), "quiz_grading", state.get("task_id"))
         score = result.get("score", 0)
         is_correct = result.get("is_correct", False)
