@@ -112,7 +112,7 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [题目生成智能体] 正在调用 LLM 生成题目...")
-        result = llm.chat_json(messages, max_tokens=4096)
+        result = llm.chat_json(messages)
         record_from_mimo(llm, state.get("user_id", 0), "quiz_generation", state.get("task_id"))
         questions = result.get("questions", [])
 

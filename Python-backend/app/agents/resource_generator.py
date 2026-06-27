@@ -178,7 +178,7 @@ def _generate_single_module(
 
             # LLM 思考并决策（使用 chat_json_stream 而非 chat_json，避免 response_format 兼容问题）
             _emit_thinking_start("资源生成智能体", "")
-            react_result = llm.chat_json_stream(messages, on_chunk=_emit_thinking_chunk, stream_field="thought", max_tokens=4096)
+            react_result = llm.chat_json_stream(messages, on_chunk=_emit_thinking_chunk, stream_field="thought")
             logger.debug(f"  [ReAct] LLM 原始返回: {str(react_result)[:300]}")
 
             # 确保 react_result 是字典
@@ -346,7 +346,7 @@ def _generate_single_module(
                 except Exception:
                     pass
 
-        result = llm.chat_json_stream(gen_messages, on_chunk=_on_chunk, max_tokens=8192, stream_field="content")
+        result = llm.chat_json_stream(gen_messages, on_chunk=_on_chunk, stream_field="content")
 
         # 图片处理（如果生成结果没有嵌入图片，附加在结果中）
         content_text = result.get("content", "")

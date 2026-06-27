@@ -263,7 +263,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [类型资源生成] 正在调用 LLM 生成 {resource_type}...")
-        result = llm.chat_json(messages, max_tokens=8192)
+        result = llm.chat_json(messages)
         record_from_mimo(llm, state.get("user_id", 0), "resource_type_generation", state.get("task_id"))
 
         # 标准化输出
@@ -275,7 +275,19 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
         }
 
         # mindmap 类型：content 字段是 nodeData 的 JSON 字符串
-        if resource_type == "mindmap":
+        if resource_type == "pptx":
+            # PPT 走专用生成流程
+            from app.agents.pptx_generator import generate_pptx
+            pptx_result = generate_pptx(
+                module_content=content_summary or source_resource_content or learning_goal,
+                title=module_title,
+                description=module_desc,
+                user_id=state.get("user_id", 0),
+                user_profile=user_profile,
+                sse_callback=_sse_cb,
+            )
+            generated.update(pptx_result)
+        elif resource_type == "mindmap":
             node_data = result.get("nodeData")
             if node_data:
                 import json

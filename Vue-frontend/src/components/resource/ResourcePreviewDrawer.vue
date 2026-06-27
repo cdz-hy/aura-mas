@@ -56,6 +56,60 @@
              <VideoPlayer v-for="(v, i) in (resource.moduleData?.videos || [])" :key="i" :video="v" />
            </div>
         </template>
+        <template v-else-if="resource.moduleType === 'pptx'">
+           <!-- 切换按钮 -->
+           <div v-if="resource.moduleData?.pptx_url && resource.moduleData?.html" class="flex items-center justify-between px-1 py-2">
+             <div class="flex items-center gap-1">
+               <button
+                 class="px-2 py-0.5 text-[11px] rounded-l border transition-colors"
+                 :class="pptxViewMode === 'office' ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-navy-500 border-navy-200 hover:bg-navy-50'"
+                 @click="pptxViewMode = 'office'"
+               >Office</button>
+               <button
+                 class="px-2 py-0.5 text-[11px] rounded-r border border-l-0 transition-colors"
+                 :class="pptxViewMode === 'html' ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-navy-500 border-navy-200 hover:bg-navy-50'"
+                 @click="pptxViewMode = 'html'"
+               >卡片</button>
+             </div>
+             <a
+               v-if="resource.moduleData?.pptx_filename"
+               :href="pptxDownloadUrl(resource.moduleData.pptx_filename)"
+               download
+               class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-xs font-medium"
+               style="background: linear-gradient(135deg, #7c3aed, #6d28d9)"
+             >
+               <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+               下载
+             </a>
+           </div>
+           <!-- Office Online Viewer 预览 -->
+           <div v-if="pptxViewMode === 'office' && resource.moduleData?.pptx_url" class="flex flex-col flex-1 min-h-0">
+             <iframe
+               class="flex-1 w-full border-none rounded"
+               :src="`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(resource.moduleData.pptx_url)}`"
+               title="PPT 预览"
+             ></iframe>
+           </div>
+           <!-- HTML 卡片预览 -->
+           <div v-else-if="resource.moduleData?.html" class="prose prose-sm max-w-none text-navy-700 leading-relaxed markdown-body" v-html="resource.moduleData.html"></div>
+           <!-- 无可用预览 -->
+           <div v-else class="text-center py-8 space-y-4">
+             <div class="text-sm text-navy-500">
+               共 {{ resource.moduleData?.slide_count || 0 }} 页幻灯片
+             </div>
+             <a
+               v-if="resource.moduleData?.pptx_filename"
+               :href="pptxDownloadUrl(resource.moduleData.pptx_filename)"
+               download
+               class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium"
+               style="background: linear-gradient(135deg, #7c3aed, #6d28d9)"
+             >
+               <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+               下载 PPT
+             </a>
+             <p class="text-xs text-navy-400">PPT 预览链接不可用</p>
+           </div>
+        </template>
         <template v-else>
            <div class="prose prose-sm max-w-none text-navy-700 leading-relaxed markdown-body" v-html="renderedMarkdown"></div>
         </template>
@@ -69,6 +123,7 @@ import { ref, watch, computed, nextTick, onMounted } from 'vue'
 import { getResource } from '@/api/resource'
 import { getPlan } from '@/api/plan'
 import { parseMarkdown } from '@/utils/markdown'
+import { PYTHON_AI_BASE } from '@/api/request'
 import type { LearningResource, LearningPlan } from '@/types/plan'
 import type { QuizData } from '@/types/quiz'
 import type { MindElixirData } from 'mind-elixir'
@@ -77,6 +132,10 @@ import type { MindElixirData } from 'mind-elixir'
 import QuizPlayer from './QuizPlayer.vue'
 import MindmapPlayer from './MindmapPlayer.vue'
 import VideoPlayer from './VideoPlayer.vue'
+
+function pptxDownloadUrl(filename: string) {
+  return `${PYTHON_AI_BASE}/api/ai/resource/pptx/download/${filename}`
+}
 
 const props = defineProps<{
   resourceId: number
@@ -90,6 +149,7 @@ const loading = ref(true)
 const resource = ref<LearningResource | null>(null)
 const planData = ref<LearningPlan | null>(null)
 const loadingPlan = ref(false)
+const pptxViewMode = ref<'office' | 'html'>('office')
 
 const typeLabels: Record<string, string> = {
   document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客',
@@ -148,7 +208,7 @@ onMounted(async () => {
     if (resource.value.moduleType !== 'mindmap' && resource.value.moduleType !== 'quiz' && resource.value.moduleType !== 'video') {
        renderMermaid()
     }
-    
+
     // Fetch plan details
     if (resource.value.planId) {
       loadingPlan.value = true
@@ -161,6 +221,10 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+})
+
+watch(() => props.resourceId, () => {
+  pptxViewMode.value = 'office'
 })
 
 function normalizeResourceData(r: LearningResource) {

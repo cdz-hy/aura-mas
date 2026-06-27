@@ -87,7 +87,7 @@ def quiz_grader_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [题目判定智能体] 正在调用 LLM 进行批改...")
-        result = llm.chat_json(messages, max_tokens=2048)
+        result = llm.chat_json(messages)
         record_from_mimo(llm, state.get("user_id", 0), "quiz_grading", state.get("task_id"))
         score = result.get("score", 0)
         is_correct = result.get("is_correct", False)

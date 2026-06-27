@@ -18,13 +18,14 @@ export function formatNoteSSE(
   ticket: string,
   content: string,
   handlers: NoteFormatHandlers,
+  instruction?: string,
 ): { abort: () => void } {
   const controller = new AbortController()
 
   fetch(`${PYTHON_AI_BASE}/api/ai/note/format`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ticket, content }),
+    body: JSON.stringify({ ticket, content, instruction: instruction || '' }),
     signal: controller.signal,
   })
     .then(async (response) => {

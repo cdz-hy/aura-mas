@@ -87,9 +87,8 @@ class MIMOClient:
                 f"已无足够空间生成输出（可用空间 < 512 tokens）"
             )
         
-        # 限制 max_tokens 不超过可用空间，且不超过上下文窗口的 60%（避免过度占用）
-        max_allowed = min(available, int(ctx_limit * 0.6))
-        clamped = min(requested_max, max_allowed)
+        # 限制 max_tokens 不超过可用空间
+        clamped = min(requested_max, available)
         
         if clamped < requested_max:
             import logging
@@ -104,7 +103,9 @@ class MIMOClient:
                        max_tokens: Optional[int] = None,
                        response_format: Optional[Dict[str, str]] = None) -> dict:
         """构造 API 请求体"""
-        requested = max_tokens or self.max_tokens
+        # 如果调用方未指定 max_tokens，默认使用上下文窗口大小（即"无限制"）
+        ctx_limit = self.CONTEXT_WINDOWS.get(self.model, 32768)
+        requested = max_tokens or ctx_limit
         safe_max_tokens = self._clamp_max_tokens(messages, requested)
 
         payload = {
@@ -604,100 +605,100 @@ THINKING_ENABLED = {"type": "enabled"}
 
 def get_controller_llm() -> MIMOClient:
     """主控智能体 - pro 模型，关闭思维链 + 低温度，确保路由快速准确"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=1536,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_task_decomposer_llm() -> MIMOClient:
     """任务分解智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=3072,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_simple_answer_llm() -> MIMOClient:
     """简答智能体 - pro 模型，关闭思维链，快速响应"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=2048,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_note_format_llm() -> MIMOClient:
     """笔记整理智能体 - pro 模型，较大输出空间（含批注标记 + 思维导图）"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=16384,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_rag_retriever_llm() -> MIMOClient:
     """RAG 检索智能体 - pro 模型，关闭思维链，只需生成检索词"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=1536,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_content_orchestrator_llm() -> MIMOClient:
     """内容编排智能体 - 标准模型（mimo-v2.5，131K 上下文）"""
-    return MIMOClient(model=MIMOClient.MODEL_STANDARD, temperature=0.5, max_tokens=16384,
+    return MIMOClient(model=MIMOClient.MODEL_STANDARD, temperature=0.5, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_reviewer_llm() -> MIMOClient:
     """审查智能体 - pro 模型，关闭思维链，只需判断和评分"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=3072,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_resource_generator_llm() -> MIMOClient:
     """多模态资源自主生成智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=6144,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.7, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_quiz_generator_llm() -> MIMOClient:
     """题目生成智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=3072,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_resource_type_generator_llm() -> MIMOClient:
     """多模态类型资源生成智能体 - pro 模型，支持 mindmap/summary/code 等结构化输出"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=8192,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_quiz_grader_llm() -> MIMOClient:
     """题目判定智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=1536,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_profile_maintainer_llm() -> MIMOClient:
     """画像维护智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=2048,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_compressor_llm() -> MIMOClient:
     """会话压缩智能体 - pro 模型，关闭思维链，快速压缩"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=2048,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.2, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_tutor_llm() -> MIMOClient:
     """智能辅导智能体 - pro 模型，中等温度"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=2048,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 def get_video_search_llm() -> MIMOClient:
     """视频搜索智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=8192,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=65536,
                       thinking=THINKING_DISABLED)
 
 
 def get_animation_skill_generator_llm() -> MIMOClient:
     """动画技能生成智能体 - pro-speed 模型（高速），专用端点"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO_SPEED, temperature=0.5, max_tokens=8192,
+    return MIMOClient(model=MIMOClient.MODEL_PRO_SPEED, temperature=0.5, max_tokens=65536,
                       thinking=THINKING_DISABLED, base_url=settings.MIMO_BASE_URL_SPEED,
                       api_key=settings.MIMO_API_KEY_SPEED)
 
 def get_knowledge_updater_llm() -> MIMOClient:
     """图谱更新智能体 - pro 模型"""
-    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=16384,
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.3, max_tokens=65536,
                       thinking=THINKING_DISABLED)

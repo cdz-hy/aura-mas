@@ -5,11 +5,21 @@ import { getSessions, getSessionMessages } from '@/api/chat'
 import { PYTHON_AI_BASE } from '@/api/request'
 import { useAuthStore } from './auth'
 
+export interface SearchSource {
+  title: string
+  url: string
+  snippet?: string
+  score?: number
+}
+
 export interface TutorMessage {
   id?: number
   role: 'user' | 'assistant'
   content: string
   thinkings?: Array<{ agent: string, content: string }>
+  searchSources?: SearchSource[]
+  searchQuery?: string
+  isSearching?: boolean
 }
 
 export interface TutorSession {
@@ -241,6 +251,27 @@ export const useTutorStore = defineStore('tutor', () => {
             const last = messages.value[messages.value.length - 1]
             if (last?.role === 'assistant') {
               last.content += data.content
+            }
+          } else if (data.type === 'search_start') {
+            const last = messages.value[messages.value.length - 1]
+            if (last?.role === 'assistant') {
+              last.isSearching = true
+              last.searchQuery = data.content
+              last.searchSources = []
+            }
+          } else if (data.type === 'search_result') {
+            const last = messages.value[messages.value.length - 1]
+            if (last?.role === 'assistant') {
+              try {
+                const source = JSON.parse(data.content)
+                if (!last.searchSources) last.searchSources = []
+                last.searchSources.push(source)
+              } catch {}
+            }
+          } else if (data.type === 'search_done') {
+            const last = messages.value[messages.value.length - 1]
+            if (last?.role === 'assistant') {
+              last.isSearching = false
             }
           } else if (data.type === 'progress') {
             progress.value = data.content

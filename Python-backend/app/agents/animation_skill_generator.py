@@ -184,7 +184,7 @@ def _summarize_source_content(source_content: str, state: AgentState, on_chunk=N
                 ),
             },
         ]
-        result = llm.chat_json(summary_messages, max_tokens=1024)
+        result = llm.chat_json(summary_messages)
         record_from_mimo(
             llm,
             state.get("user_id", 0),

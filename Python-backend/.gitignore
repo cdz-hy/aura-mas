@@ -155,6 +155,7 @@ cython_debug/
 data/
 uploads/
 temp_images/
+temp/
 fastembed_cache/
 qdrant_storage/
 .model_cache/

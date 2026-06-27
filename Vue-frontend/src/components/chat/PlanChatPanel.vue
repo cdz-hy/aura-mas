@@ -531,10 +531,11 @@ const resourceOptions = [
   { type: 'video', label: '教学视频' },
   { type: 'animation', label: '动画' },
   { type: 'podcast', label: '播客' },
+  { type: 'pptx', label: 'PPT' },
 ]
 
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客',
+  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客', pptx: 'PPT',
 }
 
 const moduleContextMessage = computed(() => chatStore.selectedModuleContext ? { title: chatStore.selectedModuleContext.title } : null)
@@ -686,6 +687,7 @@ function detectResourceType(msg: string): string | null {
   if (/视频|video|教程|教学视频/.test(lower)) return 'video'
   if (/动画|animation|动效/.test(lower)) return 'animation'
   if (/播客|电台|podcast|博客|文章|blog|网页/.test(lower)) return 'podcast'
+  if (/ppt|幻灯片|演示|presentation|slides/.test(lower)) return 'pptx'
   return null
 }
 

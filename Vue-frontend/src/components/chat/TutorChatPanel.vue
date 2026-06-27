@@ -107,10 +107,16 @@
         </div>
         <div class="tutor-bubble" :class="msg.role">
           <template v-if="msg.role === 'assistant'">
-            <ThinkingProcess 
-              v-if="msg.thinkings && msg.thinkings.length > 0" 
-              :thinkings="msg.thinkings" 
+            <ThinkingProcess
+              v-if="msg.thinkings && msg.thinkings.length > 0"
+              :thinkings="msg.thinkings"
               :isStreaming="tutor.loading.value && i === tutor.messages.value.length - 1"
+            />
+            <SearchSources
+              v-if="(msg.searchSources && msg.searchSources.length > 0) || msg.isSearching"
+              :sources="msg.searchSources || []"
+              :isSearching="msg.isSearching"
+              :searchQuery="msg.searchQuery"
             />
             <span v-if="!msg.content && tutor.loading.value && i === tutor.messages.value.length - 1" class="tutor-typing">
               <span></span><span></span><span></span>
@@ -183,6 +189,7 @@ import type { StudentProfile } from '@/types/profile'
 import tutorGif from '@/image/智能辅导.gif'
 import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
 import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
+import SearchSources from '@/components/chat/SearchSources.vue'
 
 const uiStore = useUiStore()
 const route = useRoute()

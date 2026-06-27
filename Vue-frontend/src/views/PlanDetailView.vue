@@ -328,6 +328,60 @@
             </div>
           </template>
 
+          <!-- PPT 类型 -->
+          <template v-else-if="selectedResource.moduleType === 'pptx'">
+            <!-- 切换按钮（两种预览都有时显示） -->
+            <div
+              v-if="selectedResource.moduleData?.pptx_url && selectedResource.moduleData?.html"
+              class="flex items-center justify-end gap-1 mb-2"
+            >
+              <button
+                class="px-2.5 py-1 text-xs rounded-l-md border transition-colors"
+                :class="pptxViewMode === 'office' ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-navy-500 border-navy-200 hover:bg-navy-50'"
+                @click="pptxViewMode = 'office'"
+              >Office 预览</button>
+              <button
+                class="px-2.5 py-1 text-xs rounded-r-md border border-l-0 transition-colors"
+                :class="pptxViewMode === 'html' ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-navy-500 border-navy-200 hover:bg-navy-50'"
+                @click="pptxViewMode = 'html'"
+              >卡片预览</button>
+            </div>
+            <!-- Office Online Viewer 预览 -->
+            <PptxViewer
+              v-if="pptxViewMode === 'office' && selectedResource.moduleData?.pptx_url"
+              :pptx-url="selectedResource.moduleData.pptx_url"
+              :slide-count="selectedResource.moduleData.slide_count"
+              :download-url="selectedResource.moduleData.pptx_filename ? pptxDownloadUrl(selectedResource.moduleData.pptx_filename) : ''"
+            />
+            <!-- HTML 卡片预览 -->
+            <div v-else-if="selectedResource.moduleData?.html" class="pptx-wrapper">
+              <div class="pptx-toolbar">
+                <span class="pptx-slide-count">共 {{ selectedResource.moduleData.slide_count || 0 }} 页</span>
+                <a
+                  v-if="selectedResource.moduleData.pptx_filename"
+                  class="pptx-download-btn"
+                  :href="pptxDownloadUrl(selectedResource.moduleData.pptx_filename)"
+                  download
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                  下载 PPT
+                </a>
+              </div>
+              <div class="pptx-stage">
+                <iframe
+                  class="pptx-frame"
+                  :class="{ 'pointer-events-none': isDragging }"
+                  :srcdoc="selectedResource.moduleData.html"
+                  sandbox="allow-scripts allow-same-origin"
+                  title="PPT 预览"
+                ></iframe>
+              </div>
+            </div>
+            <div v-else class="text-center py-8 text-navy-300 text-sm">
+              <p>PPT 内容待生成</p>
+            </div>
+          </template>
+
           <!-- 其他类型（含图文） -->
           <template v-else>
             <div v-if="selectedResource.moduleData?.content" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderedResourceContent"></div>
@@ -549,6 +603,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import VideoPlayer from '@/components/resource/VideoPlayer.vue'
+import PptxViewer from '@/components/resource/PptxViewer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
 import type { LearningPlan, LearningResource } from '@/types/plan'
 import type { Note } from '@/types/note'
@@ -995,6 +1050,7 @@ const gradingResult = ref<Record<string, any> | null>(null)
 const quizSubmittedAnswers = ref<Record<number, any> | null>(null)
 const showExplanations = ref(false)
 const showCitations = ref(true)
+const pptxViewMode = ref<'office' | 'html'>('office')
 
 // 逐题批改结果（按 index 索引，供 QuizPlayer 使用）
 const questionResults = computed(() => {
@@ -1110,6 +1166,7 @@ watch(selectedResource, (newRes) => {
   if (!newRes) {
     isFullscreen.value = false
   }
+  pptxViewMode.value = 'office'
 })
 
 watch(planId, () => {
@@ -1155,6 +1212,11 @@ function statusText(status: number) {
   return status === 2 ? '已完成' : '进行中'
 }
 
+function pptxDownloadUrl(filename: string) {
+  return `${PYTHON_AI_BASE}/api/ai/resource/pptx/download/${filename}`
+}
+
+
 function badgeClass(type: string) {
   const map: Record<string, string> = {
     document: 'bg-blue-100 text-blue-700',
@@ -1169,6 +1231,7 @@ function badgeClass(type: string) {
     diagram: 'bg-teal-100 text-teal-700',
     animation: 'bg-orange-100 text-orange-700',
     podcast: 'bg-emerald-100 text-emerald-700',
+    pptx: 'bg-violet-100 text-violet-700',
   }
   return map[type] || 'bg-navy-100 text-navy-700'
 }
@@ -1270,7 +1333,7 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
 }
 
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客',
+  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客', pptx: 'PPT',
 }
 
 // ==================== 计算属性 ====================
@@ -2489,6 +2552,70 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
 }
 
 .podcast-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.pptx-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.pptx-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: #f8f7ff;
+  border-bottom: 1px solid #ede9fe;
+  flex-shrink: 0;
+}
+
+.pptx-slide-count {
+  font-size: 13px;
+  color: #7c3aed;
+  font-weight: 600;
+  background: rgba(124, 58, 237, 0.08);
+  padding: 4px 12px;
+  border-radius: 16px;
+}
+
+.pptx-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 18px;
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);
+}
+
+.pptx-download-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(124, 58, 237, 0.35);
+}
+
+.pptx-stage {
+  flex: 1;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  border: none;
+  border-radius: 0;
+}
+
+.pptx-frame {
   width: 100%;
   height: 100%;
   border: 0;
