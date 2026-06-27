@@ -83,7 +83,9 @@
           <div class="flex items-start justify-between">
             <div class="flex items-center gap-4 min-w-0 pr-16">
               <div class="w-12 h-12 rounded-[14px] flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform duration-500 shadow-sm" :class="plan.status === 4 ? 'bg-emerald-50 text-emerald-500' : 'bg-gradient-to-br from-navy-50 to-navy-100 text-navy-600'">
-                <svg v-if="plan.status === 4" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <!-- 优先显示自定义图标 -->
+                <div v-if="getPlanIcon(plan)" class="w-6 h-6" v-html="getPlanIcon(plan)"></div>
+                <svg v-else-if="plan.status === 4" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
                 </svg>
                 <svg v-else class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -150,7 +152,9 @@
             <div class="flex items-center gap-5 min-w-0 flex-1">
               <!-- Icon -->
               <div class="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform duration-500 shadow-sm" :class="plan.status === 4 ? 'bg-emerald-50 text-emerald-500' : 'bg-gradient-to-br from-navy-50 to-navy-100 text-navy-600'">
-                <svg v-if="plan.status === 4" class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <!-- 优先显示自定义图标 -->
+                <div v-if="getPlanIcon(plan)" class="w-7 h-7" v-html="getPlanIcon(plan)"></div>
+                <svg v-else-if="plan.status === 4" class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
                 </svg>
                 <svg v-else class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -250,7 +254,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { getPlans, createPlan, deletePlan, updatePlan } from '@/api/plan'
 import { getPlanResources, getProgressByPlan, markResourceComplete } from '@/api/resource'
@@ -325,6 +329,16 @@ async function loadAllProgress() {
 
 function getPlanProgress(plan: LearningPlan): number {
   return planProgressMap.value[plan.id] ?? 0
+}
+
+function getPlanIcon(plan: LearningPlan): string | null {
+  if (!plan.planConfig) return null
+  try {
+    const config = typeof plan.planConfig === 'string' ? JSON.parse(plan.planConfig) : plan.planConfig
+    return config?.iconSvg || null
+  } catch {
+    return null
+  }
 }
 
 async function createNewPlan() {
@@ -419,7 +433,24 @@ function formatDate(dateStr: string) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-onMounted(loadPlans)
+function handlePlanIconUpdated(e: Event) {
+  const detail = (e as CustomEvent).detail
+  if (detail && detail.planId) {
+    const planItem = plans.value.find(p => p.id === detail.planId)
+    if (planItem) {
+      planItem.planConfig = detail.planConfig
+    }
+  }
+}
+
+onMounted(() => {
+  loadPlans()
+  window.addEventListener('plan-icon-updated', handlePlanIconUpdated)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('plan-icon-updated', handlePlanIconUpdated)
+})
 </script>
 
 <style scoped>

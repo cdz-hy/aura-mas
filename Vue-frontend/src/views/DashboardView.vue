@@ -54,7 +54,7 @@
           <router-link to="/plan/create" class="btn-secondary text-sm">创建第一个计划</router-link>
         </div>
 
-        <div v-else class="grid grid-cols-1 xl:grid-cols-2 gap-4 max-h-[500px] overflow-y-auto p-1 custom-scrollbar">
+        <div v-else class="grid grid-cols-1 xl:grid-cols-2 gap-4 max-h-[560px] overflow-y-auto p-1 custom-scrollbar">
           <div
             v-for="plan in plans"
             :key="plan.id"
@@ -65,7 +65,8 @@
             <div class="flex items-start justify-between">
               <div class="flex items-center gap-3 min-w-0 pr-8">
                 <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-navy-50 to-navy-100 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform">
-                  <svg class="w-5 h-5 text-navy-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <div v-if="getPlanIcon(plan)" class="w-5 h-5 flex items-center justify-center" v-html="getPlanIcon(plan)"></div>
+                  <svg v-else class="w-5 h-5 text-navy-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
                   </svg>
                 </div>
@@ -368,6 +369,16 @@ async function loadAllProgress() {
 
 function getPlanProgress(plan: LearningPlan): number {
   return planProgressMap.value[plan.id] ?? 0
+}
+
+function getPlanIcon(planObj: LearningPlan): string | null {
+  if (!planObj.planConfig) return null
+  try {
+    const config = typeof planObj.planConfig === 'string' ? JSON.parse(planObj.planConfig) : planObj.planConfig
+    return config?.iconSvg || null
+  } catch {
+    return null
+  }
 }
 
 function onVisibilityChange() {

@@ -156,7 +156,15 @@
         <div class="kg-rel-legend">
           <div class="kg-rel-legend-title">关系类型</div>
           <div v-for="(group, key) in relationColorGroups" :key="key" class="kg-rel-legend-item">
-            <span class="kg-rel-legend-dot" :style="{ background: group.color }"></span>
+            <svg width="24" height="10" class="kg-rel-legend-line">
+              <line 
+                x1="0" y1="5" x2="24" y2="5" 
+                :stroke="group.color" 
+                :stroke-width="group.width"
+                :stroke-dasharray="group.lineType === 'solid' ? '' : (group.dashPattern || [4,4]).join(',')"
+                stroke-linecap="round"
+              />
+            </svg>
             <span class="kg-rel-legend-label">{{ group.label }}</span>
           </div>
         </div>
@@ -320,8 +328,17 @@
                   </div>
                   
                   <!-- Relation Badge with Dashed Line -->
-                  <div class="flex-shrink-0 flex items-center justify-center relative px-3 min-w-[72px]">
-                    <div class="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 border-t border-dashed border-navy-300 group-hover:border-navy-400 transition-colors z-0"></div>
+                  <div class="flex-shrink-0 flex items-center justify-center relative px-3 min-w-[80px]">
+                    <svg class="absolute inset-x-0 top-1/2 -translate-y-1/2 w-full h-2 z-0" preserveAspectRatio="none">
+                      <line 
+                        x1="0" y1="4" x2="100%" y2="4" 
+                        :stroke="rel.color" 
+                        stroke-width="1.5"
+                        :stroke-dasharray="rel.lineType === 'solid' ? '' : (rel.dashPattern || [4,4]).join(',')"
+                        stroke-linecap="round"
+                        opacity="0.5"
+                      />
+                    </svg>
                     <span class="text-[10px] px-2 py-0.5 rounded-full border bg-white shadow-[0_2px_4px_rgba(26,40,71,0.04)] font-bold z-10 whitespace-nowrap"
                           :style="{ color: rel.color, borderColor: rel.color + '50' }">
                       {{ rel.label }}
@@ -529,21 +546,104 @@ function getRelationCN(rel: string): string {
   return RELATION_CN[normalized] || RELATION_CN[rel] || rel.replace(/_/g, ' ')
 }
 
-// ─── Relationship color groups ───
-const relationColorGroups = {
-  structure: { label: '层级结构', color: '#4a90d9', rels: ['part_of', 'has_component', 'has_layer', 'has_subsystem', 'has_pillar', 'includes', '包含', '组成', '层级', '子系统', '包括'] },
-  dependency: { label: '依赖使用', color: '#50b86c', rels: ['uses', 'enables', 'supports', 'implemented_by', 'implements', 'provides', '使用', '支撑', '支持', '实现于', '实现', '提供', '依赖于', '需要', '应用于', '运行于', '使用于'] },
-  semantic: { label: '语义关联', color: '#e8914a', rels: ['related_to', 'is_a', 'modeled_by', 'appears_in', '相关', '属于', '建模于', '出现于', '类似于', '关联'] },
-  design: { label: '设计原则', color: '#9b6dd7', rels: ['has_principle', 'has_pattern', 'defines', 'has_project', '原则', '模式', '定义', '项目', '特性', '示例'] },
-  control: { label: '约束管控', color: '#e05c6c', rels: ['monitors', 'contains', 'manages', 'executes_in', '监控', '管理', '执行于', '测试', '处理', '分析', '生成'] },
-  evolution: { label: '演化替代', color: '#d4a944', rels: ['supersedes', 'prerequisite_for', 'designed', 'platform_for', 'has_activity', 'documented_on', 'drives', 'center_of', '取代', '前置', '设计', '平台', '活动', '记录于', '驱动', '核心', '替代方案', '改进', '优化', '扩展/继承'] },
+// ─── Relationship visual config ───
+interface RelationGroupConfig {
+  label: string
+  color: string
+  rels: string[]
+  lineType: 'solid' | 'dashed' | 'dotted'
+  width: number
+  curveness: number
+  opacity: number
+  dashPattern?: number[]
+}
+
+const relationColorGroups: Record<string, RelationGroupConfig> = {
+  structure: {
+    label: '层级结构',
+    color: '#4a90d9',
+    rels: ['part_of', 'has_component', 'has_layer', 'has_subsystem', 'has_pillar', 'includes', '包含', '组成', '层级', '子系统', '包括'],
+    lineType: 'solid',
+    width: 2.5,
+    curveness: 0.15,
+    opacity: 0.6,
+  },
+  dependency: {
+    label: '依赖使用',
+    color: '#50b86c',
+    rels: ['uses', 'enables', 'supports', 'implemented_by', 'implements', 'provides', '使用', '支撑', '支持', '实现于', '实现', '提供', '依赖于', '需要', '应用于', '运行于', '使用于'],
+    lineType: 'dashed',
+    width: 2,
+    curveness: 0.25,
+    opacity: 0.55,
+    dashPattern: [8, 4],
+  },
+  semantic: {
+    label: '语义关联',
+    color: '#e8914a',
+    rels: ['related_to', 'is_a', 'modeled_by', 'appears_in', '相关', '属于', '建模于', '出现于', '类似于', '关联'],
+    lineType: 'dotted',
+    width: 1.8,
+    curveness: 0.35,
+    opacity: 0.5,
+    dashPattern: [3, 3],
+  },
+  design: {
+    label: '设计原则',
+    color: '#9b6dd7',
+    rels: ['has_principle', 'has_pattern', 'defines', 'has_project', '原则', '模式', '定义', '项目', '特性', '示例'],
+    lineType: 'solid',
+    width: 2.2,
+    curveness: 0.2,
+    opacity: 0.55,
+  },
+  control: {
+    label: '约束管控',
+    color: '#e05c6c',
+    rels: ['monitors', 'contains', 'manages', 'executes_in', '监控', '管理', '执行于', '测试', '处理', '分析', '生成'],
+    lineType: 'dashed',
+    width: 2,
+    curveness: 0.3,
+    opacity: 0.5,
+    dashPattern: [6, 3],
+  },
+  evolution: {
+    label: '演化替代',
+    color: '#d4a944',
+    rels: ['supersedes', 'prerequisite_for', 'designed', 'platform_for', 'has_activity', 'documented_on', 'drives', 'center_of', '取代', '前置', '设计', '平台', '活动', '记录于', '驱动', '核心', '替代方案', '改进', '优化', '扩展/继承'],
+    lineType: 'dotted',
+    width: 1.5,
+    curveness: 0.4,
+    opacity: 0.45,
+    dashPattern: [4, 4],
+  },
+}
+
+function getRelationConfig(rel: string): RelationGroupConfig {
+  for (const group of Object.values(relationColorGroups)) {
+    if (group.rels.includes(rel)) return group
+  }
+  // fallback config
+  return {
+    label: '其他',
+    color: '#8899bb',
+    rels: [],
+    lineType: 'solid',
+    width: 1.5,
+    curveness: 0.2,
+    opacity: 0.4,
+  }
 }
 
 function getRelationColor(rel: string): string {
-  for (const group of Object.values(relationColorGroups)) {
-    if (group.rels.includes(rel)) return group.color
+  return getRelationConfig(rel).color
+}
+
+function getGroupKey(rel: string): string {
+  for (const [key, group] of Object.entries(relationColorGroups)) {
+    if (group.rels.includes(rel)) return key
   }
-  return '#8899bb' // fallback grey-blue
+  return 'other'
 }
 
 // ─── State ───
@@ -821,13 +921,19 @@ const selectedNodeRelations = computed(() => {
   return edges
     .filter((e: any) => String(e.source) === nodeId || String(e.target) === nodeId)
     .slice(0, 15) // limit to 15 for drawer readability
-    .map((e: any) => ({
-      id: e.id,
-      fromName: nodesMap[String(e.source)] || e.source,
-      toName: nodesMap[String(e.target)] || e.target,
-      label: getRelationCN(e.relationship || ''),
-      color: getRelationColor(e.relationship || ''),
-    }))
+    .map((e: any) => {
+      const rel = e.relationship || ''
+      const config = getRelationConfig(rel)
+      return {
+        id: e.id,
+        fromName: nodesMap[String(e.source)] || e.source,
+        toName: nodesMap[String(e.target)] || e.target,
+        label: getRelationCN(rel),
+        color: config.color,
+        lineType: config.lineType,
+        dashPattern: config.dashPattern,
+      }
+    })
 })
 
 // ─── Data loading ───
@@ -1111,28 +1217,44 @@ const chartOption = computed(() => {
   })
 
   const edges = rawEdges.map((e: any) => {
-    const relColor = getRelationColor(e.relationship || '')
-    const relCN = getRelationCN(e.relationship || '')
+    const rel = e.relationship || ''
+    const config = getRelationConfig(rel)
+    const relCN = getRelationCN(rel)
+    
+    // Build line style based on relationship type
+    const lineStyle: any = {
+      color: config.color,
+      opacity: config.opacity,
+      curveness: config.curveness,
+      width: config.width,
+    }
+    
+    // Apply dash pattern for dashed/dotted lines
+    if (config.lineType === 'dashed' && config.dashPattern) {
+      lineStyle.type = 'dashed'
+      lineStyle.dashOffset = 0
+    } else if (config.lineType === 'dotted' && config.dashPattern) {
+      lineStyle.type = 'dotted'
+      lineStyle.dashOffset = 0
+    }
+    
     return {
       ...e,
       source: String(e.source),
       target: String(e.target),
-      // Edge labels hidden by default, shown on hover via emphasis
+      relationship: rel,
+      // Show edge label for important relationships, hide for others
       label: {
-        show: false,
+        show: ['structure', 'dependency', 'design'].includes(getGroupKey(rel)),
         formatter: relCN,
-        fontSize: 10,
-        color: relColor,
-        backgroundColor: 'rgba(253,249,240,0.85)',
+        fontSize: 9,
+        color: config.color,
+        backgroundColor: 'rgba(253,249,240,0.9)',
         padding: [2, 6],
         borderRadius: 4,
+        fontWeight: 500,
       },
-      lineStyle: {
-        color: relColor,
-        opacity: 0.4,
-        curveness: 0.2,
-        width: 1.5,
-      },
+      lineStyle,
     }
   })
 
@@ -1164,7 +1286,12 @@ const chartOption = computed(() => {
           const d = params.data
           const relCN = getRelationCN(d.relationship || '')
           const relColor = getRelationColor(d.relationship || '')
-          return `<div style="font-size:13px"><span style="color:${relColor};font-weight:600">${relCN}</span></div>`
+          const groupKey = getGroupKey(d.relationship || '')
+          const groupLabel = relationColorGroups[groupKey]?.label || '其他'
+          return `<div style="font-size:13px">
+            <div style="color:${relColor};font-weight:700;margin-bottom:4px">${relCN}</div>
+            <div style="font-size:11px;color:#6783c1">${groupLabel}</div>
+          </div>`
         }
         return ''
       },
@@ -1185,19 +1312,19 @@ const chartOption = computed(() => {
         layoutAnimation: false,
         emphasis: {
           focus: 'adjacency' as const,
-          lineStyle: { width: 3, opacity: 0.9 },
+          lineStyle: { width: 4, opacity: 0.9 },
           itemStyle: {
             borderWidth: 4,
             borderColor: '#e8b06a',
             shadowBlur: 25,
           },
           label: { fontWeight: 700, fontSize: 14, color: '#1a2847' },
-          edgeLabel: { show: true },
+          edgeLabel: { show: true, fontWeight: 600, fontSize: 11 },
         },
         blur: {
-          itemStyle: { opacity: 0.15 },
-          lineStyle: { opacity: 0.05 },
-          label: { color: 'rgba(44,62,95,0.2)' },
+          itemStyle: { opacity: 0.1 },
+          lineStyle: { opacity: 0.03, width: 0.5 },
+          label: { color: 'rgba(44,62,95,0.15)' },
         },
         force: {
           repulsion: 1200,
@@ -1359,13 +1486,10 @@ onMounted(() => {
 .kg-rel-legend-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 0;
+  gap: 8px;
+  padding: 3px 0;
 }
-.kg-rel-legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
+.kg-rel-legend-line {
   flex-shrink: 0;
 }
 .kg-rel-legend-label {
