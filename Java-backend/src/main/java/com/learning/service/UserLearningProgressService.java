@@ -159,12 +159,29 @@ public class UserLearningProgressService {
     @Transactional
     public void recalculatePlanProgress(Long userId, Long planId) {
         List<UserLearningProgress> all = getByPlan(userId, planId);
-        long completed = all.stream().filter(p -> p.getStatus() != null && p.getStatus() == 2).count();
-        long total = resourceMapper.selectCount(
+        
+        java.util.Set<Long> validResourceIds = new java.util.HashSet<>();
+        List<LearningResource> resources = resourceMapper.selectList(
                 new LambdaQueryWrapper<LearningResource>()
                         .eq(LearningResource::getPlanId, planId)
                         .ge(LearningResource::getStatus, 2));
-        float progress = total > 0 ? (float) completed / total : 0;
+        for (LearningResource r : resources) {
+            validResourceIds.add(r.getId());
+        }
+        
+        long completed = 0;
+        for (UserLearningProgress p : all) {
+            if (p.getStatus() != null && p.getStatus() == 2 && validResourceIds.contains(p.getResourceId())) {
+                completed++;
+            }
+        }
+        
+        long total = validResourceIds.size();
+        float progress = total > 0 ? (float) completed / total : 0.0f;
+        if (progress > 1.0f) {
+            progress = 1.0f;
+        }
+        
         planService.updatePlanProgress(planId, progress);
     }
 }

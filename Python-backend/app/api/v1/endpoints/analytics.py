@@ -290,14 +290,35 @@ async def get_greeting(user_id: int):
             except Exception:
                 behavior = {}
 
-        # 构建学习数据摘要
-        total_plans = len(behavior.get("knowledge_base", [])) + 2  # 估算
-        active_plans = max(1, total_plans // 2)
-        completed_plans = max(0, total_plans - active_plans)
-        today_minutes = 0  # 可从Java后端获取
-        total_hours = behavior.get("study_hours", 0)
-        streak = behavior.get("streak_days", 0)
-        due_cards = behavior.get("due_cards", 0)
+        # 优先从 Java 后端获取实时、真实的学习统计数据
+        try:
+            headers = {"X-User-Id": str(user_id)}
+            # 1) 获取仪表盘统计数据 (包含学习时长、计划完成情况等)
+            dashboard_stats = java_client._request("GET", "/api/stats/dashboard", headers=headers) or {}
+            # 2) 获取学习热力图数据 (包含当前连续学习天数)
+            heatmap_stats = java_client._request("GET", "/api/stats/study-heatmap", headers=headers) or {}
+            # 3) 获取闪卡统计数据 (包含今日待复习数)
+            flashcard_stats = java_client._request("GET", "/api/stats/flashcard-stats", headers=headers) or {}
+
+            total_plans = dashboard_stats.get("totalPlans", 0)
+            active_plans = dashboard_stats.get("activePlans", 0)
+            completed_plans = dashboard_stats.get("completedPlans", 0)
+            today_minutes = dashboard_stats.get("todayDurationSeconds", 0) // 60
+            total_hours = dashboard_stats.get("totalStudyHours", 0)
+            streak = heatmap_stats.get("currentStreak", 0)
+            due_cards = flashcard_stats.get("dueToday", 0)
+            logger.info(f"成功获取用户 {user_id} 实时数据: plans={total_plans}(active={active_plans}), today={today_minutes}m, hours={total_hours}h, streak={streak}d, cards={due_cards}")
+        except Exception as e:
+            logger.warning(f"获取 Java 实时统计失败，采用画像估算兜底: {e}")
+            # 兜底降级估算逻辑
+            total_plans = len(behavior.get("knowledge_base", [])) + 2  # 估算
+            active_plans = max(1, total_plans // 2)
+            completed_plans = max(0, total_plans - active_plans)
+            today_minutes = 0
+            total_hours = behavior.get("study_hours", 0)
+            streak = behavior.get("streak_days", 0)
+            due_cards = behavior.get("due_cards", 0)
+
         recent_topics = "、".join(behavior.get("interest_tags", [])[:3]) or "暂无"
 
         # 3. 调用LLM生成问候语

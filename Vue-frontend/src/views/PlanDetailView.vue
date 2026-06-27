@@ -1305,9 +1305,12 @@ const modules = computed(() => {
 
 // 基于 progressMap 计算计划进度
 const planProgress = computed(() => {
-  const total = resources.value.filter(r => r.status >= 2).length
-  const completed = Object.values(progressMap.value).filter(s => s === 2).length
-  return total > 0 ? Math.round((completed / total) * 100) : 0
+  const validResourceIds = new Set(resources.value.filter(r => r.status >= 2).map(r => r.id))
+  const total = validResourceIds.size
+  const completed = Object.entries(progressMap.value).filter(
+    ([id, status]) => status === 2 && validResourceIds.has(Number(id))
+  ).length
+  return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
 })
 
 function renderMd(text: string) { return parseMarkdown(text) }
