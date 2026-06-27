@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   buildOutlineFromLearningModules,
   buildOutlineFromTreeItems,
+  buildOutlineTreeFromTreeItems,
   countOutlineModules,
   countOutlineResources,
+  countOutlineTreeModules,
   deriveModuleStatus,
   moduleStatusLabel,
+  nestOutlineModules,
+  nestOutlineResources,
 } from './usePlanResourceOutline'
 import type { TreePlanOutlineItem } from '@/components/tree/useTreePlanOutline'
 import type { LearningResource } from '@/types/plan'
@@ -35,8 +39,8 @@ describe('deriveModuleStatus', () => {
 
   it('prioritizes failed over generating', () => {
     expect(deriveModuleStatus([
-      { id: 'r:1', resourceId: 1, title: 'A', resourceType: 'text', status: 2 },
-      { id: 'r:2', resourceId: 2, title: 'B', resourceType: 'text', status: 3 },
+      { id: 'r:1', resourceId: 1, title: 'A', resourceType: 'text', status: 2, childResources: [] },
+      { id: 'r:2', resourceId: 2, title: 'B', resourceType: 'text', status: 3, childResources: [] },
     ])).toBe('failed')
   })
 
@@ -138,5 +142,88 @@ describe('buildOutlineFromTreeItems', () => {
     const outline = buildOutlineFromTreeItems(items, [resource({ id: 9, moduleType: 'quiz', status: 1 })])
     expect(outline[0].kind).toBe('group')
     expect(outline[0].moduleStatus).toBe('generating')
+  })
+
+  it('builds nested tree for collapsible outline rendering', () => {
+    const items: TreePlanOutlineItem[] = [
+      {
+        kind: 'node',
+        id: 'node:parent',
+        nodeId: 'parent',
+        title: '父模块',
+        summary: '',
+        depth: 0,
+        collapsed: false,
+        children: [
+          {
+            kind: 'node',
+            id: 'node:child',
+            nodeId: 'child',
+            title: '子模块',
+            summary: '',
+            depth: 1,
+            collapsed: false,
+            children: [],
+          },
+        ],
+      },
+    ]
+
+    const tree = buildOutlineTreeFromTreeItems(items, [])
+    expect(tree).toHaveLength(1)
+    expect(tree[0].displayIndex).toBe('1')
+    expect(tree[0].childModules).toHaveLength(1)
+    expect(tree[0].childModules[0].displayIndex).toBe('1.1')
+    expect(countOutlineTreeModules(tree)).toBe(2)
+  })
+})
+
+describe('nestOutlineResources', () => {
+  it('nests supplementary resources under parentId', () => {
+    const tree = nestOutlineResources([
+      resource({ id: 10, moduleOrder: 1, moduleType: 'text', moduleData: { title: '正文' }, status: 2 }),
+      resource({ id: 11, parentId: 10, moduleOrder: 1, moduleType: 'quiz', moduleData: { title: '测验题' }, status: 2 }),
+      resource({ id: 12, parentId: 10, moduleOrder: 1, moduleType: 'mindmap', moduleData: { title: '思维导图' }, status: 1 }),
+    ])
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0].resourceId).toBe(10)
+    expect(tree[0].childResources.map(item => item.resourceId)).toEqual([11, 12])
+  })
+})
+
+describe('nestOutlineModules', () => {
+  it('returns empty array when modules are missing', () => {
+    expect(nestOutlineModules([])).toEqual([])
+  })
+
+  it('nests flat modules by displayIndex', () => {
+    const flat = buildOutlineFromTreeItems([
+      {
+        kind: 'node',
+        id: 'node:parent',
+        nodeId: 'parent',
+        title: '父模块',
+        summary: '',
+        depth: 0,
+        collapsed: false,
+        children: [
+          {
+            kind: 'node',
+            id: 'node:child',
+            nodeId: 'child',
+            title: '子模块',
+            summary: '',
+            depth: 1,
+            collapsed: false,
+            children: [],
+          },
+        ],
+      },
+    ], [])
+
+    const tree = nestOutlineModules(flat)
+    expect(tree).toHaveLength(1)
+    expect(tree[0].childModules[0].id).toBe('node:child')
   })
 })

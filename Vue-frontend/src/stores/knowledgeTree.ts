@@ -14,6 +14,9 @@ import {
   streamTreeSubdivide,
   streamTreeBootstrap,
   updateKnowledgeNode,
+  deleteKnowledgeNode,
+  fetchPreviewTopics,
+  streamGrowChildren,
 } from '@/api/knowledgeTree'
 import type {
   KnowledgeNode,
@@ -28,6 +31,8 @@ import type {
 } from '@/types/knowledgeTree'
 
 type StreamStarter = (ticket: string, handlers: TreeSseHandlers) => EventSource
+const MAX_TREE_DEPTH = 3
+const TREE_DEPTH_LIMIT_MESSAGE = '当前节点已达最深层，无法继续拆分'
 
 export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
   const tree = ref<KnowledgeTree | null>(null)
@@ -47,6 +52,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
   const zoom = ref(1)
   const activeSource = shallowRef<EventSource | null>(null)
   const draggingNodeId = ref<string | null>(null)
+  const fpStreamingActive = ref(false)
   let loadToken = 0
   let selectionToken = 0
   let streamToken = 0
@@ -142,6 +148,10 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     const parent = nodes.value.find(item => item.id === newParentId)
     if (!node || !parent || nodeId === newParentId) return false
     if (isDescendantOf(nodeId, newParentId)) return false
+    if (!canMoveWithinDepthLimit(nodeId, newParentId)) {
+      error.value = '移动后会超过树深度上限，请选择更浅的父节点'
+      return false
+    }
 
     const siblingOrders = nodes.value
       .filter(item => item.parentId === newParentId && item.id !== nodeId)
@@ -165,6 +175,50 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     }
   }
 
+  async function deleteNode(nodeId: string): Promise<boolean> {
+    const node = nodes.value.find(item => item.id === nodeId)
+    if (!node) return false
+    // 禁止删除根节点
+    if (!node.parentId) return false
+
+    error.value = ''
+    try {
+      const res = await deleteKnowledgeNode(nodeId)
+      const deletedIds = new Set(res.data?.deletedIds || [nodeId])
+
+      // 收集所有后代 ID（本地兜底，防止后端返回不完整）
+      const allDeleted = new Set(deletedIds)
+      collectLocalDescendants(nodeId, allDeleted)
+
+      // 从 nodes 中移除
+      nodes.value = nodes.value.filter(n => !allDeleted.has(n.id))
+
+      // 重置 currentNodeId
+      if (currentNodeId.value && allDeleted.has(currentNodeId.value)) {
+        currentNodeId.value = node.parentId || null
+      }
+
+      // 清理 messagesByNode
+      for (const id of allDeleted) {
+        delete messagesByNode.value[id]
+      }
+
+      return true
+    } catch (e) {
+      error.value = getErrorMessage(e)
+      return false
+    }
+  }
+
+  function collectLocalDescendants(parentId: string, accumulator: Set<string>) {
+    for (const n of nodes.value) {
+      if (n.parentId === parentId) {
+        accumulator.add(n.id)
+        collectLocalDescendants(n.id, accumulator)
+      }
+    }
+  }
+
   function isDescendantOf(ancestorId: string, candidateId: string) {
     const byId = new Map(nodes.value.map(item => [item.id, item]))
     let cursor: string | null | undefined = candidateId
@@ -175,6 +229,39 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
       cursor = byId.get(cursor)?.parentId ?? null
     }
     return false
+  }
+
+  function isAtMaxDepth(nodeId: string) {
+    const node = nodes.value.find(item => item.id === nodeId)
+    return (node?.depth ?? 0) >= MAX_TREE_DEPTH
+  }
+
+  function canMoveWithinDepthLimit(nodeId: string, newParentId: string) {
+    const parent = nodes.value.find(item => item.id === newParentId)
+    if (!parent) return false
+
+    const nextDepth = (parent.depth ?? 0) + 1
+    if (nextDepth > MAX_TREE_DEPTH) return false
+
+    return nextDepth + getSubtreeHeight(nodeId) <= MAX_TREE_DEPTH
+  }
+
+  function getSubtreeHeight(nodeId: string) {
+    const childrenByParent = new Map<string, KnowledgeNode[]>()
+    for (const node of nodes.value) {
+      if (!node.parentId) continue
+      const children = childrenByParent.get(node.parentId) || []
+      children.push(node)
+      childrenByParent.set(node.parentId, children)
+    }
+
+    function walk(parentId: string): number {
+      const children = childrenByParent.get(parentId) || []
+      if (children.length === 0) return 0
+      return 1 + Math.max(...children.map(child => walk(child.id)))
+    }
+
+    return walk(nodeId)
   }
 
   async function sendMessage(message: string) {
@@ -194,6 +281,10 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
 
   async function subdivideCurrent(angle: string) {
     if (!tree.value || !currentNodeId.value) return
+    if (isAtMaxDepth(currentNodeId.value)) {
+      error.value = TREE_DEPTH_LIMIT_MESSAGE
+      return
+    }
     const treeId = tree.value.id
     const nodeId = currentNodeId.value
 
@@ -209,6 +300,14 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
 
   async function loadSubdivisionOptionsCurrent(): Promise<TreeSubdivisionOption[]> {
     if (!tree.value || !currentNodeId.value) return []
+    if (isAtMaxDepth(currentNodeId.value)) {
+      subdivisionOptionsError.value = TREE_DEPTH_LIMIT_MESSAGE
+      subdivisionCaution.value = {
+        label: '已达三层上限',
+        rationale: '请选择一、二层节点进行拆分',
+      }
+      return []
+    }
     const token = nextSubdivisionOptionsToken()
     const treeId = tree.value.id
     const nodeId = currentNodeId.value
@@ -237,6 +336,10 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
 
   async function multiAngleSubdivideCurrent(angles: TreeSubdivisionOption[]) {
     if (!tree.value || !currentNodeId.value || angles.length === 0) return
+    if (isAtMaxDepth(currentNodeId.value)) {
+      error.value = TREE_DEPTH_LIMIT_MESSAGE
+      return
+    }
     const treeId = tree.value.id
     const nodeId = currentNodeId.value
 
@@ -252,8 +355,13 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
 
   async function firstPrinciplesCurrent() {
     if (!tree.value || !currentNodeId.value) return
+    if (isAtMaxDepth(currentNodeId.value)) {
+      error.value = TREE_DEPTH_LIMIT_MESSAGE
+      return
+    }
     const treeId = tree.value.id
     const nodeId = currentNodeId.value
+    fpStreamingActive.value = true
 
     await startStream(nodeId, (ticket, handlers) => streamTreeFirstPrinciples(
       ticket,
@@ -261,6 +369,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
       nodeId,
       splitMode.value,
       handlers,
+      6,
     ))
   }
 
@@ -301,6 +410,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
       activeSource.value = null
     }
     loading.value = false
+    fpStreamingActive.value = false
     streamingNodeId.value = null
     streamingText.value = ''
     subdivisionOptionsLoading.value = false
@@ -400,10 +510,40 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
           if (!isActiveStream(token, source)) return
           appendFlashcardsMessage(nodeId, cards)
         },
+        onBranchDone: data => {
+          if (!isActiveStream(token, source)) return
+          if (data.children?.length) mergeNodes(data.children)
+          streamingText.value = `「${data.parent_title}」子知识点生成完成`
+        },
+        onFpLayer: data => {
+          if (!isActiveStream(token, source)) return
+          if (data.parent) mergeNodes([data.parent])
+          if (data.children?.length) mergeNodes(data.children)
+          streamingText.value = data.reached_bottom
+            ? `「${data.parent_title}」已触底`
+            : `拆解「${data.parent_title}」完成，${data.children?.length || 0} 个前置依赖`
+        },
+        onAllDone: () => {
+          if (!isActiveStream(token, source)) return
+          activeSource.value = null
+          loading.value = false
+          fpStreamingActive.value = false
+          streamingNodeId.value = null
+          streamingText.value = ''
+        },
+        onCancelled: reason => {
+          if (!isActiveStream(token, source)) return
+          activeSource.value = null
+          loading.value = false
+          fpStreamingActive.value = false
+          streamingNodeId.value = null
+          streamingText.value = '已停止'
+        },
         onDone: () => {
           if (!isActiveStream(token, source)) return
           activeSource.value = null
           loading.value = false
+          fpStreamingActive.value = false
           streamingNodeId.value = null
           streamingText.value = ''
         },
@@ -412,6 +552,7 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
           error.value = message
           activeSource.value = null
           loading.value = false
+          fpStreamingActive.value = false
           streamingNodeId.value = null
           streamingText.value = ''
         },
@@ -606,6 +747,112 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     draggingNodeId.value = nodeId
   }
 
+  // ── 预览-确认流程 ──────────────────────────────────────────────
+  const previewTopics = ref<Array<{ title: string; summary: string; custom: boolean }>>([])
+  const previewLoading = ref(false)
+  const previewError = ref('')
+  const growProgress = ref({ growing: false, currentBranch: '', doneCount: 0, totalCount: 0 })
+
+  async function startPreview() {
+    if (!tree.value) return
+    previewLoading.value = true
+    previewError.value = ''
+    previewTopics.value = []
+    try {
+      const ticketRes = await issueTicket()
+      const res = await fetchPreviewTopics(
+        ticketRes.data.ticket,
+        tree.value.planId,
+        tree.value.id,
+        splitMode.value,
+      )
+      previewTopics.value = res.data.topics || []
+    } catch (e) {
+      previewError.value = getErrorMessage(e)
+    } finally {
+      previewLoading.value = false
+    }
+  }
+
+  async function confirmPreviewGrow(topics: Array<{ title: string; summary: string }>) {
+    if (!tree.value) return
+    stopStream()
+    const token = ++streamToken
+    loading.value = true
+    streamingText.value = '正在生成子知识点…'
+    growProgress.value = { growing: true, currentBranch: '', doneCount: 0, totalCount: topics.length }
+    try {
+      const ticketRes = await issueTicket()
+      if (!isCurrentToken(token)) return
+      const source = streamGrowChildren(
+        ticketRes.data.ticket,
+        tree.value.planId,
+        tree.value.id,
+        splitMode.value,
+        {
+          onThinking: content => {
+            if (!isActiveStream(token, source)) return
+            streamingText.value = content
+          },
+          onBranchDone: data => {
+            if (!isActiveStream(token, source)) return
+            if (data.children?.length) mergeNodes(data.children)
+            growProgress.value = {
+              ...growProgress.value,
+              currentBranch: data.parent_title,
+              doneCount: growProgress.value.doneCount + 1,
+            }
+            streamingText.value = `「${data.parent_title}」完成`
+          },
+          onNodes: nextNodes => {
+            if (!isActiveStream(token, source)) return
+            mergeNodes(nextNodes)
+          },
+          onAllDone: () => {
+            if (!isActiveStream(token, source)) return
+            activeSource.value = null
+            loading.value = false
+            streamingText.value = ''
+            growProgress.value = { growing: false, currentBranch: '', doneCount: 0, totalCount: 0 }
+            previewTopics.value = []
+          },
+          onDone: () => {
+            if (!isActiveStream(token, source)) return
+            activeSource.value = null
+            loading.value = false
+            streamingText.value = ''
+            growProgress.value = { growing: false, currentBranch: '', doneCount: 0, totalCount: 0 }
+            previewTopics.value = []
+          },
+          onError: message => {
+            if (!isActiveStream(token, source)) return
+            error.value = message
+            activeSource.value = null
+            loading.value = false
+            streamingText.value = ''
+            growProgress.value = { growing: false, currentBranch: '', doneCount: 0, totalCount: 0 }
+          },
+        },
+        topics,
+      )
+      if (!isCurrentToken(token)) {
+        source.close()
+        return
+      }
+      activeSource.value = source
+    } catch (e) {
+      if (!isCurrentToken(token)) return
+      error.value = getErrorMessage(e)
+      loading.value = false
+      growProgress.value = { growing: false, currentBranch: '', doneCount: 0, totalCount: 0 }
+    }
+  }
+
+  function skipPreviewAndGrow() {
+    // 跳过预览，直接用原始 L1 节点标题走 grow-children
+    confirmPreviewGrow([])
+  }
+
   return {
     tree,
     nodes,
@@ -624,12 +871,14 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     zoom,
     activeSource,
     draggingNodeId,
+    fpStreamingActive,
     setDraggingNodeId,
     setSplitMode,
     loadByPlan,
     selectNode,
     toggleCollapsed,
     reparentNode,
+    deleteNode,
     sendMessage,
     subdivideCurrent,
     loadSubdivisionOptionsCurrent,
@@ -638,6 +887,15 @@ export const useKnowledgeTreeStore = defineStore('knowledgeTree', () => {
     generateQuizCurrent,
     generateFlashcardsCurrent,
     stopStream,
+    previewTopics,
+    previewLoading,
+    previewError,
+    growProgress,
+    startPreview,
+    confirmPreviewGrow,
+    skipPreviewAndGrow,
+    needsBootstrap,
+    isAtMaxDepth,
   }
 })
 

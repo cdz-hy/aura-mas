@@ -14,6 +14,7 @@ import json
 import logging
 import asyncio
 import threading
+import time
 from datetime import datetime
 from typing import AsyncGenerator
 from fastapi import APIRouter, Query
@@ -974,6 +975,7 @@ async def generate_single_resource(
         "profile_update_needed": False,
         "learning_goal": resource_message,
         "task_breakdown": {
+            "title": title,
             "modules": [{
                 "module_id": module_id,
                 "title": title,
@@ -1872,8 +1874,12 @@ def _persist_generated_resources(
                     module_data["references"] = orchestrated_content["references"]
             if module_list:
                 module_data["content"] = module_list[0].get("content", "") if module_list else ""
-                if not module_data.get("title"):
-                    module_data["title"] = module_list[0].get("title", title)
+                # 优先使用单个模块自身的标题，而非 orchestrated_content 的全局标题
+                module_own_title = module_list[0].get("title")
+                if module_own_title:
+                    module_data["title"] = module_own_title
+                elif not module_data.get("title"):
+                    module_data["title"] = title
                 # 传递图片数据
                 images = module_list[0].get("images", [])
                 if images:
@@ -2022,17 +2028,24 @@ def _try_sync_knowledge_tree(plan_id: int, user_id: int, breakdown, learning_bac
     """任务分解确认后，将模块结构同步到知识树。"""
     if not plan_id or not user_id or not breakdown or not isinstance(breakdown, dict):
         return
-    try:
-        from app.services.knowledge_tree_ai import get_knowledge_tree_ai_service
-        get_knowledge_tree_ai_service().sync_task_breakdown(
-            user_id=user_id,
-            plan_id=plan_id,
-            breakdown=breakdown,
-            learning_background=learning_background,
-        )
-        logger.info("[知识树] 已同步 task_breakdown 到 plan %s", plan_id)
-    except Exception as exc:
-        logger.warning("[知识树] sync task_breakdown failed: %s", exc)
+    from app.services.knowledge_tree_ai import get_knowledge_tree_ai_service
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            get_knowledge_tree_ai_service().sync_task_breakdown(
+                user_id=user_id,
+                plan_id=plan_id,
+                breakdown=breakdown,
+                learning_background=learning_background,
+            )
+            logger.info("[知识树] 已同步 task_breakdown 到 plan %s", plan_id)
+            return
+        except Exception as exc:
+            if attempt < max_retries - 1:
+                logger.warning("[知识树] sync task_breakdown 失败，第 %d 次重试: %s", attempt + 1, exc)
+                time.sleep(1)
+            else:
+                logger.error("[知识树] sync task_breakdown 最终失败 (plan %s): %s", plan_id, exc)
 
 
 def _save_plain_text_reply(breakdown_confirmed, generated_resource_info,

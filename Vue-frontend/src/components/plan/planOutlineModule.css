@@ -1,0 +1,316 @@
+/* ═══════════════════════════════════════════════════════
+   知识树 / 学习模式共用大纲列表
+   设计理念：紧凑列表 + 树形缩进 + 流畅展开动画
+   ═══════════════════════════════════════════════════════ */
+
+/* ── 列表项行 ── */
+.plan-outline__card {
+  position: relative;
+  border-radius: 6px;
+  background: transparent;
+  transition: background 0.18s ease;
+  cursor: pointer;
+}
+
+.plan-outline__card:hover {
+  background: rgba(65, 100, 178, 0.04);
+}
+
+.plan-outline__card--active {
+  background: rgba(65, 100, 178, 0.07);
+}
+
+.plan-outline__card--active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: #4164b2;
+}
+
+.plan-outline__card--drop {
+  background: rgba(65, 100, 178, 0.1);
+  outline: 2px dashed rgba(65, 100, 178, 0.4);
+  outline-offset: -2px;
+}
+
+/* ── 行头：编号 + 内容 + 操作 ── */
+.plan-outline__card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  min-height: 38px;
+}
+
+/* ── 编号徽章 ── */
+.plan-outline__index {
+  display: inline-flex;
+  min-width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: #e8eef8;
+  padding: 0 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #4164b2;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+
+.plan-outline__index--active {
+  background: #294a8d;
+  color: #fff;
+}
+
+/* ── 内容区 ── */
+.plan-outline__card-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.plan-outline__title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #1a2d50;
+  word-break: break-word;
+  /* 默认不截断，完整展示 */
+}
+
+.plan-outline__card--active .plan-outline__title {
+  color: #142a4f;
+  font-weight: 700;
+}
+
+/* ── 元数据行 ── */
+.plan-outline__meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.plan-outline__hours {
+  font-size: 10.5px;
+  color: #7992bd;
+}
+
+.plan-outline__child-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b84b5;
+  background: rgba(232, 238, 248, 0.9);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+/* ── 箭头 & 生成按钮 ── */
+.plan-outline__chevron,
+.plan-outline__generate {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #8aa0c8;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.plan-outline__chevron:hover,
+.plan-outline__generate:hover {
+  background: rgba(65, 100, 178, 0.1);
+  color: #4164b2;
+}
+
+.plan-outline__chevron svg {
+  width: 10px;
+  height: 10px;
+}
+
+.plan-outline__chevron--open {
+  transform: rotate(90deg);
+}
+
+.plan-outline__generate {
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.plan-outline__card:hover .plan-outline__generate,
+.plan-outline__card--active .plan-outline__generate {
+  opacity: 1;
+}
+
+.plan-outline__generate svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ── 生成菜单 ── */
+.plan-outline__generate-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 0 8px 6px 30px;
+  padding: 4px;
+  border: 1px solid rgba(154, 173, 216, 0.3);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(30, 51, 88, 0.08);
+}
+
+.plan-outline__generate-menu button {
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  padding: 5px 10px;
+  text-align: left;
+  font-size: 11.5px;
+  color: #3d5278;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.plan-outline__generate-menu button:hover {
+  background: #eef3fb;
+  color: #4164b2;
+}
+
+/* ── 展开/收起动画 ── */
+.plan-outline__children-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.plan-outline__children-wrap--open {
+  grid-template-rows: 1fr;
+}
+
+.plan-outline__children-inner {
+  overflow: hidden;
+}
+
+/* ── 子项缩进树 ── */
+.plan-outline__child-modules {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-left: 19px;
+  padding-left: 12px;
+  border-left: 1.5px solid rgba(154, 173, 216, 0.3);
+}
+
+.plan-outline__child-resources {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 8px 4px 19px;
+  padding-left: 12px;
+  border-left: 1.5px solid rgba(154, 173, 216, 0.25);
+}
+
+/* 子项行内连接点 */
+.plan-outline__child-modules > .plan-outline__card::after,
+.plan-outline__child-resources > .plan-outline__card::after {
+  content: '';
+  position: absolute;
+  left: -13px;
+  top: 50%;
+  width: 8px;
+  height: 1.5px;
+  background: rgba(154, 173, 216, 0.3);
+}
+
+/* ── 资源卡片 ── */
+.plan-outline__index--resource {
+  padding: 0;
+  background: transparent;
+  color: #8aa0c8;
+}
+
+.plan-outline__index--resource svg {
+  width: 13px;
+  height: 13px;
+}
+
+.plan-outline__card--resource {
+  cursor: pointer;
+}
+
+.plan-outline__card--resource .plan-outline__title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #3d5278;
+}
+
+.plan-outline__card--resource.plan-outline__card--active .plan-outline__title {
+  color: #1a2d50;
+  font-weight: 600;
+}
+
+/* ── 标签 ── */
+.plan-outline__tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.plan-outline__tag--default {
+  background: #eef3fb;
+  color: #5a7ab8;
+}
+
+.plan-outline__tag--quiz {
+  background: #f3efff;
+  color: #7c5cbf;
+}
+
+.plan-outline__tag--mindmap {
+  background: #fdf4ff;
+  color: #a855f7;
+}
+
+.plan-outline__tag--video {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.plan-outline__tag--muted {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+/* ── 状态 ── */
+.plan-outline__status {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.plan-outline__status--ready { color: #059669; }
+.plan-outline__status--generating { color: #2563eb; }
+.plan-outline__status--failed { color: #dc2626; }
+.plan-outline__status--pending { color: #94a3b8; }
+.plan-outline__status--action {
+  cursor: pointer;
+  text-decoration: underline;
+}

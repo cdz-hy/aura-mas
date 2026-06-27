@@ -33,7 +33,7 @@ class FakeJavaClient:
             },
             "nodes": [
                 {"id": "node_root", "treeId": "tree_a", "parentId": None, "title": "Root", "summary": "root summary"},
-                {"id": "node_a", "treeId": "tree_a", "parentId": "node_root", "title": "变量", "summary": "变量摘要", "content": "变量内容"},
+                {"id": "node_a", "treeId": "tree_a", "parentId": "node_root", "title": "变量", "summary": "变量摘要", "content": "变量内容", "depth": 1},
                 {"id": "node_sibling", "treeId": "tree_a", "parentId": "node_root", "title": "函数", "summary": "函数摘要"},
                 {"id": "node_child", "treeId": "tree_a", "parentId": "node_a", "title": "赋值", "summary": "赋值摘要"},
             ],
@@ -177,14 +177,13 @@ async def _test_explain_node_yields_chunks_before_sync_stream_finishes():
     assert remaining[-1]["type"] == "done"
 
 
-def test_subdivide_node_creates_group_node_with_enriched_context():
-    asyncio.run(_test_subdivide_node_creates_group_node_with_enriched_context())
+def test_subdivide_node_creates_direct_children_with_enriched_context():
+    asyncio.run(_test_subdivide_node_creates_direct_children_with_enriched_context())
 
 
-async def _test_subdivide_node_creates_group_node_with_enriched_context():
+async def _test_subdivide_node_creates_direct_children_with_enriched_context():
     client = FakeJavaClient()
     json_llm = FakeJsonLlm({
-        "middle_title": "按学习顺序拆变量",
         "children": [
             {"title": "基础概念", "summary": "先学定义", "importance": 3, "difficulty": 1},
             {"title": "实践应用", "summary": "再看例子", "importance": 2, "difficulty": 2}
@@ -194,22 +193,17 @@ async def _test_subdivide_node_creates_group_node_with_enriched_context():
 
     events = [event async for event in service.subdivide_node(user_id=7, tree_id="tree_a", node_id="node_a", angle="按学习顺序")]
 
-    assert len(client.created_nodes) == 3
-    group = client.created_nodes[0]
-    assert group["title"] == "按学习顺序拆变量"
-    assert group["parentId"] == "node_a"
-    assert client.created_nodes[1]["parentId"] == group["id"]
-    assert client.created_nodes[2]["parentId"] == group["id"]
+    assert len(client.created_nodes) == 2
+    assert client.created_nodes[0]["parentId"] == "node_a"
+    assert client.created_nodes[0]["depth"] == 2
+    assert client.created_nodes[1]["parentId"] == "node_a"
+    assert client.created_nodes[1]["depth"] == 2
     assert any(e["type"] == "nodes_created" for e in events)
     assert events[-1]["type"] == "done"
     prompt = _llm_prompt_text(json_llm)
     assert "当前节点：变量" in prompt
-    assert "节点路径：Root > 变量" in prompt
-    assert "兄弟节点：函数" in prompt
-    assert "已有子节点：赋值" in prompt
-    assert "计划目标：Learn Python" in prompt
-    assert "最近对话" in prompt and "想看例子" in prompt
-    assert "3-4" in prompt
+    assert "每次只产一层" in prompt
+    assert "2-3" in prompt
 
 
 def test_suggest_subdivision_options_normalizes_llm_output():
@@ -243,14 +237,14 @@ async def _test_suggest_subdivision_options_normalizes_llm_output():
     assert result["caution"] == {"label": "先别拆", "rationale": "节点已经足够细，继续拆会增加噪音"}
     prompt = _llm_prompt_text(json_llm)
     assert "Medium" in prompt
-    assert "5-7" in prompt
+    assert "3-4" in prompt
 
 
-def test_multi_angle_subdivide_creates_group_nodes_and_children():
-    asyncio.run(_test_multi_angle_subdivide_creates_group_nodes_and_children())
+def test_multi_angle_subdivide_creates_children_directly():
+    asyncio.run(_test_multi_angle_subdivide_creates_children_directly())
 
 
-async def _test_multi_angle_subdivide_creates_group_nodes_and_children():
+async def _test_multi_angle_subdivide_creates_children_directly():
     client = FakeJavaClient()
     service = KnowledgeTreeAiService(java_client=client, retriever=FakeRetriever(), llm=FakeJsonLlm({
         "groups": [
@@ -258,15 +252,15 @@ async def _test_multi_angle_subdivide_creates_group_nodes_and_children():
                 "angle": "by_concept",
                 "label": "按概念拆",
                 "children": [
-                    {"title": "变量是什么", "summary": "理解变量的定义"},
-                    {"title": "类型是什么", "summary": "理解类型的约束"},
+                    {"title": "变量定义与命名", "summary": "理解变量的定义"},
+                    {"title": "类型系统基础", "summary": "理解类型的约束"},
                 ],
             },
             {
                 "angle": "by_flow",
                 "label": "按流程拆",
                 "children": [
-                    {"title": "赋值", "summary": "把值绑定到变量"},
+                    {"title": "绑定流程实践", "summary": "把值绑定到变量"},
                 ],
             },
         ],
@@ -283,12 +277,12 @@ async def _test_multi_angle_subdivide_creates_group_nodes_and_children():
     )]
 
     created = client.created_nodes
-    assert created[0]["title"] == "按概念拆"
+    assert created[0]["title"] == "变量定义与命名"
     assert created[0]["parentId"] == "node_parent"
-    assert created[1]["title"] == "变量是什么"
-    assert created[1]["parentId"] == created[0]["id"]
-    assert created[3]["title"] == "按流程拆"
-    assert created[3]["parentId"] == "node_parent"
+    assert created[1]["title"] == "类型系统基础"
+    assert created[1]["parentId"] == "node_parent"
+    assert created[2]["title"] == "绑定流程实践"
+    assert created[2]["parentId"] == "node_parent"
     assert any(event["type"] == "nodes_created" for event in events)
     assert events[-1]["type"] == "done"
 
@@ -312,7 +306,9 @@ async def _test_first_principles_grows_layer_by_layer_and_finishes_with_done():
         },
     ]))
 
-    events = [event async for event in service.first_principles(user_id=7, tree_id="tree_a", node_id="node_a")]
+    events = [event async for event in service.first_principles(
+        user_id=7, tree_id="tree_a", node_id="node_a", max_depth=2,
+    )]
 
     assert client.created_nodes[0]["status"] == "pending"
     assert client.created_nodes[0]["isFundamental"] is False
@@ -321,10 +317,10 @@ async def _test_first_principles_grows_layer_by_layer_and_finishes_with_done():
     assert client.created_nodes[1]["parentId"] == client.created_nodes[0]["id"]
     assert client.created_nodes[1]["fpRelation"] == "derives"
     assert client.created_nodes[1]["isFundamental"] is True
-    node_events = [event for event in events if event["type"] == "nodes_created"]
+    node_events = [event for event in events if event["type"] == "fp_layer" and event.get("children")]
     assert len(node_events) == 2
-    assert node_events[0]["nodes"][0]["title"] == "守恒关系"
-    assert node_events[1]["nodes"][0]["title"] == "等价变换"
+    assert node_events[0]["children"][0]["title"] == "守恒关系"
+    assert node_events[1]["children"][0]["title"] == "等价变换"
     assert events[-1]["type"] == "done"
 
 

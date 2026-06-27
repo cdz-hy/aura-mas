@@ -1,6 +1,6 @@
 <template>
   <div class="plan-outline">
-    <div v-if="headerSubtitle || metaText" class="plan-outline__header">
+    <div v-if="headerLabel || headerSubtitle || metaText" class="plan-outline__header">
       <div>
         <span v-if="headerLabel" class="plan-outline__label">{{ headerLabel }}</span>
         <p v-if="headerSubtitle" class="plan-outline__subtitle">{{ headerSubtitle }}</p>
@@ -15,7 +15,7 @@
       <p>加载大纲...</p>
     </div>
 
-    <div v-else-if="modules.length === 0" class="plan-outline__state">
+    <div v-else-if="outlineTree.length === 0" class="plan-outline__state">
       <svg class="plan-outline__empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <path d="M4 6h16M4 12h16M4 18h10" stroke-linecap="round" />
       </svg>
@@ -24,166 +24,47 @@
     </div>
 
     <div v-else class="plan-outline__list custom-scrollbar">
-      <section
-        v-for="mod in modules"
-        :key="mod.id"
-        class="plan-outline__block"
-        :style="indentStyle(mod.depth)"
-      >
-        <!-- 分组：未归类资源等 -->
+      <section v-for="mod in outlineTree" :key="mod.id" class="plan-outline__block">
         <div v-if="mod.kind === 'group'" class="plan-outline__group">
           <div class="plan-outline__group-head">
             <span class="plan-outline__group-title">{{ mod.title }}</span>
             <span class="plan-outline__group-badge">{{ mod.resources.length }}</span>
           </div>
-          <div class="plan-outline__resources">
-            <button
+          <div class="plan-outline__group-body">
+            <PlanOutlineResourceCard
               v-for="res in mod.resources"
               :key="res.id"
-              type="button"
-              class="plan-outline__resource"
-              :class="{ 'plan-outline__resource--active': res.resourceId === selectedResourceId }"
-              :draggable="treeDnD"
-              @click="$emit('select-resource', res.resourceId)"
-              @dragstart="onResourceDragStart($event, res.resourceId, res.title)"
-            >
-              <span class="plan-outline__resource-title">{{ res.title }}</span>
-              <span class="plan-outline__tag">{{ typeLabel(res.resourceType) }}</span>
-              <span class="plan-outline__status" :class="statusClass(res.status)">{{ statusLabel(res.status) }}</span>
-            </button>
+              :resource="res"
+            />
           </div>
         </div>
 
-        <!-- 学习模块卡片 -->
-        <article
+        <PlanOutlineModuleNode
           v-else
-          class="plan-outline__card"
-          :class="{
-            'plan-outline__card--active': mod.id === selectedModuleId,
-            'plan-outline__card--drop': treeDnD && dropTargetId === mod.nodeId,
-          }"
-          @click="onModuleClick(mod)"
-          @dragover.prevent="onModuleDragOver(mod)"
-          @dragleave="onModuleDragLeave(mod)"
-          @drop.prevent="onModuleDrop($event, mod)"
-        >
-          <div class="plan-outline__card-head">
-            <span
-              class="plan-outline__index"
-              :class="{ 'plan-outline__index--active': mod.id === selectedModuleId }"
-            >
-              {{ mod.displayIndex }}
-            </span>
-            <div class="plan-outline__card-body">
-              <p class="plan-outline__title" :title="mod.title">{{ mod.title }}</p>
-              <div class="plan-outline__meta-row">
-                <span class="plan-outline__hours">{{ mod.estimatedHours }}学时</span>
-                <span
-                  v-for="type in mod.resourceTypes.slice(0, 2)"
-                  :key="type"
-                  class="plan-outline__tag"
-                  :class="tagClass(type)"
-                >
-                  {{ typeLabel(type) }}
-                </span>
-                <span v-if="mod.resourceTypes.length > 2" class="plan-outline__tag plan-outline__tag--muted">
-                  +{{ mod.resourceTypes.length - 2 }}
-                </span>
-                <span class="plan-outline__status" :class="moduleStatusClass(mod.moduleStatus)">
-                  {{ moduleStatusText(mod.moduleStatus) }}
-                </span>
-              </div>
-            </div>
-
-            <button
-              v-if="hasExpandableResources(mod)"
-              type="button"
-              class="plan-outline__chevron"
-              :class="{ 'plan-outline__chevron--open': isExpanded(mod.id) }"
-              :title="isExpanded(mod.id) ? '收起资源' : '展开资源'"
-              @click.stop="toggleExpand(mod.id)"
-            >
-              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8">
-                <path d="M4 2.5 8.5 6 4 9.5" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </button>
-
-            <button
-              v-if="treeMode && mod.nodeId"
-              type="button"
-              class="plan-outline__generate"
-              title="生成学习内容"
-              @click.stop="toggleGenerateMenu(mod.nodeId!)"
-            >
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
-                <path d="M8 3v10M3 8h10" stroke-linecap="round" />
-              </svg>
-            </button>
-          </div>
-
-          <div
-            v-if="generateMenuNodeId === mod.nodeId"
-            class="plan-outline__generate-menu"
-            @click.stop
-          >
-            <button
-              v-for="opt in generateOptions"
-              :key="opt.type"
-              type="button"
-              @click="emitGenerate(mod.nodeId!, opt.type)"
-            >
-              {{ opt.label }}
-            </button>
-          </div>
-
-          <div
-            v-if="hasExpandableResources(mod) && isExpanded(mod.id)"
-            class="plan-outline__resources plan-outline__resources--nested"
-          >
-            <button
-              v-for="res in mod.resources"
-              :key="res.id"
-              type="button"
-              class="plan-outline__resource"
-              :class="{ 'plan-outline__resource--active': res.resourceId === selectedResourceId }"
-              :draggable="treeDnD"
-              @click.stop="$emit('select-resource', res.resourceId)"
-              @dragstart="onResourceDragStart($event, res.resourceId, res.title)"
-            >
-              <span class="plan-outline__resource-title">{{ res.title }}</span>
-              <span class="plan-outline__tag">{{ typeLabel(res.resourceType) }}</span>
-              <span
-                v-if="res.status === 1 && stuckResourceIds?.has(res.resourceId)"
-                class="plan-outline__status plan-outline__status--failed plan-outline__status--action"
-                @click.stop="$emit('retry-resource', res.resourceId)"
-              >
-                重试
-              </span>
-              <span v-else class="plan-outline__status" :class="statusClass(res.status)">
-                {{ statusLabel(res.status) }}
-              </span>
-            </button>
-          </div>
-        </article>
+          :module="mod"
+          :depth="0"
+        />
       </section>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import type { PlanOutlineModule, PlanOutlineModuleStatus } from './usePlanResourceOutline'
-import { moduleStatusLabel } from './usePlanResourceOutline'
+import { computed, provide, ref, watch } from 'vue'
+import PlanOutlineModuleNode from './PlanOutlineModuleNode.vue'
+import PlanOutlineResourceCard from './PlanOutlineResourceCard.vue'
+import type { PlanOutlineModule, PlanOutlineModuleStatus, PlanOutlineTreeModule } from './usePlanResourceOutline'
+import { moduleStatusLabel, nestOutlineModules } from './usePlanResourceOutline'
+import { OUTLINE_CONTEXT_KEY } from './planOutlineContext'
 import {
-  isNodeDragEvent,
-  isResourceDragEvent,
   readNodeDragData,
   readResourceDragData,
   setResourceDragData,
 } from '@/components/tree/useTreeDragDrop'
 
 const props = withDefaults(defineProps<{
-  modules: PlanOutlineModule[]
+  modules?: PlanOutlineModule[]
+  treeModules?: PlanOutlineTreeModule[]
   selectedModuleId?: string | null
   selectedResourceId?: number | null
   typeLabels: Record<string, string>
@@ -201,6 +82,7 @@ const props = withDefaults(defineProps<{
   selectedModuleId: null,
   selectedResourceId: null,
   loading: false,
+  modules: () => [],
   headerLabel: '学习大纲',
   emptyTitle: '暂无学习模块',
   emptyHint: '在右侧对话中描述学习目标，AI 会自动规划',
@@ -227,28 +109,60 @@ const generateOptions = [
   { type: 'code', label: '代码示例' },
 ]
 
-watch(
-  () => props.modules,
-  modules => {
-    const next = new Set(expandedIds.value)
-    for (const mod of modules) {
-      if (mod.resources.length > 0) next.add(mod.id)
+const outlineTree = computed(() =>
+  props.treeModules?.length ? props.treeModules : nestOutlineModules(props.modules || []),
+)
+
+const parentIdsByModuleId = computed(() => {
+  const result = new Map<string, string[]>()
+  const walk = (items: PlanOutlineTreeModule[], parents: string[]) => {
+    for (const item of items) {
+      result.set(item.id, parents)
+      walk(item.childModules, [...parents, item.id])
     }
-    expandedIds.value = next
+  }
+  walk(outlineTree.value, [])
+  return result
+})
+
+const descendantIdsByModuleId = computed(() => {
+  const result = new Map<string, string[]>()
+  const walk = (item: PlanOutlineTreeModule): string[] => {
+    const ids = item.childModules.flatMap(child => [child.id, ...walk(child)])
+    result.set(item.id, ids)
+    return ids
+  }
+  for (const mod of outlineTree.value) walk(mod)
+  return result
+})
+
+watch(
+  () => [props.modules, props.treeModules] as const,
+  () => {
+    const validIds = collectModuleIds(outlineTree.value)
+    expandedIds.value = new Set([...expandedIds.value].filter(id => validIds.has(id)))
+    syncExpandedToSelection(props.selectedModuleId)
   },
   { immediate: true, deep: true },
 )
 
 watch(
   () => props.selectedModuleId,
-  id => {
-    if (id) expandedIds.value = new Set([...expandedIds.value, id])
-  },
+  id => syncExpandedToSelection(id),
 )
 
-function indentStyle(depth: number) {
-  if (depth <= 0) return undefined
-  return { paddingLeft: `${8 + depth * 10}px` }
+function collectModuleIds(items: PlanOutlineTreeModule[], acc = new Set<string>()) {
+  for (const item of items) {
+    acc.add(item.id)
+    collectModuleIds(item.childModules, acc)
+  }
+  return acc
+}
+
+function syncExpandedToSelection(id: string | null | undefined) {
+  if (!id) return
+  const parentIds = parentIdsByModuleId.value.get(id) || []
+  expandedIds.value = new Set([...expandedIds.value, ...parentIds, id])
 }
 
 function typeLabel(type: string) {
@@ -287,27 +201,26 @@ function moduleStatusClass(status: PlanOutlineModuleStatus) {
   return 'plan-outline__status--pending'
 }
 
-function hasExpandableResources(mod: PlanOutlineModule) {
-  return mod.resources.length > 0
-}
-
 function isExpanded(id: string) {
   return expandedIds.value.has(id)
 }
 
 function toggleExpand(id: string) {
   const next = new Set(expandedIds.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
+  if (next.has(id)) {
+    next.delete(id)
+    for (const childId of descendantIdsByModuleId.value.get(id) || []) {
+      next.delete(childId)
+    }
+  } else {
+    next.add(id)
+  }
   expandedIds.value = next
 }
 
-function onModuleClick(mod: PlanOutlineModule) {
+function onModuleClick(mod: PlanOutlineTreeModule) {
   generateMenuNodeId.value = null
   emit('select-module', mod.id, mod.nodeId)
-  if (hasExpandableResources(mod)) {
-    expandedIds.value = new Set([...expandedIds.value, mod.id])
-  }
 }
 
 function toggleGenerateMenu(nodeId: string) {
@@ -357,54 +270,86 @@ watch(
     if (!enabled) dropTargetId.value = null
   },
 )
+
+provide(OUTLINE_CONTEXT_KEY, {
+  get selectedModuleId() { return props.selectedModuleId },
+  get selectedResourceId() { return props.selectedResourceId },
+  get treeMode() { return !!props.treeMode },
+  get treeDnD() { return !!props.treeDnD },
+  get stuckResourceIds() { return props.stuckResourceIds },
+  get generateMenuNodeId() { return generateMenuNodeId.value },
+  get dropTargetId() { return dropTargetId.value },
+  generateOptions,
+  typeLabel,
+  tagClass,
+  statusLabel,
+  statusClass,
+  moduleStatusText,
+  moduleStatusClass,
+  isExpanded,
+  toggleExpand,
+  toggleGenerateMenu,
+  emitGenerate,
+  selectResource: (resourceId: number) => emit('select-resource', resourceId),
+  retryResource: (resourceId: number) => emit('retry-resource', resourceId),
+  onResourceDragStart,
+  onModuleClick,
+  onModuleDragOver,
+  onModuleDragLeave,
+  onModuleDrop,
+})
 </script>
+
+<style scoped src="./planOutlineModule.css"></style>
 
 <style scoped>
 .plan-outline {
   display: flex;
   height: 100%;
   flex-direction: column;
-  background: linear-gradient(180deg, #fafbfd 0%, #f5f7fb 100%);
+  background: linear-gradient(180deg, #fbfcff 0%, #f8fbff 100%);
 }
 
 .plan-outline__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
-  padding: 10px 14px 8px;
-  border-bottom: 1px solid rgba(154, 173, 216, 0.25);
+  gap: 10px;
+  padding: 13px 14px 10px;
+  border-bottom: 1px solid rgba(188, 203, 232, 0.48);
+  background: rgba(255, 255, 255, 0.82);
 }
 
 .plan-outline__label {
   display: block;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #8aa0c8;
+  color: #7891bd;
 }
 
 .plan-outline__subtitle {
   margin: 2px 0 0;
-  font-size: 10px;
-  color: #a8b8d4;
+  font-size: 10.5px;
+  color: #9aaed0;
   line-height: 1.3;
 }
 
 .plan-outline__meta {
   font-size: 10px;
-  color: #a8b8d4;
+  color: #8ea3c8;
   white-space: nowrap;
   padding-top: 2px;
 }
 
 .plan-outline__hint {
   margin: 0;
-  padding: 0 14px 8px;
+  padding: 8px 14px;
   font-size: 11px;
   color: #4164b2;
-  border-bottom: 1px solid rgba(154, 173, 216, 0.2);
+  border-bottom: 1px solid rgba(154, 173, 216, 0.22);
+  background: rgba(238, 245, 255, 0.72);
 }
 
 .plan-outline__state {
@@ -443,297 +388,56 @@ watch(
 .plan-outline__list {
   flex: 1;
   overflow-y: auto;
-  padding: 10px 10px 16px;
+  padding: 6px 8px 10px;
 }
 
 .plan-outline__block + .plan-outline__block {
-  margin-top: 8px;
-}
-
-.plan-outline__card {
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.72);
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-  cursor: pointer;
-}
-
-.plan-outline__card:hover {
-  background: rgba(255, 255, 255, 0.95);
-}
-
-.plan-outline__card--active {
-  border-color: rgba(65, 100, 178, 0.45);
-  background: rgba(238, 245, 255, 0.95);
-  box-shadow: 0 1px 4px rgba(65, 100, 178, 0.08);
-}
-
-.plan-outline__card--drop {
-  border-color: rgba(65, 100, 178, 0.55);
-  background: rgba(65, 100, 178, 0.08);
-}
-
-.plan-outline__card-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px 10px 8px;
-}
-
-.plan-outline__index {
-  display: inline-flex;
-  min-width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  background: #e8eef8;
-  padding: 0 4px;
-  font-size: 10px;
-  font-weight: 700;
-  color: #4164b2;
-  line-height: 1;
-}
-
-.plan-outline__index--active {
-  background: #294a8d;
-  color: #fff;
-}
-
-.plan-outline__card-body {
-  min-width: 0;
-  flex: 1;
-}
-
-.plan-outline__title {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.35;
-  color: #1e3358;
-  word-break: break-word;
-}
-
-.plan-outline__meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  margin-top: 6px;
-}
-
-.plan-outline__hours {
-  font-size: 11px;
-  color: #8aa0c8;
-}
-
-.plan-outline__tag {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-.plan-outline__tag--default {
-  background: #eef3fb;
-  color: #5a7ab8;
-}
-
-.plan-outline__tag--quiz {
-  background: #f3efff;
-  color: #7c5cbf;
-}
-
-.plan-outline__tag--mindmap {
-  background: #fdf4ff;
-  color: #a855f7;
-}
-
-.plan-outline__tag--video {
-  background: #ecfdf5;
-  color: #059669;
-}
-
-.plan-outline__tag--muted {
-  background: #f1f5f9;
-  color: #94a3b8;
-}
-
-.plan-outline__status {
-  margin-left: auto;
-  font-size: 10px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.plan-outline__status--ready { color: #059669; }
-.plan-outline__status--generating { color: #2563eb; }
-.plan-outline__status--failed { color: #dc2626; }
-.plan-outline__status--pending { color: #94a3b8; }
-
-.plan-outline__status--action {
-  cursor: pointer;
-  text-decoration: underline;
-}
-
-.plan-outline__chevron,
-.plan-outline__generate {
-  display: flex;
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: #8aa0c8;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
-}
-
-.plan-outline__chevron:hover,
-.plan-outline__generate:hover {
-  background: rgba(65, 100, 178, 0.1);
-  color: #4164b2;
-}
-
-.plan-outline__chevron svg {
-  width: 10px;
-  height: 10px;
-}
-
-.plan-outline__chevron--open {
-  transform: rotate(90deg);
-}
-
-.plan-outline__generate {
-  opacity: 0;
-}
-
-.plan-outline__card:hover .plan-outline__generate,
-.plan-outline__card--active .plan-outline__generate {
-  opacity: 1;
-}
-
-.plan-outline__generate svg {
-  width: 14px;
-  height: 14px;
-}
-
-.plan-outline__generate-menu {
-  display: grid;
-  gap: 2px;
-  margin: 0 10px 8px;
-  border: 1px solid rgba(154, 173, 216, 0.35);
-  border-radius: 8px;
-  background: #fff;
-  padding: 4px;
-  box-shadow: 0 6px 18px rgba(30, 51, 88, 0.1);
-}
-
-.plan-outline__generate-menu button {
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  padding: 6px 8px;
-  text-align: left;
-  font-size: 12px;
-  color: #3d5278;
-  cursor: pointer;
-}
-
-.plan-outline__generate-menu button:hover {
-  background: #eef3fb;
-  color: #4164b2;
-}
-
-.plan-outline__resources {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 0 8px 8px;
-}
-
-.plan-outline__resources--nested {
-  margin-left: 30px;
-  padding-left: 8px;
-  border-left: 1px solid rgba(154, 173, 216, 0.35);
-}
-
-.plan-outline__resource {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  padding: 6px 8px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.plan-outline__resource:hover {
-  background: rgba(255, 255, 255, 0.95);
-}
-
-.plan-outline__resource--active {
-  background: rgba(226, 232, 240, 0.85);
-}
-
-.plan-outline__resource-title {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: #3d5278;
+  margin-top: 2px;
+  border-top: 1px solid rgba(188, 203, 232, 0.35);
+  padding-top: 2px;
 }
 
 .plan-outline__group {
-  border: 1px dashed rgba(154, 173, 216, 0.45);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(201, 213, 236, 0.5);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.6);
   overflow: hidden;
 }
 
 .plan-outline__group-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  background: rgba(238, 243, 251, 0.8);
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(244, 248, 255, 0.7);
 }
 
 .plan-outline__group-title {
   flex: 1;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   color: #5a7099;
 }
 
 .plan-outline__group-badge {
   display: inline-flex;
-  min-width: 20px;
-  height: 18px;
+  min-width: 18px;
+  height: 16px;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
   background: #e4ebf8;
-  padding: 0 6px;
-  font-size: 10px;
+  padding: 0 5px;
+  font-size: 9.5px;
   font-weight: 700;
   color: #4164b2;
+}
+
+.plan-outline__group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 6px 6px;
 }
 
 @keyframes plan-outline-spin {

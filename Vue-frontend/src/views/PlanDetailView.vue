@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full w-full flex flex-col overflow-hidden">
+  <div class="plan-detail-page h-full w-full flex flex-col overflow-hidden">
     <div v-if="!plan" class="flex items-center justify-center h-full flex-1">
       <div class="text-center">
         <svg class="w-12 h-12 mx-auto text-navy-200 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -9,15 +9,15 @@
       </div>
     </div>
 
-    <div v-else class="flex gap-0 h-full w-full overflow-x-auto overflow-y-hidden flex-1 custom-scrollbar">
+    <div v-else class="plan-detail-workspace flex gap-0 h-full w-full overflow-x-auto overflow-y-hidden flex-1 custom-scrollbar">
     <!-- ==================== 左侧栏：模块列表（可折叠） ==================== -->
     <div
-      class="flex-shrink-0 flex flex-col overflow-hidden transition-all duration-300 animate-fade-in-up border-r border-navy-100/60 bg-white"
-      :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-[300px]'"
+      class="plan-detail-sidebar flex-shrink-0 flex flex-col overflow-hidden transition-all duration-300 animate-fade-in-up"
+      :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-[320px]'"
     >
-      <div class="flex flex-col h-full min-w-[300px]">
+      <div class="plan-detail-sidebar__inner flex flex-col h-full min-w-[320px]">
         <!-- Plan header -->
-        <div class="px-4 py-3.5 border-b border-navy-100/60 bg-gradient-to-b from-white to-navy-50/30">
+        <div class="plan-detail-sidebar__header px-4 py-3.5">
           <div class="flex items-center gap-2">
             <input
               v-if="editingTitle"
@@ -87,17 +87,17 @@
           </div>
         </div>
 
-        <div class="flex-1 min-h-0">
+        <div class="plan-detail-sidebar__outline flex-1 min-h-0">
           <PlanResourceOutline
-            :modules="outlineModules"
+            :tree-modules="outlineTreeModules"
             :selected-module-id="selectedOutlineModuleId"
             :selected-resource-id="selectedResourceId"
             :type-labels="typeLabels"
             :loading="outlineLoading"
-            :header-subtitle="isTreeMode ? '由知识树管理 · 在此生成学习内容' : undefined"
+            :header-subtitle="outlineHeaderSubtitle"
             :meta-text="outlineMetaText"
-            :empty-title="isTreeMode ? '暂无知识树节点' : '暂无学习模块'"
-            :empty-hint="isTreeMode ? '在画布中拆分节点后会出现在这里' : '在右侧对话中描述学习目标，AI 会自动规划'"
+            :empty-title="outlineEmptyTitle"
+            :empty-hint="outlineEmptyHint"
             :drag-hint="isTreeMode && knowledgeTreeStore.draggingNodeId ? '松开鼠标，将节点挂到目标模块下' : undefined"
             :tree-mode="isTreeMode"
             :tree-dn-d="isTreeMode"
@@ -116,7 +116,7 @@
 
     <!-- 折叠/展开按钮 -->
     <button
-      class="flex-shrink-0 w-6 flex items-center justify-center bg-navy-50 hover:bg-navy-100 transition-colors rounded-r-lg my-2"
+      class="plan-detail-collapse flex-shrink-0 flex items-center justify-center transition-colors"
       @click="sidebarCollapsed = !sidebarCollapsed"
       :title="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
     >
@@ -128,7 +128,7 @@
     <template v-if="isTreeMode">
       <section
         v-if="!treeContentVisible"
-        class="mx-2 flex min-w-[720px] flex-1 flex-col overflow-hidden rounded-lg border border-navy-100 bg-white shadow-paper"
+        class="plan-tree-stage flex min-w-[720px] flex-1 flex-col overflow-hidden"
       >
         <header class="flex flex-shrink-0 items-center justify-between gap-3 border-b border-navy-100 px-4 py-3">
           <div class="min-w-0">
@@ -145,13 +145,28 @@
               class="h-8 rounded-lg bg-red-50 px-3 text-xs font-semibold text-red-600 hover:bg-red-100"
               @click="knowledgeTreeStore.stopStream"
             >
-              停止
+              {{ knowledgeTreeStore.fpStreamingActive ? '■ 停止拆解' : '停止' }}
             </button>
           </div>
         </header>
 
         <div v-if="knowledgeTreeStore.error" class="mx-4 mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
           {{ knowledgeTreeStore.error }}
+        </div>
+
+        <div v-if="showBootstrapPreview" class="mx-4 mt-3">
+          <TreeBootstrapPreview
+            :topics="knowledgeTreeStore.previewTopics"
+            :loading="knowledgeTreeStore.previewLoading"
+            :error="knowledgeTreeStore.previewError"
+            :growing="knowledgeTreeStore.growProgress.growing"
+            :current-branch="knowledgeTreeStore.growProgress.currentBranch"
+            :done-count="knowledgeTreeStore.growProgress.doneCount"
+            :total-count="knowledgeTreeStore.growProgress.totalCount"
+            @confirm="knowledgeTreeStore.confirmPreviewGrow"
+            @skip="knowledgeTreeStore.skipPreviewAndGrow"
+            @retry="knowledgeTreeStore.startPreview"
+          />
         </div>
 
         <div class="relative min-h-0 flex-1 p-3">
@@ -165,6 +180,7 @@
             @select="selectTreeNode"
             @toggle-collapse="toggleTreeNodeCollapse"
             @open-subdivide="openTreeSubdivide"
+            @delete-node="confirmDeleteTreeNode"
             @node-drag-start="knowledgeTreeStore.setDraggingNodeId($event)"
             @node-drag-end="knowledgeTreeStore.setDraggingNodeId(null)"
           />
@@ -178,13 +194,21 @@
             </svg>
           </div>
         </div>
+        <button
+          v-if="knowledgeTreeStore.fpStreamingActive"
+          type="button"
+          class="fp-stop-button"
+          title="停止第一性原理拆解；已拆出的卡片会保留"
+          @click="knowledgeTreeStore.stopStream"
+        >
+          ■ 停止拆解
+        </button>
       </section>
 
       <TreeSubdividePopover
         :node="treePopoverNode"
         :options="treeSubdivisionOptions"
         :caution="knowledgeTreeStore.subdivisionCaution"
-        :split-mode="knowledgeTreeStore.splitMode"
         :loading="knowledgeTreeStore.subdivisionOptionsLoading"
         :error="knowledgeTreeStore.subdivisionOptionsError"
         @close="closeTreeSubdivide"
@@ -192,25 +216,24 @@
         @single-angle="runSingleAngleSplit"
         @multi-angle="runMultiAngleSplit"
         @first-principles="runFirstPrinciplesSplit"
-        @update:split-mode="knowledgeTreeStore.setSplitMode"
       />
     </template>
 
     <template v-if="!isTreeMode || treeContentVisible">
     <!-- ==================== 中间栏：资源详情（学习模式 / 知识树内容预览） ==================== -->
     <div
-      class="resource-panel flex flex-col card overflow-hidden"
+      class="plan-resource-panel resource-panel flex flex-col overflow-hidden"
       :class="{
         'resource-panel--closed': !selectedResource && !showResourceStreamPreview,
         '!transition-none': isDragging,
         'fixed inset-0 z-40 m-0 bg-white rounded-none border-none shadow-none': isFullscreen,
-        'mx-2': !isFullscreen
+        'plan-resource-panel--spaced': !isFullscreen
       }"
       :style="isFullscreen ? {} : panelStyle"
     >
       <template v-if="selectedResource">
         <!-- 标题栏 -->
-        <div class="px-4 py-3 border-b border-navy-100/50 flex items-center justify-between">
+        <div class="plan-resource-panel__header px-4 py-3 flex items-center justify-between">
           <div class="flex items-center gap-2 min-w-0">
             <button
               v-if="isTreeMode"
@@ -450,7 +473,7 @@
 
     <!-- 拖拽分隔线（始终在 DOM 中，width 过渡动画） -->
     <div
-      class="resource-divider flex-shrink-0 flex items-center justify-center cursor-col-resize group"
+      class="plan-resource-divider resource-divider flex-shrink-0 flex items-center justify-center cursor-col-resize group"
       :class="{ 'resource-divider--closed': !selectedResource && !showResourceStreamPreview, 'w-2': isDragging, 'w-1.5': !isDragging }"
       @mousedown="onDividerMouseDown"
     >
@@ -458,16 +481,19 @@
     </div>
 
     <!-- ==================== 右侧栏：对话界面 ==================== -->
-    <PlanChatPanel
-      ref="planChatPanelRef"
-      :plan-id="planIdStr"
-      :resource-id="selectedResource?.id ?? null"
-      v-model:mode="chatPanelMode"
-      @confirm-breakdown="confirmBreakdown()"
-      @submit-modification="submitModification"
-      @generate-resource="generateResource"
-      @open-resource="openResourceById"
-    />
+    <aside class="plan-chat-shell">
+      <PlanChatPanel
+        ref="planChatPanelRef"
+        class="plan-chat-panel"
+        :plan-id="planIdStr"
+        :resource-id="selectedResource?.id ?? null"
+        v-model:mode="chatPanelMode"
+        @confirm-breakdown="confirmBreakdown()"
+        @submit-modification="submitModification"
+        @generate-resource="generateResource"
+        @open-resource="openResourceById"
+      />
+    </aside>
     </template>
   </div>
 
@@ -587,12 +613,12 @@ import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
 import KnowledgeTreeCanvas from '@/components/tree/KnowledgeTreeCanvas.vue'
 import PlanResourceOutline from '@/components/plan/PlanResourceOutline.vue'
 import {
-  buildOutlineFromLearningModules,
-  buildOutlineFromTreeItems,
-  countOutlineModules,
-  countOutlineResources,
+  buildOutlineTreeFromTreeItems,
+  countOutlineTreeModules,
+  countOutlineTreeResources,
 } from '@/components/plan/usePlanResourceOutline'
 import TreeSubdividePopover from '@/components/tree/TreeSubdividePopover.vue'
+import TreeBootstrapPreview from '@/components/tree/TreeBootstrapPreview.vue'
 import { buildTreePlanOutline } from '@/components/tree/useTreePlanOutline'
 import { useKnowledgeTreeStore } from '@/stores/knowledgeTree'
 import { updateKnowledgeNode } from '@/api/knowledgeTree'
@@ -614,6 +640,17 @@ const authStore = useAuthStore()
 const knowledgeTreeStore = useKnowledgeTreeStore()
 const treePopoverNodeId = ref<string | null>(null)
 const treeSubdivisionOptions = ref<TreeSubdivisionOption[]>([])
+const bootstrapPreviewDismissed = ref(false)
+
+const showBootstrapPreview = computed(() => {
+  if (bootstrapPreviewDismissed.value) return false
+  if (!knowledgeTreeStore.tree || !isTreeMode.value) return false
+  // 仅在主动预览/生成过程中显示，L1 节点已从学习资源同步时不再弹出
+  if (knowledgeTreeStore.growProgress.growing) return true
+  if (knowledgeTreeStore.previewTopics.length > 0) return true
+  if (knowledgeTreeStore.previewLoading) return true
+  return false
+})
 const chatPanelMode = ref<'assistant' | 'tutor'>(
   (localStorage.getItem('chatPanelMode') as 'assistant' | 'tutor') || 'assistant'
 )
@@ -1150,17 +1187,19 @@ watch(planId, () => {
 
 // 监听 ?resource= 查询参数变化（同 plan 内跳转不同资源）
 watch(() => route.query.resource, (resId) => {
-  if (resId && resources.value.length > 0) {
+  if (resId && resources.value.length > 0 && !isTreeMode.value) {
     openResourceById(Number(resId))
   }
 })
 
 watch(isTreeMode, async value => {
   if (value) {
-    await ensureTreeLoaded()
+    bootstrapPreviewDismissed.value = false
   } else {
     closeTreeSubdivide()
   }
+  // 两个模式都需要加载知识树（大纲侧栏统一展示树节点）
+  await ensureTreeLoaded()
 }, { immediate: true })
 
 // 标题编辑
@@ -1337,35 +1376,31 @@ const treePlanOutline = computed(() =>
   buildTreePlanOutline(knowledgeTreeStore.nodes, resources.value, rootTreeNodeId.value)
 )
 
-const outlineModules = computed(() => {
-  if (isTreeMode.value) {
-    return buildOutlineFromTreeItems(treePlanOutline.value, resources.value)
-  }
-  return buildOutlineFromLearningModules(modules.value)
+const outlineTreeModules = computed(() => {
+  return buildOutlineTreeFromTreeItems(treePlanOutline.value, resources.value)
 })
 
 const selectedOutlineModuleId = computed(() => {
-  if (isTreeMode.value) {
-    const nodeId = knowledgeTreeStore.currentNodeId
-    return nodeId ? `node:${nodeId}` : null
-  }
-  if (selectedModuleIndex.value < 0) return null
-  const mod = modules.value[selectedModuleIndex.value]
-  return mod ? `learning:${mod.order}` : null
+  const nodeId = knowledgeTreeStore.currentNodeId
+  return nodeId ? `node:${nodeId}` : null
 })
 
 const outlineLoading = computed(() =>
-  isTreeMode.value && knowledgeTreeStore.loading && outlineModules.value.length === 0
+  knowledgeTreeStore.loading && outlineTreeModules.value.length === 0
 )
 
+const outlineHeaderSubtitle = '由知识树管理 · 在此生成学习内容'
+
+const outlineEmptyTitle = '暂无知识树节点'
+
+const outlineEmptyHint = '在画布中拆分节点后会出现在这里'
+
 const outlineMetaText = computed(() => {
-  const mods = outlineModules.value
+  const mods = outlineTreeModules.value
   if (mods.length === 0) return ''
-  const moduleCount = countOutlineModules(mods)
-  const resourceCount = countOutlineResources(mods)
-  return isTreeMode.value
-    ? `${moduleCount} 节点 · ${resourceCount} 资源`
-    : `${moduleCount} 模块 · ${resourceCount} 资源`
+  const moduleCount = countOutlineTreeModules(mods)
+  const resourceCount = countOutlineTreeResources(mods)
+  return `${moduleCount} 节点 · ${resourceCount} 资源`
 })
 
 const selectedTreeNode = computed(() =>
@@ -1420,34 +1455,65 @@ async function toggleTreeNodeCollapse(nodeId: string) {
   await knowledgeTreeStore.toggleCollapsed(nodeId)
 }
 
+async function confirmDeleteTreeNode(nodeId: string) {
+  const node = knowledgeTreeStore.nodes.find(n => n.id === nodeId)
+  if (!node || !node.parentId) return // 根节点不可删除
+
+  const hasChildren = knowledgeTreeStore.nodes.some(n => n.parentId === nodeId)
+  const title = node.title || '未命名节点'
+  const msg = hasChildren
+    ? `确定删除「${title}」及其所有子节点？此操作不可恢复。`
+    : `确定删除「${title}」？此操作不可恢复。`
+
+  if (!window.confirm(msg)) return
+
+  await knowledgeTreeStore.deleteNode(nodeId)
+}
+
 async function openOutlineResource(resourceId: number) {
-  await openResourceById(resourceId)
   const resource = resources.value.find(item => item.id === resourceId)
   const nodeId = resource?.moduleData?.nodeId as string | undefined
+
+  if (isTreeMode.value) {
+    // 树模式下：只选中节点，不打开资源面板
+    if (nodeId) {
+      await knowledgeTreeStore.selectNode(nodeId)
+    }
+    return
+  }
+
+  await openResourceById(resourceId)
   if (nodeId) {
     await knowledgeTreeStore.selectNode(nodeId)
   }
 }
 
 function onOutlineSelectModule(moduleId: string, nodeId?: string) {
-  if (isTreeMode.value) {
-    if (nodeId) void selectTreeNode(nodeId)
+  if (!nodeId) return
+  // 两个模式统一处理：选中/取消选中树节点，并打开关联资源
+  if (knowledgeTreeStore.currentNodeId === nodeId) {
+    // 重复点击同一节点 → 取消选中
+    knowledgeTreeStore.currentNodeId = null
+    clearSelectedResource()
     return
   }
-  const match = /^learning:(\d+)$/.exec(moduleId)
-  if (!match) return
-  const order = Number(match[1])
-  const index = modules.value.findIndex(mod => mod.order === order)
-  if (index >= 0) selectModule(index)
+  void selectTreeNode(nodeId).then(() => {
+    if (isTreeMode.value) return
+    // 计划模式下：打开节点关联的资源
+    const node = knowledgeTreeStore.nodes.find(n => n.id === nodeId)
+    const resourceId = node?.resourceId
+      || resources.value.find(r => {
+        const data = r.moduleData || {}
+        return data.nodeId === nodeId || data.node_id === nodeId
+      })?.id
+    if (resourceId) {
+      void openResourceById(resourceId)
+    }
+  })
 }
 
 function onOutlineSelectResource(resourceId: number) {
-  if (isTreeMode.value) {
-    void openOutlineResource(resourceId)
-    return
-  }
-  const res = resources.value.find(item => item.id === resourceId)
-  if (res) toggleResource(res)
+  void openOutlineResource(resourceId)
 }
 
 async function handleRetryById(resourceId: number) {
@@ -1519,7 +1585,9 @@ async function generateFromTreeNode(payload: { nodeId: string; type: string }) {
     }
     chatStore.selectedModuleContext = ctx
     await chatStore.requestNodeResourceGeneration(String(planId.value), ctx, payload.type)
-    await openResourceById(resourceId, payload.type)
+    if (!isTreeMode.value) {
+      await openResourceById(resourceId, payload.type)
+    }
   } catch (e) {
     knowledgeTreeStore.error = e instanceof Error ? e.message : '生成内容失败'
   }
@@ -2580,9 +2648,7 @@ watch(() => chatStore.lastGeneratedResources, async (resList) => {
       toggleResource(firstUpdatedRes)
     }
   }
-  if (knowledgeTreeStore.tree?.planId === planId.value || isTreeMode.value) {
-    await ensureTreeLoaded(true)
-  }
+  await ensureTreeLoaded(true)
   chatStore.lastGeneratedResources = null
 })
 
@@ -2663,6 +2729,153 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
 </script>
 
 <style scoped>
+.plan-detail-page {
+  background:
+    radial-gradient(circle at top left, rgba(239, 244, 255, 0.72), transparent 30%),
+    linear-gradient(180deg, #fbfcff 0%, #f7f9fd 100%);
+}
+
+.plan-detail-workspace {
+  gap: 10px;
+  padding: 20px 20px 26px;
+  align-items: stretch;
+}
+
+.plan-detail-sidebar {
+  border: 1px solid rgba(185, 201, 232, 0.72);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 28px rgba(42, 67, 113, 0.06);
+}
+
+.plan-detail-sidebar__inner {
+  overflow: hidden;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 251, 255, 0.96) 100%);
+}
+
+.plan-detail-sidebar__header {
+  min-height: 116px;
+  border-bottom: 1px solid rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-detail-sidebar__outline {
+  background: rgba(248, 251, 255, 0.78);
+}
+
+.plan-detail-collapse {
+  width: 24px;
+  align-self: stretch;
+  margin: 14px -3px;
+  border: 1px solid rgba(185, 201, 232, 0.62);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 8px 18px rgba(42, 67, 113, 0.05);
+}
+
+.plan-detail-collapse:hover {
+  background: #eef3fb;
+}
+
+.plan-tree-stage,
+.plan-resource-panel,
+.plan-chat-shell :deep(.plan-chat-panel) {
+  border: 1px solid rgba(185, 201, 232, 0.72);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 28px rgba(42, 67, 113, 0.06);
+}
+
+.plan-tree-stage {
+  margin: 0;
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.plan-tree-stage > header {
+  min-height: 78px;
+  border-bottom-color: rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-resource-panel {
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.98);
+  transition: width 0.3s ease, min-width 0.3s ease, margin 0.3s ease;
+}
+
+.plan-resource-panel--spaced {
+  margin: 0;
+}
+
+.plan-resource-panel__header {
+  min-height: 64px;
+  border-bottom: 1px solid rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-resource-divider {
+  width: 12px;
+  margin: 14px -1px;
+  border-radius: 999px;
+  transition: width 0.25s ease, margin 0.25s ease, opacity 0.25s ease;
+}
+
+.plan-resource-divider.resource-divider--closed {
+  width: 0;
+  margin: 14px 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.plan-chat-shell {
+  display: flex;
+  min-width: 340px;
+  flex: 1 1 0;
+  transition: flex-basis 0.3s ease;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel) {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  animation-delay: 0.1s;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel.card) {
+  box-shadow: 0 10px 28px rgba(42, 67, 113, 0.06);
+}
+
+.plan-chat-shell :deep(.plan-chat-panel > div:first-child) {
+  min-height: 72px;
+  border-bottom-color: rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-chat-shell :deep(.plan-chat-panel > .flex-1.overflow-y-auto) {
+  padding: 18px 24px;
+  background: #fff;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel > div:last-child) {
+  border-top-color: rgba(188, 203, 232, 0.58);
+  background: #fff;
+  padding: 16px 24px;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel .input-field) {
+  height: 48px;
+  border-radius: 9px;
+  border-color: rgba(154, 176, 218, 0.78);
+  color: #5a7099;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel .btn-primary) {
+  min-width: 88px;
+  height: 48px;
+  border-radius: 9px;
+}
+
 .resource-content--animation {
   padding: 0;
   overflow: hidden;
@@ -2719,6 +2932,29 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.fp-stop-button {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  z-index: 1200;
+  transform: translateX(-50%);
+  padding: 10px 20px;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 999px;
+  background: rgba(254, 242, 242, 0.96);
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 12px 36px rgba(26, 40, 71, 0.12);
+  backdrop-filter: blur(12px);
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.fp-stop-button:hover {
+  background: rgba(254, 226, 226, 0.98);
+  border-color: rgba(248, 113, 113, 0.65);
 }
 </style>
 

@@ -38,6 +38,7 @@ import java.util.stream.Collectors;
 public class KnowledgeTreeService {
 
     private static final String STATUS_PENDING = "pending";
+    private static final int MAX_TREE_DEPTH = 3;
     private static final Set<String> MESSAGE_ROLES = Set.of("USER", "ASSISTANT", "SYSTEM");
 
     private final KnowledgeTreeMapper treeMapper;
@@ -55,7 +56,13 @@ public class KnowledgeTreeService {
                 .eq(KnowledgeTree::getUserId, userId));
         if (existing != null) {
             List<KnowledgeNode> nodes = loadNodes(existing.getId());
-            nodes = syncResourceNodes(existing, nodes);
+            // 自愈：树只有根节点但 DB 已有资源时，自动补建 L1 模块
+            if (needsL1SelfHeal(nodes)) {
+                List<ModuleSeed> seeds = moduleSeedsFromResources(planId);
+                if (!seeds.isEmpty()) {
+                    nodes = reconcilePrimaryModules(existing, nodes, seeds);
+                }
+            }
             return toTreeResponse(existing, nodes);
         }
 
@@ -102,11 +109,9 @@ public class KnowledgeTreeService {
         if (moduleSeeds.isEmpty()) {
             moduleSeeds = moduleSeedsFromLearningGoal(plan.getLearningGoal());
         }
-        if (moduleSeeds.isEmpty()) {
-            moduleSeeds = List.of(new ModuleSeed("学习总览", "从整体目标开始梳理学习路径", null, null));
+        if (!moduleSeeds.isEmpty()) {
+            insertModuleNodesBatch(tree.getId(), root.getId(), moduleSeeds, now, nodes);
         }
-
-        insertModuleNodesBatch(tree.getId(), root.getId(), moduleSeeds, now, nodes);
         for (KnowledgeNode node : nodes) {
             if (node.getResourceId() != null && !Objects.equals(node.getId(), root.getId())) {
                 linkResourceToNode(node.getResourceId(), node.getId(), node.getTitle());
@@ -114,6 +119,20 @@ public class KnowledgeTreeService {
         }
 
         return toTreeResponse(tree, nodes);
+    }
+
+    /** 判断树是否需要自愈 L1 节点：有根节点但没有任何 L1 子节点。 */
+    private boolean needsL1SelfHeal(List<KnowledgeNode> nodes) {
+        KnowledgeNode root = nodes.stream()
+                .filter(n -> n.getParentId() == null || n.getParentId().isBlank())
+                .findFirst()
+                .orElse(null);
+        if (root == null) {
+            return false;
+        }
+        boolean hasL1Children = nodes.stream()
+                .anyMatch(n -> Objects.equals(root.getId(), n.getParentId()));
+        return !hasL1Children;
     }
 
     /** 批量创建一级模块节点，减少 DB 往返。 */
@@ -330,7 +349,7 @@ public class KnowledgeTreeService {
     @Transactional
     public KnowledgeTreeDtos.TreeResponse getTree(String treeId, Long userId) {
         KnowledgeTree tree = requireOwnedTree(treeId, userId);
-        List<KnowledgeNode> nodes = syncResourceNodes(tree, loadNodes(treeId));
+        List<KnowledgeNode> nodes = loadNodes(treeId);
         return toTreeResponse(tree, nodes);
     }
 
@@ -343,7 +362,7 @@ public class KnowledgeTreeService {
         if (tree == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND);
         }
-        List<KnowledgeNode> nodes = syncResourceNodes(tree, loadNodes(tree.getId()));
+        List<KnowledgeNode> nodes = loadNodes(tree.getId());
         return toTreeResponse(tree, nodes);
     }
 
@@ -389,7 +408,7 @@ public class KnowledgeTreeService {
         node.setImportance(defaultInt(request.getImportance(), 2));
         node.setRelevanceScore(defaultInt(request.getRelevanceScore(), 2));
         node.setDifficulty(defaultInt(request.getDifficulty(), 2));
-        node.setDepth(defaultInt(request.getDepth(), parent != null ? defaultInt(parent.getDepth(), 0) + 1 : 0));
+        node.setDepth(resolveNodeDepth(parent, request.getDepth()));
         node.setSortOrder(defaultInt(request.getSortOrder(), 0));
         node.setPrerequisiteIds(toJson(request.getPrerequisiteIds()));
         node.setIsFundamental(defaultBoolean(request.getIsFundamental(), false));
@@ -444,7 +463,7 @@ public class KnowledgeTreeService {
             node.setImportance(defaultInt(nodeRequest.getImportance(), 2));
             node.setRelevanceScore(defaultInt(nodeRequest.getRelevanceScore(), 2));
             node.setDifficulty(defaultInt(nodeRequest.getDifficulty(), 2));
-            node.setDepth(defaultInt(nodeRequest.getDepth(), parent != null ? defaultInt(parent.getDepth(), 0) + 1 : 0));
+            node.setDepth(resolveNodeDepth(parent, nodeRequest.getDepth()));
             node.setSortOrder(defaultInt(nodeRequest.getSortOrder(), 0));
             node.setPrerequisiteIds(toJson(nodeRequest.getPrerequisiteIds()));
             node.setIsFundamental(defaultBoolean(nodeRequest.getIsFundamental(), false));
@@ -524,6 +543,93 @@ public class KnowledgeTreeService {
         }
     }
 
+    /**
+     * 删除指定节点及其所有后代（硬删除）。
+     * 级联删除 tree_message，解除 learning_resource 关联，重置 tree.currentNodeId。
+     * 根节点（parentId == null）不可删除。
+     */
+    @Transactional
+    public List<String> deleteNode(String nodeId, Long userId) {
+        KnowledgeNode node = requireOwnedNode(nodeId, userId);
+
+        // 禁止删除根节点
+        if (node.getParentId() == null || node.getParentId().isBlank()) {
+            throw new BusinessException(400, "不能删除根节点");
+        }
+
+        String treeId = node.getTreeId();
+        List<KnowledgeNode> allNodes = loadNodes(treeId);
+
+        // 递归收集要删除的节点 ID（本节点 + 所有后代）
+        Set<String> idsToDelete = new HashSet<>();
+        collectDescendantIds(allNodes, nodeId, idsToDelete);
+        idsToDelete.add(nodeId);
+
+        // 1. 删除关联的 tree_message
+        messageMapper.delete(new LambdaQueryWrapper<TreeMessage>()
+                .in(TreeMessage::getNodeId, idsToDelete));
+
+        // 2. 解除 learning_resource 与这些节点的关联
+        for (KnowledgeNode n : allNodes) {
+            if (idsToDelete.contains(n.getId()) && n.getResourceId() != null) {
+                clearResourceNodeLink(n.getResourceId(), n.getId());
+            }
+        }
+
+        // 3. 删除节点
+        nodeMapper.deleteBatchIds(new ArrayList<>(idsToDelete));
+
+        // 4. 如果 tree.currentNodeId 指向被删节点，重置
+        KnowledgeTree tree = treeMapper.selectById(treeId);
+        if (tree != null && tree.getCurrentNodeId() != null && idsToDelete.contains(tree.getCurrentNodeId())) {
+            tree.setCurrentNodeId(node.getParentId());
+            tree.setUpdatedAt(LocalDateTime.now());
+            treeMapper.updateById(tree);
+        }
+
+        return new ArrayList<>(idsToDelete);
+    }
+
+    private void collectDescendantIds(List<KnowledgeNode> allNodes, String parentId, Set<String> accumulator) {
+        for (KnowledgeNode n : allNodes) {
+            if (Objects.equals(parentId, n.getParentId())) {
+                accumulator.add(n.getId());
+                collectDescendantIds(allNodes, n.getId(), accumulator);
+            }
+        }
+    }
+
+    /** 清除 learning_resource.moduleData 中指向已删节点的 nodeId 引用 */
+    private void clearResourceNodeLink(Long resourceId, String nodeId) {
+        LearningResource resource = resourceMapper.selectById(resourceId);
+        if (resource == null || resource.getModuleData() == null) return;
+        try {
+            JsonNode data = parseJson(resource.getModuleData());
+            if (data != null && data.isObject()) {
+                ObjectNode obj = (ObjectNode) data;
+                boolean changed = false;
+                if (nodeId.equals(textOrNull(obj.get("nodeId")))) {
+                    obj.remove("nodeId");
+                    changed = true;
+                }
+                if (nodeId.equals(textOrNull(obj.get("node_id")))) {
+                    obj.remove("node_id");
+                    changed = true;
+                }
+                if (changed) {
+                    resource.setModuleData(obj.toString());
+                    resourceMapper.updateById(resource);
+                }
+            }
+        } catch (Exception ignored) {
+            // moduleData 解析失败时跳过
+        }
+    }
+
+    private String textOrNull(JsonNode node) {
+        return node != null && node.isTextual() ? node.asText() : null;
+    }
+
     public KnowledgeTreeDtos.MessageResponse toMessageResponse(TreeMessage message) {
         KnowledgeTreeDtos.MessageResponse response = new KnowledgeTreeDtos.MessageResponse();
         response.setId(message.getId());
@@ -558,7 +664,10 @@ public class KnowledgeTreeService {
         if (request.getImportance() != null) node.setImportance(request.getImportance());
         if (request.getRelevanceScore() != null) node.setRelevanceScore(request.getRelevanceScore());
         if (request.getDifficulty() != null) node.setDifficulty(request.getDifficulty());
-        if (request.getDepth() != null) node.setDepth(request.getDepth());
+        if (request.getDepth() != null && request.getParentId() == null) {
+            assertDepthWithinLimit(request.getDepth());
+            node.setDepth(request.getDepth());
+        }
         if (request.getSortOrder() != null) node.setSortOrder(request.getSortOrder());
         if (request.getPrerequisiteIds() != null) node.setPrerequisiteIds(toJson(request.getPrerequisiteIds()));
         if (request.getIsFundamental() != null) node.setIsFundamental(request.getIsFundamental());
@@ -601,7 +710,9 @@ public class KnowledgeTreeService {
 
         node.setParentId(newParentId);
         int parentDepth = defaultInt(newParent.getDepth(), 0);
-        node.setDepth(parentDepth + 1);
+        int nextDepth = parentDepth + 1;
+        assertSubtreeWithinDepthLimit(node.getId(), nextDepth);
+        node.setDepth(nextDepth);
         if (requestedSortOrder != null) {
             node.setSortOrder(requestedSortOrder);
         } else {
@@ -637,11 +748,45 @@ public class KnowledgeTreeService {
         }
         for (KnowledgeNode child : children) {
             int depth = parentDepth + 1;
+            assertDepthWithinLimit(depth);
             child.setDepth(depth);
             child.setUpdatedAt(LocalDateTime.now());
             nodeMapper.updateById(child);
             recalcDepthForSubtree(child.getId(), depth);
         }
+    }
+
+    private int resolveNodeDepth(KnowledgeNode parent, Integer requestedDepth) {
+        int depth = parent != null
+                ? defaultInt(parent.getDepth(), 0) + 1
+                : defaultInt(requestedDepth, 0);
+        assertDepthWithinLimit(depth);
+        return depth;
+    }
+
+    private void assertDepthWithinLimit(int depth) {
+        if (depth < 0 || depth > MAX_TREE_DEPTH) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST);
+        }
+    }
+
+    private void assertSubtreeWithinDepthLimit(String nodeId, int nextDepth) {
+        assertDepthWithinLimit(nextDepth);
+        int subtreeHeight = subtreeHeight(nodeId);
+        assertDepthWithinLimit(nextDepth + subtreeHeight);
+    }
+
+    private int subtreeHeight(String nodeId) {
+        List<KnowledgeNode> children = nodeMapper.selectList(new LambdaQueryWrapper<KnowledgeNode>()
+                .eq(KnowledgeNode::getParentId, nodeId));
+        if (children == null || children.isEmpty()) {
+            return 0;
+        }
+        int maxChildHeight = 0;
+        for (KnowledgeNode child : children) {
+            maxChildHeight = Math.max(maxChildHeight, subtreeHeight(child.getId()));
+        }
+        return maxChildHeight + 1;
     }
 
     private LearningPlan requireOwnedPlan(Long planId, Long userId) {

@@ -8,7 +8,7 @@
     role="button"
     tabindex="0"
     :aria-label="`选择知识节点：${node.title || '未命名节点'}`"
-    @click="emit('select', node.id)"
+    @click="handleClick"
     @keydown.enter.prevent="selectFromKeyboard"
     @keydown.space.prevent="selectFromKeyboard"
   >
@@ -33,7 +33,7 @@
               <circle cx="7.5" cy="13.5" r="1.2" />
             </svg>
           </span>
-          <h3 class="truncate text-sm font-semibold text-navy-800 flex-1" :title="node.title">
+          <h3 class="line-clamp-2 text-sm font-semibold leading-tight text-navy-800 flex-1" :title="node.title">
             {{ node.title || '未命名节点' }}
           </h3>
           <span class="status-badge" :class="statusClass">{{ statusLabel }}</span>
@@ -54,6 +54,17 @@
         </svg>
         <svg v-else class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      <button
+        v-if="draggable"
+        class="node-delete-btn icon-button h-7 w-7 flex-shrink-0"
+        title="删除此节点及子节点"
+        @click.stop="emit('delete-node', node.id)"
+      >
+        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6" />
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
         </svg>
       </button>
     </div>
@@ -84,29 +95,33 @@
     </div>
 
     <button
-      class="node-action mt-3 w-full"
-      :class="{ 'node-action--disabled': atMaxDepth }"
-      :title="atMaxDepth ? '已达 3 层上限，无法继续拆分' : '拆分当前节点'"
+      v-if="draggable"
+      class="node-split mt-3 w-full"
+      :class="{ 'node-split--disabled': atMaxDepth }"
+      :title="atMaxDepth ? '已达最深层，无法继续拆分' : '拆分当前节点为子知识点'"
       :disabled="atMaxDepth"
       @click.stop="!atMaxDepth && emit('open-subdivide', node.id)"
     >
-      <svg class="h-3.5 w-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M8 6h13" />
-        <path d="M8 12h13" />
-        <path d="M8 18h13" />
-        <path d="M3 6h.01" />
-        <path d="M3 12h.01" />
-        <path d="M3 18h.01" />
+      <svg class="node-split-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <path d="M4 3v10" />
+        <path d="M4 5.5h4.5a2 2 0 0 1 2 2v0" />
+        <path d="M4 10.5h4.5a2 2 0 0 0 2-2v0" />
+        <circle cx="12" cy="7.5" r="0.8" fill="currentColor" stroke="none" />
+        <circle cx="12" cy="5" r="0.8" fill="currentColor" stroke="none" />
+        <circle cx="12" cy="10" r="0.8" fill="currentColor" stroke="none" />
       </svg>
-      <span class="truncate">拆分</span>
+      <span class="truncate">拆分为子知识点</span>
     </button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject, ref, type Ref } from 'vue'
 import type { KnowledgeNode } from '@/types/knowledgeTree'
+import { useKnowledgeTreeStore } from '@/stores/knowledgeTree'
 import { setNodeDragData } from './useTreeDragDrop'
+
+const treeStore = useKnowledgeTreeStore()
 
 const props = defineProps<{
   node: KnowledgeNode
@@ -119,14 +134,23 @@ const emit = defineEmits<{
   select: [nodeId: string]
   'toggle-collapse': [nodeId: string]
   'open-subdivide': [nodeId: string]
+  'delete-node': [nodeId: string]
   'drag-start': [nodeId: string]
   'drag-end': []
 }>()
 
 const draggable = computed(() => Boolean(props.rootNodeId && props.node.id !== props.rootNodeId))
 
-/** 知识树最多 3 层：depth 0 根 / 1 主模块 / 2 子知识点 */
-const atMaxDepth = computed(() => (props.node.depth ?? 0) >= 2)
+/** 画布拖拽中时不触发节点选择 */
+const hasDragged = inject<Ref<boolean>>('treeHasDragged', ref(false))
+
+function handleClick() {
+  if (hasDragged.value) return
+  emit('select', props.node.id)
+}
+
+/** depth=3 为最深层，不可再拆分 */
+const atMaxDepth = computed(() => treeStore.isAtMaxDepth(props.node.id))
 
 const hasPrerequisites = computed(() => Boolean(props.node.prerequisiteIds?.length))
 
@@ -202,12 +226,22 @@ function onDragStart(event: DragEvent) {
 
 <style scoped>
 .tree-node {
-  width: 236px;
-  height: 172px;
+  width: 260px;
+  min-height: 172px;
+  height: auto;
+  user-select: none;
+  -webkit-user-select: none;
   border-width: 1px;
   border-radius: 8px;
   padding: 12px;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  animation: nodeFadeIn 0.35s ease both;
+  animation-delay: var(--node-enter-delay, 0ms);
+}
+
+@keyframes nodeFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .tree-node:focus-visible {
@@ -320,37 +354,78 @@ function onDragStart(event: DragEvent) {
   transition: background-color 0.18s ease, color 0.18s ease;
 }
 
-.node-action {
+.node-split {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
+  gap: 7px;
   height: 30px;
   min-width: 0;
+  border: 1px solid rgba(65, 100, 178, 0.15);
   border-radius: 7px;
-  background: rgb(248 250 252);
-  padding: 0 8px;
-  font-size: 12px;
+  background: linear-gradient(135deg, rgba(234, 240, 255, 0.5) 0%, rgba(248, 250, 252, 0.8) 100%);
+  padding: 0 10px;
+  font-size: 11.5px;
   font-weight: 600;
-  color: rgb(71 85 105);
-  transition: background-color 0.18s ease, color 0.18s ease;
+  color: #4164b2;
+  transition: all 0.2s ease;
 }
 
-.node-action:hover {
-  background: rgb(226 232 240);
-  color: rgb(30 41 59);
+.node-split::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2.5px;
+  border-radius: 0 2px 2px 0;
+  background: #4164b2;
+  opacity: 0.35;
+  transition: opacity 0.2s ease;
 }
 
-.node-action--disabled,
-.node-action:disabled {
+.node-split:hover {
+  border-color: rgba(65, 100, 178, 0.3);
+  background: linear-gradient(135deg, rgba(234, 240, 255, 0.85) 0%, rgba(223, 232, 255, 0.7) 100%);
+  color: #294a91;
+}
+
+.node-split:hover::before {
+  opacity: 0.7;
+}
+
+.node-split-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+.node-split:hover .node-split-icon {
+  opacity: 1;
+}
+
+.node-split--disabled,
+.node-split:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  border-color: rgba(26, 40, 71, 0.08);
+  background: rgb(248 250 252);
+  color: rgb(148 163 184);
+  opacity: 0.5;
 }
 
-.node-action--disabled:hover,
-.node-action:disabled:hover {
+.node-split--disabled::before,
+.node-split:disabled::before {
+  background: rgb(148 163 184);
+  opacity: 0.2;
+}
+
+.node-split--disabled:hover,
+.node-split:disabled:hover {
+  border-color: rgba(26, 40, 71, 0.08);
   background: rgb(248 250 252);
-  color: rgb(71 85 105);
+  color: rgb(148 163 184);
 }
 
 .line-clamp-2 {
@@ -358,5 +433,20 @@ function onDragStart(event: DragEvent) {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.node-delete-btn {
+  color: rgb(203 213 225);
+  opacity: 0;
+  transition: opacity 0.18s ease, color 0.18s ease, background-color 0.18s ease;
+}
+
+.tree-node:hover .node-delete-btn {
+  opacity: 1;
+}
+
+.node-delete-btn:hover {
+  color: rgb(239 68 68);
+  background: rgb(254 242 242);
 }
 </style>

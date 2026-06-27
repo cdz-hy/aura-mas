@@ -95,6 +95,10 @@ export interface TreeSseHandlers {
   onNodes?: (nodes: KnowledgeNode[]) => void
   onResources?: (resources: TreeGeneratedResource[]) => void
   onFlashcards?: (cards: TreeFlashcard[]) => void
+  onBranchDone?: (data: { parent_id: string; parent_title: string; children: KnowledgeNode[] }) => void
+  onFpLayer?: (data: { parent_id: string; parent_title: string; children: KnowledgeNode[]; reached_bottom: boolean; parent?: KnowledgeNode | null }) => void
+  onAllDone?: () => void
+  onCancelled?: (reason: string) => void
   onDone?: () => void
   onError?: (error: string) => void
 }

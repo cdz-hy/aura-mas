@@ -32,15 +32,25 @@
       :style="stageStyle"
     >
       <svg class="absolute overflow-visible" :style="svgStyle" :viewBox="svgViewBox">
-        <path
-          v-for="edge in edgePaths"
-          :key="`${edge.fromNodeId}-${edge.toNodeId}`"
-          :d="edge.d"
-          fill="none"
-          :stroke="edge.kind === 'main' ? '#4164b2' : '#9aa9bd'"
-          :stroke-width="edge.kind === 'main' ? 2 : 1.5"
-          stroke-linecap="round"
-        />
+        <g v-for="edge in edgePaths" :key="`${edge.fromNodeId}-${edge.toNodeId}`">
+          <path
+            :d="edge.d"
+            fill="none"
+            :stroke="edge.kind === 'main' ? '#4164b2' : '#9aa9bd'"
+            :stroke-width="edge.kind === 'main' ? 2 : 1.5"
+            stroke-linecap="round"
+          />
+          <path
+            v-if="edge.animated"
+            :d="edge.d"
+            class="edge-flow"
+            :class="edge.kind === 'main' ? 'edge-flow--main' : 'edge-flow--branch'"
+            fill="none"
+            stroke-width="3"
+            stroke-linecap="round"
+            :style="{ animationDelay: `${edge.flowDelay}ms` }"
+          />
+        </g>
       </svg>
 
       <KnowledgeTreeNode
@@ -55,6 +65,7 @@
         @select="$emit('select', $event)"
         @toggle-collapse="$emit('toggle-collapse', $event)"
         @open-subdivide="$emit('open-subdivide', $event)"
+        @delete-node="$emit('delete-node', $event)"
         @drag-start="$emit('node-drag-start', $event)"
         @drag-end="$emit('node-drag-end')"
       />
@@ -63,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch, reactive } from 'vue'
 import KnowledgeTreeNode from './KnowledgeTreeNode.vue'
 import {
   buildTreeLayout,
@@ -74,12 +85,13 @@ import {
 } from './useTreeLayout'
 import type { KnowledgeNode } from '@/types/knowledgeTree'
 
-const NODE_WIDTH = 236
+const NODE_WIDTH = 260
 const NODE_HEIGHT = 172
 const MIN_ZOOM = 0.35
 const MAX_ZOOM = 1.6
 const FIT_PADDING_X = 96
 const FIT_PADDING_Y = 120
+const DRAG_THRESHOLD = 5
 
 const props = defineProps<{
   nodes: KnowledgeNode[]
@@ -94,6 +106,7 @@ const emit = defineEmits<{
   select: [nodeId: string]
   'toggle-collapse': [nodeId: string]
   'open-subdivide': [nodeId: string]
+  'delete-node': [nodeId: string]
   'node-drag-start': [nodeId: string]
   'node-drag-end': []
   'update:panX': [value: number]
@@ -107,6 +120,9 @@ const localPanY = ref(props.panY ?? 0)
 const localZoom = ref(clampZoom(props.zoom ?? 1))
 const panning = ref(false)
 const lastPointer = ref({ x: 0, y: 0 })
+const dragStartPos = ref({ x: 0, y: 0 })
+const hasDragged = ref(false)
+provide('treeHasDragged', hasDragged)
 let resizeObserver: ResizeObserver | null = null
 /**
  * 仅在“整树首次加载/切换计划”时自动 fit 一次。
@@ -172,6 +188,8 @@ const visibleNodeIds = computed(() => {
 
 const edgePaths = computed(() => {
   const visible = visibleNodeIds.value
+  const animated = props.nodes.length > 2
+  let flowIndex = 0
   return layout.value.edges
     .map(edge => {
       const from = itemByNodeId.value.get(edge.fromNodeId)
@@ -179,6 +197,8 @@ const edgePaths = computed(() => {
       if (!from || !to) return null
       // 大树虚拟化：两端节点都不在可见集合内时跳过该边
       if (visible && !visible.has(edge.fromNodeId) && !visible.has(edge.toNodeId)) return null
+      const flowDelay = (flowIndex * 300) % 2500
+      flowIndex += 1
       if (edge.kind === 'main') {
         const startX = from.x
         const startY = from.y - NODE_HEIGHT / 2
@@ -188,6 +208,8 @@ const edgePaths = computed(() => {
         return {
           ...edge,
           d: `M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`,
+          animated,
+          flowDelay,
         }
       }
 
@@ -200,6 +222,8 @@ const edgePaths = computed(() => {
       return {
         ...edge,
         d: `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`,
+        animated,
+        flowDelay,
       }
     })
     .filter((edge): edge is NonNullable<typeof edge> => Boolean(edge))
@@ -270,10 +294,31 @@ watch(visibleLayoutKey, () => {
   }
 })
 
+// 追踪新出现的节点，用于交错入场动画
+const newNodeDelays = reactive(new Map<string, number>())
+let prevNodeIds = new Set<string>()
+
+watch(() => props.nodes, (nodes) => {
+  const currentIds = new Set(nodes.map(n => n.id))
+  const freshIds = nodes.filter(n => !prevNodeIds.has(n.id)).map(n => n.id)
+  if (freshIds.length > 0) {
+    freshIds.forEach((id, i) => {
+      newNodeDelays.set(id, i * 60) // 每个新节点延迟 60ms
+    })
+    // 动画结束后清理
+    setTimeout(() => {
+      freshIds.forEach(id => newNodeDelays.delete(id))
+    }, 600 + freshIds.length * 60)
+  }
+  prevNodeIds = currentIds
+}, { deep: false })
+
 function nodeStyle(item: TreeLayoutItem) {
+  const delay = newNodeDelays.get(item.node.id) ?? 0
   return {
     transform: `translate(${item.x - NODE_WIDTH / 2}px, ${item.y - NODE_HEIGHT / 2}px)`,
-  }
+    '--node-enter-delay': `${delay}ms`,
+  } as Record<string, string>
 }
 
 function onWheel(event: WheelEvent) {
@@ -292,6 +337,8 @@ function setZoom(value: number) {
 
 function onPointerDown(event: PointerEvent) {
   if ((event.target as HTMLElement).closest('button')) return
+  dragStartPos.value = { x: event.clientX, y: event.clientY }
+  hasDragged.value = false
   panning.value = true
   lastPointer.value = { x: event.clientX, y: event.clientY }
   viewportRef.value?.setPointerCapture(event.pointerId)
@@ -299,6 +346,10 @@ function onPointerDown(event: PointerEvent) {
 
 function onPointerMove(event: PointerEvent) {
   if (!panning.value) return
+  const totalDx = event.clientX - dragStartPos.value.x
+  const totalDy = event.clientY - dragStartPos.value.y
+  if (!hasDragged.value && Math.hypot(totalDx, totalDy) < DRAG_THRESHOLD) return
+  hasDragged.value = true
   const dx = event.clientX - lastPointer.value.x
   const dy = event.clientY - lastPointer.value.y
   lastPointer.value = { x: event.clientX, y: event.clientY }
@@ -314,6 +365,10 @@ function endPan(event: PointerEvent) {
   if (viewportRef.value?.hasPointerCapture(event.pointerId)) {
     viewportRef.value.releasePointerCapture(event.pointerId)
   }
+  // click 在 pointerup 之后触发，延迟重置以免误选节点
+  setTimeout(() => {
+    hasDragged.value = false
+  }, 0)
 }
 
 function centerView() {
@@ -355,6 +410,8 @@ function clampZoom(value: number) {
 
 <style scoped>
 .tree-canvas {
+  user-select: none;
+  -webkit-user-select: none;
   background-image:
     linear-gradient(rgba(26, 40, 71, 0.045) 1px, transparent 1px),
     linear-gradient(90deg, rgba(26, 40, 71, 0.045) 1px, transparent 1px);
@@ -375,5 +432,34 @@ function clampZoom(value: number) {
 .toolbar-button:hover {
   background: rgb(241 245 249);
   color: rgb(30 41 59);
+}
+
+/* 子→父方向的知识汇聚流动光点 */
+.edge-flow {
+  stroke-dasharray: 4 28;
+  animation: flowUp 2.5s linear infinite;
+  opacity: 0.65;
+  filter: blur(0.5px);
+  pointer-events: none;
+}
+
+.edge-flow--main {
+  stroke: #8ab4ff;
+}
+
+.edge-flow--branch {
+  stroke: #c8d6e8;
+}
+
+@keyframes flowUp {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -32; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .edge-flow {
+    animation: none;
+    opacity: 0;
+  }
 }
 </style>

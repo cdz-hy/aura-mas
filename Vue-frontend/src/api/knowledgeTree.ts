@@ -21,6 +21,10 @@ export function updateKnowledgeNode(nodeId: string, data: Partial<KnowledgeNode>
   return request.patch<any, { data: KnowledgeNode }>(`/knowledge-tree/nodes/${nodeId}`, data)
 }
 
+export function deleteKnowledgeNode(nodeId: string) {
+  return request.delete<any, { data: { deletedIds: string[] } }>(`/knowledge-tree/nodes/${nodeId}`)
+}
+
 export function getKnowledgeNodeMessages(nodeId: string) {
   return request.get<any, { data: TreeMessage[] }>(`/knowledge-tree/nodes/${nodeId}/messages`)
 }
@@ -47,6 +51,35 @@ export function streamTreeBootstrap(
   return createTreeSse(
     `/api/ai/tree/plan/${planId}/bootstrap`,
     { ticket, tree_id: treeId, mode },
+    handlers,
+  )
+}
+
+export function fetchPreviewTopics(
+  ticket: string,
+  planId: number,
+  treeId: string,
+  mode: TreeSplitMode = 'Lite',
+) {
+  return request.get<any, { data: { topics: Array<{ title: string; summary: string; custom: boolean }> } }>(
+    `${PYTHON_AI_BASE}/api/ai/tree/plan/${planId}/preview-topics`,
+    { params: { ticket, tree_id: treeId, mode } },
+  )
+}
+
+export function streamGrowChildren(
+  ticket: string,
+  planId: number,
+  treeId: string,
+  mode: TreeSplitMode,
+  handlers: TreeSseHandlers,
+  topicsOverride?: Array<{ title: string; summary: string }>,
+): EventSource {
+  const params: Record<string, string> = { ticket, tree_id: treeId, mode }
+  if (topicsOverride) params.topics_override = JSON.stringify(topicsOverride)
+  return createTreeSse(
+    `/api/ai/tree/plan/${planId}/grow-children`,
+    params,
     handlers,
   )
 }
@@ -101,10 +134,11 @@ export function streamTreeFirstPrinciples(
   nodeId: string,
   mode: TreeSplitMode,
   handlers: TreeSseHandlers,
+  maxDepth: number = 6,
 ): EventSource {
   return createTreeSse(
     `/api/ai/tree/${treeId}/nodes/${nodeId}/first-principles`,
-    { ticket, mode },
+    { ticket, mode, max_depth: String(maxDepth) },
     handlers,
   )
 }
@@ -178,6 +212,20 @@ function createTreeSse(
         case 'flashcards_generated':
           handlers.onFlashcards?.(data.cards || [])
           break
+        case 'branch_done':
+          handlers.onBranchDone?.(data)
+          break
+        case 'fp_layer':
+          handlers.onFpLayer?.(data)
+          break
+        case 'all_done':
+          handlers.onAllDone?.()
+          source.close()
+          break
+        case 'cancelled':
+          handlers.onCancelled?.(data.reason || '')
+          source.close()
+          break
         case 'done':
           handlers.onDone?.()
           source.close()
@@ -196,7 +244,7 @@ function createTreeSse(
 
   source.onmessage = (event) => handleData(event.data)
 
-  for (const eventType of ['progress', 'thinking', 'group_preview', 'chunk', 'stream_text', 'message', 'message_saved', 'nodes', 'nodes_created', 'resource_generated', 'flashcards_generated', 'done', 'error']) {
+  for (const eventType of ['progress', 'thinking', 'group_preview', 'chunk', 'stream_text', 'message', 'message_saved', 'nodes', 'nodes_created', 'resource_generated', 'flashcards_generated', 'branch_done', 'fp_layer', 'all_done', 'cancelled', 'done', 'error']) {
     source.addEventListener(eventType, (event: MessageEvent) => handleData(event.data))
   }
 

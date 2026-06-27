@@ -71,6 +71,48 @@ async def bootstrap_tree(
     )
 
 
+@router.get("/tree/plan/{plan_id}/preview-topics")
+async def preview_topics(
+    plan_id: int,
+    tree_id: str = Query(...),
+    ticket: str = Query(...),
+    mode: str = Query("Lite"),
+):
+    user_id = _user_id_from_ticket(ticket)
+    _verify_plan_tree_access(plan_id, tree_id, user_id)
+    service = get_knowledge_tree_ai_service()
+    topics = await service.preview_topics(user_id, plan_id, tree_id, mode)
+    return {"topics": topics}
+
+
+@router.get("/tree/plan/{plan_id}/grow-children")
+async def grow_children(
+    plan_id: int,
+    tree_id: str = Query(...),
+    ticket: str = Query(...),
+    mode: str = Query("Lite"),
+    topics_override: str = Query(None),
+):
+    user_id = _user_id_from_ticket(ticket)
+    _verify_plan_tree_access(plan_id, tree_id, user_id)
+    service = get_knowledge_tree_ai_service()
+    parsed = None
+    if topics_override:
+        try:
+            parsed = json.loads(topics_override)
+        except json.JSONDecodeError:
+            pass
+    return StreamingResponse(
+        _event_stream(service.grow_children_stream(
+            user_id=user_id,
+            tree_id=tree_id,
+            mode=mode,
+            topics_override=parsed,
+        )),
+        media_type="text/event-stream",
+    )
+
+
 @router.get("/tree/{tree_id}/nodes/{node_id}/explain")
 async def explain_node(
     tree_id: str,
@@ -159,6 +201,7 @@ async def first_principles_node(
     node_id: str,
     ticket: str = Query(...),
     mode: str = Query("Lite"),
+    max_depth: int = Query(6),
 ):
     user_id = _user_id_from_ticket(ticket)
     _verify_node_access(tree_id, node_id, user_id)
@@ -169,6 +212,7 @@ async def first_principles_node(
             tree_id=tree_id,
             node_id=node_id,
             mode=mode,
+            max_depth=max(1, min(int(max_depth), 10)),
             is_disconnected=request.is_disconnected,
         )),
         media_type="text/event-stream",

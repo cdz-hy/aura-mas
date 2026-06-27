@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @Tag(name = "交互式知识树")
 @RestController
@@ -50,6 +52,15 @@ public class KnowledgeTreeController {
                                                             @RequestBody KnowledgeTreeDtos.UpdateNodeRequest request) {
         Long userId = (Long) authentication.getPrincipal();
         return Result.success(treeService.updateNode(nodeId, userId, request));
+    }
+
+    @Operation(summary = "删除知识树节点（级联删除子节点及消息）")
+    @DeleteMapping("/nodes/{nodeId}")
+    public Result<Map<String, List<String>>> deleteNode(Authentication authentication,
+                                                        @PathVariable String nodeId) {
+        Long userId = (Long) authentication.getPrincipal();
+        List<String> deletedIds = treeService.deleteNode(nodeId, userId);
+        return Result.success(Map.of("deletedIds", deletedIds));
     }
 
     @Operation(summary = "获取节点消息")

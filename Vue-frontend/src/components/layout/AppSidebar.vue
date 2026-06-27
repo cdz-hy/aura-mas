@@ -26,7 +26,7 @@
 
     <!-- Navigation -->
     <nav class="flex-1 py-4 space-y-1 overflow-y-auto" :class="uiStore.sidebarCollapsed ? 'px-2' : 'px-3'">
-      <template v-for="item in permissionStore.menus" :key="item.code">
+      <template v-for="item in navMenus" :key="item.code">
         <!-- Section header with children -->
         <template v-if="item.type === 'section' && item.children?.length">
           <div class="pt-4 mt-4 border-t border-navy-100/50">
@@ -105,20 +105,30 @@ import { useRoute } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionStore } from '@/stores/permission'
+import type { MenuItem } from '@/types/menu'
+
+const HIDDEN_SIDEBAR_CODES = new Set(['knowledge-tree'])
+
+function filterSidebarMenus(items: MenuItem[]): MenuItem[] {
+  return items
+    .filter(item => !HIDDEN_SIDEBAR_CODES.has(item.code))
+    .map(item => (
+      item.children?.length
+        ? { ...item, children: filterSidebarMenus(item.children) }
+        : item
+    ))
+}
 
 const route = useRoute()
 const uiStore = useUiStore()
 const authStore = useAuthStore()
 const permissionStore = usePermissionStore()
 
+const navMenus = computed(() => filterSidebarMenus(permissionStore.menus))
+
 const roleLabel = computed(() => authStore.user?.role === 'admin' ? '管理员' : '学生')
 
 function isActive(path: string) {
-  if (path === '/knowledge-tree') {
-    return route.name === 'PlanKnowledgeTree'
-      || route.path === path
-      || (route.name === 'PlanDetail' && route.query.view === 'tree')
-  }
   return route.path === path
 }
 

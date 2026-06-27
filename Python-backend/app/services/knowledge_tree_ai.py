@@ -21,8 +21,8 @@ MODE_LIMITS = {
     "Zen": (4, 5),
 }
 
-# 知识树最大深度（0=根/计划，1=主模块，2=子知识点 → 共 3 层）
-MAX_TREE_DEPTH = 2
+# 知识树最大深度（0=根，1=主模块，2=细分知识点，3=最细知识点）
+MAX_TREE_DEPTH = 3
 # 多角度拆分时每组最多子节点（Lite 再收紧）
 MAX_MULTI_ANGLE_GROUPS = {"Lite": 2, "Medium": 3, "Zen": 3}
 
@@ -274,8 +274,10 @@ class KnowledgeTreeAiService:
                 self._children_json_system_prompt(),
                 prompt,
             ))
-            group_title = self._group_title(result, angle, str(node_context.get("node", {}).get("title") or ""))
-            yield {"type": "group_preview", "content": group_title}
+            preview_title = self._split_preview_title(
+                angle, str(node_context.get("node", {}).get("title") or ""),
+            )
+            yield {"type": "group_preview", "content": preview_title}
             children = self._limit_children(self._coerce_children(result), mode)
             children = self._dedup_and_calibrate(children, node_context)
             nodes = self._create_grouped_children(tree_id, node_id, result, angle, children, node_context)
@@ -300,6 +302,18 @@ class KnowledgeTreeAiService:
             return cached[1]
 
         node_context = self._build_node_context(user_id, tree_id, node_id)
+        depth_err = self._subdivide_depth_error(node_context)
+        if depth_err:
+            return {
+                "tree_id": tree_id,
+                "node_id": node_id,
+                "options": [],
+                "caution": {
+                    "label": "已达最深层",
+                    "rationale": depth_err,
+                },
+                "search_results": [],
+            }
         search_query = f"{node_context.get('node', {}).get('title', '')} 知识点拆分角度".strip()
         search_results, context_chunks = await self._search(search_query or "知识点拆分角度")
         prompt = self._subdivision_options_prompt_dict(node_id, context_chunks, node_context, mode)
@@ -314,6 +328,13 @@ class KnowledgeTreeAiService:
             "caution": self._normalize_caution(result),
             "search_results": search_results,
         }
+        # 本地 depth-based caution 兜底：LLM 可能漏给 caution
+        if not payload.get("caution"):
+            node = node_context.get("node", {}) or {}
+            depth = int(node.get("depth") or 0)
+            local_caution = self._depth_caution(depth, node.get("title", ""))
+            if local_caution:
+                payload["caution"] = local_caution
         _options_cache[cache_key] = (time.time() + OPTIONS_CACHE_TTL, payload)
         return payload
 
@@ -360,27 +381,8 @@ class KnowledgeTreeAiService:
                 taken_titles.add(group_title)
                 yield {"type": "group_preview", "content": group_title}
                 parent_depth = int(node_context.get("node", {}).get("depth") or 0)
-                skip_group = self._should_skip_group_layer(parent_depth)
                 attach_parent_id = node_id
-                if not skip_group:
-                    group_node = self.java_client.create_tree_node({
-                        "treeId": tree_id,
-                        "parentId": node_id,
-                        "title": group_title,
-                        "summary": group.get("rationale", ""),
-                        "content": "",
-                        "status": "pending",
-                        "importance": 2,
-                        "relevanceScore": 2,
-                        "difficulty": 2,
-                        "depth": parent_depth + 1,
-                        "sortOrder": len(node_context.get("children", [])) + group_index,
-                        "collapsed": False,
-                    })
-                    nodes.append(group_node)
-                    attach_parent_id = str(group_node.get("id"))
-
-                child_depth = parent_depth + (1 if skip_group else 2)
+                child_depth = parent_depth + 1
                 if child_depth > MAX_TREE_DEPTH:
                     continue
 
@@ -452,118 +454,132 @@ class KnowledgeTreeAiService:
             if depth_err:
                 yield {"type": "error", "content": depth_err}
                 return
-            # 第一性原理只做一层前置依赖，且不超过树深度上限
             parent_depth = int(node_context.get("node", {}).get("depth") or 0)
-            max_depth = min(max(1, max_depth), self._remaining_depth(parent_depth))
+            # DFS stack: (节点, 相对深度, 路径)
+            safe_max_depth = max(1, min(int(max_depth), MAX_TREE_DEPTH - parent_depth))
             search_query = f"{node_context.get('node', {}).get('title', '')} 第一性原理 基础概念".strip()
             yield {"type": "thinking", "content": "正在检索基础概念资料…"}
             search_results, context_chunks = await self._search(search_query or "第一性原理 基础概念")
             yield {"type": "search_results", "data": search_results}
-            # BFS frontier：(节点, 相对深度, 路径)
-            frontier: List[tuple[Dict[str, Any], int, str]] = [
+
+            stack: list[tuple[Dict[str, Any], int, str]] = [
                 (node_context.get("node", {"id": node_id, "title": node_id}), 0, node_context.get("path", node_id))
             ]
             total_created = 0
             # 跨树去重 title 集合，防止第一性原理拆解时兜圈子
             taken_titles: set[str] = set(self._collect_existing_titles(node_context))
-            # 同层并发上限：限制对 LLM 与 Java 后端的并发压力
-            sem = asyncio.Semaphore(self.FIRST_PRINCIPLES_CONCURRENCY)
 
-            async def expand_one(parent: Dict[str, Any], rel_depth: int, path: str) -> tuple[Dict[str, Any], int, str, List[Dict[str, Any]]]:
-                """对单个 frontier 节点调一次 LLM，返回原始 principles。失败返回空列表（不中断整层）。"""
-                async with sem:
+            while stack:
+                # 客户端断连则停止，yield cancelled 事件
+                if is_disconnected is not None and await is_disconnected():
+                    yield {"type": "cancelled", "reason": "client_disconnected"}
+                    return
+
+                node, rel_depth, path = stack.pop()
+
+                # 已超过安全深度，跳过此节点
+                if rel_depth >= safe_max_depth:
+                    continue
+
+                # 对单个节点调一次 LLM，获取拆解出的基础原则
+                yield {"type": "thinking", "content": f"正在拆解第 {rel_depth + 1} 层基础依赖…"}
+                try:
                     result = await self._chat_json(_cached_chat_messages(
                         self._first_principles_json_system_prompt(),
                         self._first_principles_prompt_dict(
-                            str(parent.get("id") or node_id),
+                            str(node.get("id") or node_id),
                             context_chunks,
                             node_context,
                             mode,
-                            parent,
+                            node,
                             path,
                             rel_depth,
-                            max_depth,
+                            safe_max_depth,
                         ),
                     ))
+                except Exception as e:
+                    logger.warning("first_principles LLM call failed: %s", e)
+                    continue
+
                 raw_principles = result.get("children", result.get("principles", [])) if isinstance(result, dict) else []
-                principles = self._limit_children([item for item in raw_principles if isinstance(item, dict)], mode)[:2]
-                return parent, rel_depth, path, principles
+                is_fundamental = bool(result.get("is_fundamental")) if isinstance(result, dict) else False
+                principles = self._limit_children([item for item in raw_principles if isinstance(item, dict)], mode)[:3]
+                principles = self._dedup_principles(principles, taken_titles)
+                current_node_id = str(node.get("id") or node_id)
 
-            async def create_one(payload: Dict[str, Any]) -> Dict[str, Any]:
-                """异步创建节点，避免阻塞事件循环。"""
-                return await asyncio.to_thread(self.java_client.create_tree_node, payload)
-
-            while frontier:
-                # 客户端断连则停止
-                if is_disconnected is not None and await is_disconnected():
-                    break
-
-                # 取出当前层（同一 rel_depth）的所有 frontier 节点，整层并发展开
-                current_rel_depth = frontier[0][1]
-                layer: List[tuple[Dict[str, Any], int, str]] = []
-                while frontier and frontier[0][1] == current_rel_depth:
-                    layer.append(frontier.pop(0))
-                # 仅展开未触底的节点
-                expandable = [(p, d, path) for (p, d, path) in layer if d < max_depth]
-                if not expandable:
+                # 触底：当前节点已是基础公理/最小单位
+                if is_fundamental or not principles:
+                    if is_fundamental:
+                        try:
+                            updated = await asyncio.to_thread(
+                                self.java_client.update_tree_node,
+                                current_node_id,
+                                {"isFundamental": True},
+                            )
+                            if isinstance(updated, dict):
+                                node = {**node, **updated}
+                        except Exception as e:
+                            logger.warning("mark isFundamental failed: %s", e)
+                    yield {
+                        "type": "fp_layer",
+                        "parent_id": current_node_id,
+                        "parent_title": node.get("title", ""),
+                        "children": [],
+                        "reached_bottom": True,
+                        "parent": node if is_fundamental else None,
+                    }
                     continue
 
-                yield {"type": "thinking", "content": f"正在拆解第 {current_rel_depth + 1} 层基础依赖（{len(expandable)} 个节点）…"}
-                results = await asyncio.gather(
-                    *[expand_one(p, d, path) for (p, d, path) in expandable],
-                    return_exceptions=True,
-                )
+                # 逐个创建子节点（异步提交避免阻塞事件循环）
+                created_nodes: List[Dict[str, Any]] = []
+                node_depth = node.get("depth") or node_context.get("node", {}).get("depth") or 0
+                non_fundamental_children: list[tuple[Dict[str, Any], str]] = []
 
-                # 收集本层所有待创建的 payload（按 frontier 顺序），统一去重后并发创建
-                layer_payloads: List[tuple[Dict[str, Any], Dict[str, Any], str]] = []
-                for item in results:
-                    if isinstance(item, Exception):
-                        logger.warning("first_principles expand_one failed: %s", item)
+                for idx, child in enumerate(principles):
+                    child_depth = int(node_depth) + 1
+                    if child_depth > MAX_TREE_DEPTH:
                         continue
-                    parent, rel_depth, path, principles = item
-                    # 跨层共享的 taken_titles 在此处串行去重，避免并发竞态
-                    principles = self._dedup_principles(principles, taken_titles)
-                    if not principles:
+                    payload = self._child_payload(tree_id, str(node.get("id") or node_id), child, idx)
+                    payload["isFundamental"] = bool(child.get("isFundamental", child.get("is_fundamental", False)))
+                    payload["fpRelation"] = child.get("fpRelation") or child.get("relation") or child.get("fp_relation") or "supports"
+                    payload["fpReason"] = child.get("fpReason") or child.get("reason") or child.get("why") or child.get("fp_reason") or child.get("summary", "")
+                    payload["depth"] = child_depth
+
+                    try:
+                        created = await asyncio.to_thread(self.java_client.create_tree_node, payload)
+                    except Exception as e:
+                        logger.warning("first_principles create_tree_node failed: %s", e)
                         continue
-                    parent_depth = parent.get("depth") or node_context.get("node", {}).get("depth") or 0
-                    for idx, child in enumerate(principles):
-                        payload = self._child_payload(tree_id, str(parent.get("id") or node_id), child, idx)
-                        payload["isFundamental"] = bool(child.get("isFundamental", child.get("is_fundamental", False)))
-                        payload["fpRelation"] = child.get("fpRelation") or child.get("relation") or child.get("fp_relation") or "supports"
-                        payload["fpReason"] = child.get("fpReason") or child.get("reason") or child.get("why") or child.get("fp_reason") or child.get("summary", "")
-                        payload["depth"] = min(int(parent_depth) + 1, MAX_TREE_DEPTH)
-                        if payload["depth"] > MAX_TREE_DEPTH:
-                            continue
-                        layer_payloads.append((payload, parent, path))
 
-                if not layer_payloads:
-                    continue
-
-                # 并发创建本层节点
-                created_list = await asyncio.gather(
-                    *[create_one(payload) for (payload, _parent, _path) in layer_payloads],
-                    return_exceptions=True,
-                )
-
-                nodes = []
-                for (payload, parent, path), created in zip(layer_payloads, created_list):
-                    if isinstance(created, Exception):
-                        logger.warning("first_principles create_tree_node failed: %s", created)
-                        continue
-                    nodes.append(created)
+                    created_nodes.append(created)
                     child_title = str(created.get("title") or payload["title"])
                     taken_titles.add(child_title)
-                    # 非触底节点继续往下拆
+
+                    # 非触底节点收集起来，稍后按倒序压栈
                     if not payload["isFundamental"]:
                         child_path = f"{path} > {child_title}"
-                        frontier.append((created, current_rel_depth + 1, child_path))
+                        if int(created.get("depth") or payload["depth"]) < MAX_TREE_DEPTH:
+                            non_fundamental_children.append((created, child_path))
 
-                if nodes:
-                    total_created += len(nodes)
-                    yield {"type": "nodes_created", "nodes": nodes}
+                reached_bottom = len(non_fundamental_children) == 0
+
+                if created_nodes:
+                    total_created += len(created_nodes)
+                    yield {
+                        "type": "fp_layer",
+                        "parent_id": str(node.get("id", node_id)),
+                        "parent_title": node.get("title", ""),
+                        "children": created_nodes,
+                        "reached_bottom": reached_bottom,
+                    }
+
+                # 按倒序压栈，保证第一个子节点最先被展开（DFS 先左后右）
+                for child, child_path in reversed(non_fundamental_children):
+                    stack.append((child, rel_depth + 1, child_path))
+
             self._record_token_usage(user_id, "knowledge_tree_first_principles")
             self._invalidate_context_cache(tree_id)
-            yield {"type": "done"}
+            yield {"type": "done", "total_created": total_created}
         except Exception as exc:
             logger.exception("first_principles failed")
             yield {"type": "error", "content": str(exc)}
@@ -721,12 +737,13 @@ class KnowledgeTreeAiService:
             prompt = {
                 "task": "knowledge_tree_bootstrap",
                 "instructions": (
-                    "为每个一级模块最多生成 2 个与本领域直接相关的子知识点。"
+                    "为每个一级模块生成细分知识点（children），每个模块 2-3 个。"
+                    "不要一次生成最细知识点，只生成一层。"
+                    "分类/总结类模块 → 细分知识点为子分类项；具体概念类 → 细分知识点。"
                     "不得扩展到物理/化学/材料学等无关基础学科。"
-                    "每个模块先给 middle_title 分组标题，再给 children。"
                     "children 不得与已有树节点 title 重复或近似。"
                 ),
-                "json_schema": {"modules": [{"module_id": "string", "middle_title": "string", "children": []}]},
+                "json_schema": {"modules": [{"module_id": "string", "children": []}]},
                 "field": str(tree.get("field") or ""),
                 "current_problem": str(tree.get("currentProblem") or ""),
                 "learning_background": str(tree.get("learningBackground") or ""),
@@ -753,8 +770,7 @@ class KnowledgeTreeAiService:
                 children = self._dedup_and_calibrate(children, node_context)
                 if not children:
                     continue
-                group_title = str(spec.get("middle_title") or f"{l1.get('title')}要点")[:50]
-                yield {"type": "group_preview", "content": group_title}
+                yield {"type": "thinking", "content": f"正在为「{l1.get('title')}」生成子节点…"}
                 created = self._create_grouped_children(
                     tree_id, node_id, spec, "按学习顺序", children, node_context,
                 )
@@ -768,6 +784,155 @@ class KnowledgeTreeAiService:
         except Exception as exc:
             logger.exception("bootstrap_tree failed")
             yield {"type": "error", "content": str(exc)}
+
+    # ── 预览-确认流程 ──────────────────────────────────────────────
+
+    async def preview_topics(
+        self,
+        user_id: int,
+        plan_id: int,
+        tree_id: str,
+        mode: str = "Lite",
+    ) -> List[Dict[str, str]]:
+        """轻量预览：只生成 L1 主干标题列表，不展开 children。"""
+        tree_response = self.java_client.get_tree(tree_id, user_id)
+        tree = tree_response.get("tree", {}) if isinstance(tree_response, dict) else {}
+        field = str(tree.get("field") or tree.get("title") or "新的学习主题")
+        current_problem = str(tree.get("currentProblem") or "我想快速建立结构化认知")
+        learning_background = str(tree.get("learningBackground") or "")
+
+        mode_profile = {"Lite": (6, 8), "Medium": (8, 11), "Zen": (10, 14)}
+        lo, hi = mode_profile.get(self._normalize_mode(mode), (6, 8))
+
+        prompt = {
+            "task": "preview_topics",
+            "instructions": (
+                f"请为「{field}」列出 {lo}-{hi} 个一级主干知识卡片。"
+                f"用户当前问题：{current_problem}。"
+                f"学习背景：{learning_background or '未说明'}。"
+                "每个卡片只要 title(≤24字) + summary(≤60字)。"
+                "顺序按建议学习先后排列。"
+            ),
+            "json_schema": {"topics": [{"title": "string", "summary": "string"}]},
+        }
+        result = await self._chat_json(
+            _cached_chat_messages("你只输出合法 JSON，不输出 Markdown。", prompt)
+        )
+        raw_topics = result.get("topics", []) if isinstance(result, dict) else []
+        cleaned: List[Dict[str, str]] = []
+        taken: set[str] = set()
+        for item in raw_topics:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()[:40]
+            if not title or title in taken:
+                continue
+            taken.add(title)
+            cleaned.append({
+                "title": title,
+                "summary": str(item.get("summary") or "").strip()[:160],
+                "custom": False,
+            })
+        self._record_token_usage(user_id, "preview_topics")
+        return cleaned
+
+    async def grow_children_stream(
+        self,
+        user_id: int,
+        tree_id: str,
+        mode: str = "Lite",
+        topics_override: Optional[List[Dict[str, str]]] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """用户确认主干后，逐个 branch SSE 流式生成 children。"""
+        yield {"type": "start", "tree_id": tree_id}
+        try:
+            tree_response = self.java_client.get_tree(tree_id, user_id)
+            nodes = tree_response.get("nodes", []) if isinstance(tree_response, dict) else []
+            root = next(
+                (n for n in nodes if not (n.get("parentId") or n.get("parent_id"))),
+                None,
+            )
+            if not root:
+                yield {"type": "all_done"}
+                return
+
+            root_id = str(root.get("id"))
+            l1_nodes = [
+                n for n in nodes if (n.get("parentId") or n.get("parent_id")) == root_id
+            ]
+            # 如果传了 topics_override，用它们更新 L1 节点的标题
+            if topics_override and l1_nodes:
+                override_map = {t["title"]: t for t in topics_override if isinstance(t, dict)}
+                # TODO: 可在此处调用 java_client 更新 L1 节点标题（暂不实现，由前端处理）
+
+            # 只为尚无 children 的 L1 节点生成
+            targets: List[Dict[str, Any]] = []
+            for l1 in l1_nodes:
+                l1_id = str(l1.get("id"))
+                has_child = any(
+                    (n.get("parentId") or n.get("parent_id")) == l1_id for n in nodes
+                )
+                if not has_child:
+                    targets.append(l1)
+            if not targets:
+                yield {"type": "all_done"}
+                return
+
+            yield {
+                "type": "thinking",
+                "content": f"正在为 {len(targets)} 个主干生成子知识点…",
+            }
+
+            # 并发跑所有 LLM 调用，FIFO emit 保证顺序
+            tasks = [
+                asyncio.create_task(self._expand_one_branch(user_id, tree_id, t, mode))
+                for t in targets
+            ]
+            for target, task in zip(targets, tasks):
+                try:
+                    created = await task
+                except Exception as e:
+                    logger.warning("grow_children branch failed: %s", e)
+                    created = []
+                yield {
+                    "type": "branch_done",
+                    "parent_id": str(target.get("id")),
+                    "parent_title": target.get("title", ""),
+                    "children": created,
+                }
+                if created:
+                    yield {"type": "nodes_created", "nodes": created}
+
+            self._invalidate_context_cache(tree_id)
+            self._record_token_usage(user_id, "grow_children")
+            yield {"type": "all_done"}
+        except Exception as exc:
+            logger.exception("grow_children_stream failed")
+            yield {"type": "error", "content": str(exc)}
+
+    async def _expand_one_branch(
+        self,
+        user_id: int,
+        tree_id: str,
+        l1_node: Dict[str, Any],
+        mode: str,
+    ) -> List[Dict[str, Any]]:
+        """为单个 L1 节点生成 children（供 grow_children_stream 并发调用）。"""
+        node_id = str(l1_node.get("id"))
+        node_context = self._build_node_context(user_id, tree_id, node_id)
+        query = f"{l1_node.get('title', '')} 知识点拆分"
+        _search_results, context_chunks = await self._search(query)
+        prompt = self._subdivide_prompt_dict(node_id, "", context_chunks, node_context, mode)
+        result = await self._chat_json(
+            _cached_chat_messages(self._children_json_system_prompt(), prompt)
+        )
+        children = self._limit_children(self._coerce_children(result), mode)
+        children = self._dedup_and_calibrate(children, node_context)
+        if not children:
+            return []
+        return self._create_grouped_children(
+            tree_id, node_id, result, "", children, node_context,
+        )
 
     def sync_task_breakdown(
         self,
@@ -972,89 +1137,20 @@ class KnowledgeTreeAiService:
         children: Iterable[Dict[str, Any]],
         node_context: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
+        """每次拆分只插入一层 children，直接挂在当前节点下。"""
         children = list(children)
-        current_title = str(node_context.get("node", {}).get("title") or "").strip()
         parent_depth = int(node_context.get("node", {}).get("depth") or 0)
         if parent_depth >= MAX_TREE_DEPTH:
             return []
 
-        # 主模块及以下：不再插入中间分组层，子节点直接挂当前节点（避免第 4 层）
-        if self._should_skip_group_layer(parent_depth):
-            nodes: List[Dict[str, Any]] = []
-            child_payloads: List[Dict[str, Any]] = []
-            child_prereqs: List[List[str]] = []
-            for idx, child in enumerate(children):
-                payload = self._child_payload(tree_id, node_id, child, idx)
-                payload["depth"] = parent_depth + 1
-                if payload["depth"] > MAX_TREE_DEPTH:
-                    continue
-                child_payloads.append(payload)
-                raw_prereqs = child.get("prerequisite_titles") or child.get("prerequisites") or []
-                prereq_titles = (
-                    [str(p).strip()[:50] for p in raw_prereqs if str(p).strip()]
-                    if isinstance(raw_prereqs, list)
-                    else []
-                )
-                child_prereqs.append(prereq_titles)
-            if not child_payloads:
-                return nodes
-            created_children = self.java_client.create_tree_nodes_batch(child_payloads)
-            nodes.extend(created_children)
-            title_to_id = {str(n.get("title") or ""): str(n.get("id")) for n in created_children}
-            for created_node, prereq_titles in zip(created_children, child_prereqs):
-                if not prereq_titles:
-                    continue
-                resolved = [
-                    title_to_id[t]
-                    for t in prereq_titles
-                    if t in title_to_id and title_to_id[t] != str(created_node.get("id"))
-                ]
-                resolved = list(dict.fromkeys(resolved))
-                if resolved:
-                    self.java_client.update_tree_node(str(created_node.get("id")), {"prerequisiteIds": resolved})
-            return nodes
-
-        group_title = self._group_title(result, angle, current_title)
-        group_summary = ""
-        if isinstance(result, dict):
-            group_summary = str(result.get("rationale") or result.get("summary") or "").strip()
-        # 深度追踪：分组节点的深度 = 父节点深度 + 1
-        parent_depth = int(node_context.get("node", {}).get("depth") or 0)
-
-        group_payload = {
-            "treeId": tree_id,
-            "parentId": node_id,
-            "title": group_title,
-            "summary": group_summary or f"按{angle or '学习顺序'}组织 {current_title or '当前节点'} 的下一层知识点。",
-            "content": "",
-            "status": "pending",
-            "importance": 2,
-            "relevanceScore": 2,
-            "difficulty": 2,
-            "depth": int(parent_depth) + 1,
-            "sortOrder": len(node_context.get("children", [])),
-            "collapsed": False,
-        }
-
-        # 没有 children 时只创建分组节点
-        if not children:
-            group_node = self.java_client.create_tree_node(group_payload)
-            return [group_node]
-
-        # 先创建分组节点（拿到 id），再用批量创建 children
-        group_node = self.java_client.create_tree_node(group_payload)
-        group_id = str(group_node.get("id"))
-        nodes = [group_node]
-
-        # 构建批量创建 payloads + 收集 prerequisite_titles 用于后续映射
+        nodes: List[Dict[str, Any]] = []
         child_payloads: List[Dict[str, Any]] = []
         child_prereqs: List[List[str]] = []
         for idx, child in enumerate(children):
-            payload = self._child_payload(tree_id, group_id, child, idx)
-            child_depth = int(parent_depth) + 2
-            if child_depth > MAX_TREE_DEPTH:
+            payload = self._child_payload(tree_id, node_id, child, idx)
+            payload["depth"] = parent_depth + 1
+            if payload["depth"] > MAX_TREE_DEPTH:
                 continue
-            payload["depth"] = child_depth
             child_payloads.append(payload)
             raw_prereqs = child.get("prerequisite_titles") or child.get("prerequisites") or []
             prereq_titles = (
@@ -1063,32 +1159,22 @@ class KnowledgeTreeAiService:
                 else []
             )
             child_prereqs.append(prereq_titles)
-
-        if child_payloads:
-            created_children = self.java_client.create_tree_nodes_batch(child_payloads)
-            nodes.extend(created_children)
-
-            # 两遍法：先建完同支所有兄弟（此时才有 id），再把 prerequisite_titles 映射成兄弟 id
-            title_to_id: Dict[str, str] = {}
-            for created_node in created_children:
-                child_title = str(created_node.get("title") or "")
-                title_to_id[child_title] = str(created_node.get("id"))
-
-            for created_node, prereq_titles in zip(created_children, child_prereqs):
-                if not prereq_titles:
-                    continue
-                resolved = [
-                    title_to_id[t]
-                    for t in prereq_titles
-                    if t in title_to_id and title_to_id[t] != str(created_node.get("id"))
-                ]
-                resolved = list(dict.fromkeys(resolved))  # 去重并保持顺序
-                if resolved:
-                    self.java_client.update_tree_node(
-                        str(created_node.get("id")),
-                        {"prerequisiteIds": resolved},
-                    )
-
+        if not child_payloads:
+            return nodes
+        created_children = self.java_client.create_tree_nodes_batch(child_payloads)
+        nodes.extend(created_children)
+        title_to_id = {str(n.get("title") or ""): str(n.get("id")) for n in created_children}
+        for created_node, prereq_titles in zip(created_children, child_prereqs):
+            if not prereq_titles:
+                continue
+            resolved = [
+                title_to_id[t]
+                for t in prereq_titles
+                if t in title_to_id and title_to_id[t] != str(created_node.get("id"))
+            ]
+            resolved = list(dict.fromkeys(resolved))
+            if resolved:
+                self.java_client.update_tree_node(str(created_node.get("id")), {"prerequisiteIds": resolved})
         return nodes
 
     @staticmethod
@@ -1114,12 +1200,13 @@ class KnowledgeTreeAiService:
     @staticmethod
     def _coerce_children(result: Any) -> List[Dict[str, Any]]:
         if isinstance(result, dict):
+            # 只取顶层 children，忽略 middle_title 等分组字段
             children = result.get("children", [])
         elif isinstance(result, list):
             children = result
         else:
             children = []
-        return [child for child in children if isinstance(child, dict)]
+        return [child for child in children if isinstance(child, dict) and child.get("title")]
 
     def _dedup_and_calibrate(
         self,
@@ -1265,18 +1352,28 @@ class KnowledgeTreeAiService:
         return max(0, MAX_TREE_DEPTH - parent_depth)
 
     @classmethod
-    def _should_skip_group_layer(cls, parent_depth: int) -> bool:
-        # 分组+子节点占两层；主模块(depth=1)拆分时只允许再长一层子节点
-        return parent_depth >= 1 or (parent_depth + 2 > MAX_TREE_DEPTH)
-
-    @classmethod
     def _subdivide_depth_error(cls, node_context: Dict[str, Any]) -> Optional[str]:
         if cls._parent_depth(node_context) >= MAX_TREE_DEPTH:
             return (
-                "知识树最多 3 层（计划 → 主模块 → 子知识点），"
-                "当前节点已达最深层，无法继续拆分。"
+                "知识树已达最深层（主模块 → 细分知识点 → 最细知识点），"
+                "当前节点无法继续拆分。"
             )
         return None
+
+    @staticmethod
+    def _depth_caution(depth: int, node_title: str) -> Optional[Dict[str, str]]:
+        """深度自适应 caution 兜底：LLM 未给出 caution 时本地补充。"""
+        if depth <= 1:
+            return None
+        if depth == 2:
+            return {
+                "label": "粒度提醒",
+                "rationale": f"「{node_title}」已经比较具体，继续拆分可能产生过于细碎的知识点。",
+            }
+        return {
+            "label": "深度警告",
+            "rationale": "当前层级已经很深，建议回到上层节点继续学习主线。",
+        }
 
     def _domain_guardrail_text(self, node_context: Dict[str, Any]) -> str:
         tree = node_context.get("tree", {}) or {}
@@ -1300,18 +1397,15 @@ class KnowledgeTreeAiService:
         depth = KnowledgeTreeAiService._parent_depth(node_context)
         remaining = KnowledgeTreeAiService._remaining_depth(depth)
         return (
-            f"\n\n【层级限制】知识树最多 3 层（计划/根 → 主模块 → 子知识点）。"
+            "\n\n【层级限制】知识树为 3 层子节点："
+            "主模块(depth=1) → 细分知识点(depth=2) → 最细知识点(depth=3)。"
+            "每次拆分只产一层 children，直接挂在当前节点下，不要建中间分组。"
             f"当前节点深度={depth}，最多还能向下拆 {remaining} 层。"
-            "主模块下不要再建中间分组层，子节点直接挂在当前节点下。"
         )
 
     @staticmethod
-    def _group_title(result: Any, angle: str, current_title: str) -> str:
-        if isinstance(result, dict):
-            for key in ("middle_title", "middleTitle", "group_title", "groupTitle", "label", "title"):
-                value = str(result.get(key) or "").strip()
-                if value:
-                    return value[:50]
+    def _split_preview_title(angle: str, current_title: str) -> str:
+        """拆分预览标题（仅用于 SSE 展示，不创建分组节点）。"""
         clean_angle = (angle or "学习顺序").strip()
         if current_title:
             return f"{clean_angle}拆{current_title}"[:50]
@@ -1653,8 +1747,6 @@ class KnowledgeTreeAiService:
             "task": "knowledge_tree_subdivide",
             "instructions": self._subdivide_prompt(node_id, angle, context_chunks, node_context, mode),
             "json_schema": {
-                "middle_title": "string",
-                "middle_summary": "string",
                 "children": [{"title": "string", "summary": "string", "importance": 2, "relevanceScore": 2, "difficulty": 2, "prerequisite_titles": []}],
             },
             **meta,
@@ -1745,19 +1837,20 @@ class KnowledgeTreeAiService:
     ) -> str:
         return (
             f"请拆分节点 {node_id}。拆分角度：{angle or '按学习顺序'}。"
-            f"模式：{self._normalize_mode(mode)}，目标数量：{self._target_range_for_mode(mode)} 个具体子节点。"
+            f"模式：{self._normalize_mode(mode)}，目标数量：{self._target_range_for_mode(mode)} 个子节点。"
             f"{self._depth_limit_text(node_context)}"
             f"{self._domain_guardrail_text(node_context)}"
-            "\n\n【拆分规则】"
-            "  - 主模块(depth=1)下直接挂子知识点，不要再建中间分组层。"
-            "  - 只有计划根节点下才允许 middle_title 分组 + children 两步结构。"
-            "\n\n【middle_title 规则】（仅根节点拆分时适用）"
-            "  - 12-20 字、具体、有信息量、像一个真正的小标题。"
-            "  - 不要写成机械的'按 X 看 Y'。"
-            "  - 不能和已有树路径里任何节点重复或近似。"
+            "\n\n【拆分规则 — 每次只产一层 children】"
+            "  - children 直接挂在当前节点下，不要建中间分组"
+            "  - 根据当前节点的性质决定 children 的粒度："
+            "    * 分类/总结/全景图类节点 → children 是细分知识点（子分类项，如 Jedis/Lettuce/Redisson）"
+            "    * 流程/步骤类节点 → children 是阶段或步骤"
+            "    * 已经足够具体的细分知识点 → children 是最细知识点（如 连接管理/数据结构操作）"
+            "  - 不要一次拆两层，每次只产一层 children"
+            "  - 禁止输出 middle_title 或嵌套结构"
             "\n【children 规则】"
             "  - 每个 child 必须服务于用户的学习目标，围绕当前节点的独特视角展开。"
-            "  - children title 在语义上不得与已有树路径中任何一个节点重复或近似，也不得和 middle_title 重复。"
+            "  - children title 在语义上不得与已有树路径中任何一个节点重复或近似。"
             "    这条比'拆得全'更重要——宁可少给一个，也不要重复。"
             "  - 每个 child 包含 importance、relevanceScore、difficulty（1-3），summary 一句话（不超 80 字）。"
             "  - relevanceScore=3 只给能直接回答用户当前追问的；弱相关用 1-2。"
@@ -1779,26 +1872,36 @@ class KnowledgeTreeAiService:
         max_depth: int = 3,
     ) -> str:
         parent = parent or node_context.get("node", {})
+        tree = node_context.get("tree", {}) or {}
+        field = str(tree.get("field") or tree.get("title") or "新的学习主题")
+        current_problem = str(tree.get("currentProblem") or tree.get("title") or "")
+        node_title = str(parent.get("title") or node_id)
+        node_summary = str(parent.get("summary") or "未提供")
+        node_path = path or str(node_context.get("path") or node_title)
         return (
-            f"请为节点 {node_id} 提炼本领域内的直接前置知识点（不是追到物理/化学公理）。"
+            "你在用【第一性原理】拆解一个知识点，目标是找出「要真正理解它，必须先掌握的更底层依赖」。"
+            f"\n整体学习主题：{field}"
+            f"\n用户当前问题：{current_problem or '未说明'}"
+            f"\n当前要拆解的知识点：{node_title}"
+            f"\n这个知识点的说明：{node_summary}"
+            f"\n它在知识树里的路径(从根到它)：{node_path}"
+            f"\n当前相对深度(起点=0)：{rel_depth}，最大相对深度：{max_depth}"
             f"{self._depth_limit_text(node_context)}"
-            f"{self._domain_guardrail_text(node_context)}"
-            "\n\n【前置依赖规则】"
-            "  - 只列当前学习领域内、比当前节点更前置的直接依赖（如标准条款、基础工艺、必备术语）。"
-            "  - 数量：1 到 2 个。宁可少而准，不要凑数。"
-            "  - 禁止扩展到无关理工基础学科（物理定律、化学原理、材料学公理等）。"
-            "  - 如果当前节点已经足够基础，返回空的 children 数组，并把 is_fundamental 设为 true。"
+            "\n\n请回答：要从第一性原理理解「"
+            f"{node_title}」，必须先掌握哪些更底层的前置知识？"
+            "\n\n【硬规则】"
+            "  - 只列真正更底层、更基础的前置依赖——是它的「地基」，不是它的「应用」或「分支」「例子」。"
+            "  - 数量：1 到 3 个。宁可少而准，不要凑数。"
+            "  - 每个底层依赖比当前知识点更基础、更通用、更接近公理或基础学科。"
+            "  - 如果当前知识点已经是基础学科的公理/最小单位，返回空 children 并设 is_fundamental=true。"
             "  - 已经在路径里出现过的知识点不要再列（避免兜圈子）。"
-            "\n\n【输出字段】每个前置依赖必须包含："
-            "  - title：≤ 20 字，是本领域内的明确知识点"
-            "  - summary：≤ 60 字，说明它是什么以及为什么当前节点需要它"
-            "  - fpRelation：≤ 30 字，它和当前节点的关联类型"
-            "  - fpReason：≤ 120 字，为什么学习当前节点需要先理解它"
-            "  - isFundamental：这个依赖本身是否已经是不可再拆的基础概念"
-            f"\n当前层级：{rel_depth}/{max_depth}。模式：{self._normalize_mode(mode)}。"
-            f"\n当前拆解对象：{parent.get('title') or parent.get('id')}"
-            f"\n对象摘要：{parent.get('summary') or '无'}"
-            f"\n节点路径：{path or node_context.get('path')}"
+            "\n\n【输出字段】每个底层依赖必须包含："
+            "  - title：≤ 20 字，明确的基础知识点/学科概念"
+            "  - summary：≤ 60 字，说明它是什么以及为什么它是上层知识的地基"
+            "  - relation / fpRelation：≤ 30 字，与当前节点的知识关联类型"
+            "  - why / fpReason：≤ 120 字，用第一性原理解释因果链，不要只说「很重要」"
+            "  - isFundamental：该依赖本身是否已是不可再拆的基础公理/最小单位"
+            f"\n模式：{self._normalize_mode(mode)}。"
             "\n\n起点上下文：\n"
             f"{self._node_context_text(node_context)}"
             f"\n\n资料：\n{self._context_text(context_chunks)}"
@@ -1811,18 +1914,43 @@ class KnowledgeTreeAiService:
         node_context: Dict[str, Any],
         mode: str,
     ) -> str:
+        node = node_context.get("node", {}) or {}
+        depth = int(node.get("depth") or self._parent_depth(node_context))
         return (
             f"请为知识树节点 node_id={node_id} 推荐 3 个适合继续拆分的角度。"
-            "\n\n【角度推荐规则】"
-            "  - 每个角度回答'按这个角度拆，会拆出什么样的子节点'。"
-            "  - 角度必须能生成并列的学习子节点，避免泛泛而谈。"
-            "  - 围绕当前节点的独特视角推荐，不要回到大学科目录。"
-            "  - rationale 用第二人称「你」描述，禁止用第三人称指代提问者。"
-            "\n\n【caution 规则】"
-            "  - 说明什么情况下不建议继续拆（例如节点已经是基础概念、深度过深等）。"
-            "  - 如果当前节点深度已经很深或确实是基础知识点，给出 caution。"
-            f"\n模式：{self._normalize_mode(mode)}，目标数量：{self._target_range_for_mode(mode)} 个具体子节点。"
-            f"{self._depth_limit_text(node_context)}"
+            "\n\n【语气硬约束】rationale 字段必须用第二人称「你」，"
+            "禁止用「用户」「该用户」「他/她」等第三人称。"
+            "\n\n【维度库参考（可混合使用）】"
+            "\n  - 构成/组成：这个节点由哪几部分组成"
+            "\n  - 步骤/流程：做这件事的先后顺序"
+            "\n  - 类型/分类：这个东西有哪几种"
+            "\n  - 对比/异同：和另一个东西的差异轴"
+            "\n  - 因果/驱动：为什么会出现这个结果"
+            "\n  - 指标/评估：用什么标准衡量好坏"
+            "\n  - 场景/用例：在什么情况下会用到"
+            "\n  - 风险/失败模式：常见的坑和踩雷点"
+            "\n  - 角色/立场：不同身份的人怎么看"
+            "\n\n【选角度的依据】"
+            "\n  - 节点本身性质（分类/总结 vs 流程 vs 具体概念）"
+            "\n  - 分类/总结类节点优先推荐「按子类型分」「按技术栈分」，不要直接推荐「按具体实现分」"
+            "\n  - 最近对话里聊到的方向，避开已经聊透的角度"
+            "\n  - 不要重复已有子节点体现的角度"
+            "\n  - 学习背景：新手优先'构成/分类/场景'；有经验者可推荐'因果/指标/风险'"
+            "\n\n【每个 option 包含】"
+            "\n  - angle：角度短词（中文，最多 6 字，例如'类型分类'、'步骤流程'）"
+            "\n  - label：用户视角的标题（8-14 字，例如'按几种类型分'）"
+            "\n  - rationale：为什么这个角度合适（1 句话不超 40 字，带具体词）"
+            f"\n\n【caution 规则 — 当前节点深度 depth = {depth}】"
+            "\n  你必须主动判断要不要给 caution："
+            "\n    * depth <= 1：基本让用户拆，很少给 caution"
+            "\n    * depth == 2：需要警觉，再拆一层就到最深层"
+            "\n    * depth >= 3：几乎一定给 caution"
+            "\n  caution 触发条件（任一即可）："
+            "\n    * 节点已经偏离学习目标，继续拆会绕远路"
+            "\n    * depth 已经偏深，再拆边际收益很低"
+            "\n    * 节点本身就是单点事实或具体实例"
+            "\n    * 最近对话能看出用户已经把节点聊得差不多了"
+            f"\n\n模式：{self._normalize_mode(mode)}，目标数量：{self._target_range_for_mode(mode)} 个子节点。"
             f"{self._domain_guardrail_text(node_context)}"
             "\n\n节点上下文：\n"
             f"{self._node_context_text(node_context)}"
@@ -1842,9 +1970,10 @@ class KnowledgeTreeAiService:
             f"{json.dumps(angles, ensure_ascii=False)}。"
             f"{self._depth_limit_text(node_context)}"
             f"{self._domain_guardrail_text(node_context)}"
-            "\n\n【拆分规则】"
-            "  - 主模块下直接挂子知识点，不要建中间分组层。"
-            "  - 每个角度最多 2 个子节点，且必须属于用户学习领域。"
+            "\n\n【拆分规则 — 每次只产一层 children】"
+            "  - children 直接挂在当前节点下，不要建中间分组层"
+            "  - 根据节点性质决定 children 粒度：分类/总结节点产出细分知识点，具体节点产出最细知识点"
+            "  - 每个角度最多 2 个子节点，且必须属于用户学习领域"
             "\n\n【跨 group 去重规则】"
             "  - 不同 group 下的 children title 不得重复或近似。"
             "  - children title 也不得与已有树路径中任何节点重复或近似。"
@@ -1852,7 +1981,7 @@ class KnowledgeTreeAiService:
             "\n\n【children 规则】"
             "  - 每个 child 包含 importance、relevanceScore、difficulty（1-3），summary 一句话（不超 80 字）。"
             "  - relevanceScore=3 只给能直接回答用户当前追问的；弱相关用 1-2。"
-            f"模式：{self._normalize_mode(mode)}，每组目标数量：{self._target_range_for_mode(mode)} 个具体子节点。"
+            f"模式：{self._normalize_mode(mode)}，每组目标数量：{self._target_range_for_mode(mode)} 个子节点。"
             "\n\n节点上下文：\n"
             f"{self._node_context_text(node_context)}"
             f"\n参考资料：\n{self._context_text(context_chunks)}"
@@ -1880,11 +2009,10 @@ class KnowledgeTreeAiService:
     def _children_json_system_prompt() -> str:
         return (
             "你是知识树拆分助手。严格输出 JSON，不输出 Markdown。\n"
-            "输出格式：{\"middle_title\":\"按某角度拆某节点（12-20字，有信息量）\","
-            "\"middle_summary\":\"按X角度看。一句话说明这张分组卡片要做什么\","
-            "\"children\":[{\"title\":\"具体子知识点\",\"summary\":\"一句话说明\","
+            "输出格式：{\"children\":[{\"title\":\"子节点标题\",\"summary\":\"一句话说明\","
             "\"importance\":2,\"relevanceScore\":2,\"difficulty\":2,"
             "\"prerequisite_titles\":[]}]}。\n"
+            "每次只输出一层 children，不要输出 middle_title 或嵌套结构。"
             "importance/relevanceScore/difficulty 范围 1-3。"
             "relevanceScore=3 只给能直接回答用户当前追问的子节点。"
             "prerequisite_titles 是同组兄弟节点的 title 列表，表示学习当前节点前需要先学哪些兄弟节点。"
@@ -1894,11 +2022,12 @@ class KnowledgeTreeAiService:
     def _subdivision_options_json_system_prompt() -> str:
         return (
             "严格输出 JSON，不输出 Markdown："
-            "{\"options\":[{\"angle\":\"stable_key\",\"label\":\"按概念拆\","
-            "\"rationale\":\"为什么这个角度适合当前节点\"}],"
-            "\"caution\":{\"label\":\"先别拆\",\"rationale\":\"为什么当前可能不适合继续拆\"}}。"
-            "只返回 2 到 4 个拆分角度。每个角度必须能生成并列的学习子节点，避免泛泛而谈。"
+            "{\"options\":[{\"angle\":\"类型分类\",\"label\":\"按几种类型分\","
+            "\"rationale\":\"用第二人称描述为什么适合\"}],"
+            "\"caution\":{\"label\":\"粒度提醒\",\"rationale\":\"用第二人称描述为什么不建议拆\"}}。"
+            "只返回 2 到 4 个拆分角度。每个角度必须能生成并列的学习子节点。"
             "rationale 用第二人称「你」描述，禁止用第三人称指代提问者。"
+            "caution 按深度档位主动判断是否给出，不是默认 null。"
         )
 
     @staticmethod
@@ -1918,15 +2047,16 @@ class KnowledgeTreeAiService:
     @staticmethod
     def _first_principles_json_system_prompt() -> str:
         return (
-            "你是学习路径分析助手。严格输出 JSON，不输出 Markdown："
+            "你是第一性原理拆解助手。严格输出 JSON，不输出 Markdown："
             "{\"is_fundamental\":false,"
-            "\"children\":[{\"title\":\"领域前置知识\",\"summary\":\"为什么需要先学它\","
-            "\"fpRelation\":\"知识关联类型\",\"fpReason\":\"为什么必须先理解它\","
+            "\"children\":[{\"title\":\"底层前置知识\",\"summary\":\"为什么它是上层的地基\","
+            "\"relation\":\"知识关联类型\",\"why\":\"为什么必须从上层拆到这里\","
+            "\"fpRelation\":\"知识关联类型\",\"fpReason\":\"为什么必须从上层拆到这里\","
             "\"importance\":2,\"difficulty\":2,"
             "\"isFundamental\":false}]}。"
-            "只列本学习领域内、比当前节点更前置的直接依赖，禁止追到物理/化学/材料学公理。"
-            "数量 1-2 个，宁可少而准不要凑数。"
-            "如果当前知识点已经足够基础，返回空 children 并设 is_fundamental=true。"
+            "只列真正更底层、更基础的前置依赖（地基，不是应用或例子）。"
+            "数量 1-3 个，宁可少而准不要凑数。"
+            "如果当前知识点已是基础公理/最小单位，返回空 children 并设 is_fundamental=true。"
         )
 
 

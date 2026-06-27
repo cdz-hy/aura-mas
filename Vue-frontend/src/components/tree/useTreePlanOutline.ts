@@ -1,6 +1,9 @@
 import type { KnowledgeNode } from '@/types/knowledgeTree'
 import type { LearningResource } from '@/types/plan'
 
+/** Java 后端在计划尚无模块时创建的 fallback L1 节点标题，有真实内容后应从大纲中排除 */
+const FALLBACK_L1_TITLES = new Set(['学习总览', '学习计划总览'])
+
 export type TreePlanOutlineItem =
   | TreePlanNodeItem
   | TreePlanResourceItem
@@ -98,7 +101,14 @@ export function buildTreePlanOutline(
   const outlineItems: TreePlanOutlineItem[] = []
 
   for (const child of rootItem.children) {
-    if (child.kind === 'node' || child.kind === 'group') {
+    if (child.kind === 'node') {
+      // 排除空壳 fallback 节点（如"学习总览"）：无资源、无子节点、标题为通用占位名
+      const hasResources = child.children.some(c => c.kind === 'resource')
+      const hasChildNodes = child.children.some(c => c.kind === 'node')
+      const isFallbackTitle = FALLBACK_L1_TITLES.has(child.title)
+      if (isFallbackTitle && !hasResources && !hasChildNodes) continue
+      outlineItems.push(child)
+    } else if (child.kind === 'group') {
       outlineItems.push(child)
     }
   }

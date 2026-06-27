@@ -1,5 +1,5 @@
 <template>
-  <div class="flex-1 flex-shrink-0 flex flex-col card overflow-hidden animate-fade-in-up min-w-[260px] md:min-w-[300px]" style="animation-delay: 0.1s">
+  <div class="plan-chat-panel flex-1 flex-shrink-0 flex flex-col card overflow-hidden animate-fade-in-up min-w-[260px] md:min-w-[300px]" style="animation-delay: 0.1s">
     <!-- Header with mode toggle -->
     <div class="px-4 py-3 border-b border-navy-100/50">
       <div class="flex items-center justify-between gap-3">
@@ -312,7 +312,7 @@
     </div>
 
     <!-- Input bar -->
-    <div class="px-6 py-3 border-t border-navy-100/50 bg-white">
+    <div class="plan-chat-inputbar px-6 py-3 border-t border-navy-100/50 bg-white">
       <!-- Assistant input -->
       <form v-if="mode === 'assistant'" @submit.prevent="handleSendAssistant()" class="flex gap-3">
         <input
@@ -736,6 +736,39 @@ defineExpose({ updateResourceTitle, updateResourceType, scrollBottom })
 </script>
 
 <style scoped>
+.plan-chat-panel {
+  border-color: rgba(185, 201, 232, 0.72);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.plan-chat-panel > div:first-child {
+  min-height: 72px;
+  border-bottom-color: rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-chat-panel > .flex-1.overflow-y-auto {
+  background: #fff;
+}
+
+.plan-chat-inputbar {
+  border-top-color: rgba(188, 203, 232, 0.58);
+}
+
+.plan-chat-inputbar :deep(.input-field) {
+  height: 48px;
+  border-radius: 9px;
+  border-color: rgba(154, 176, 218, 0.78);
+  color: #5a7099;
+}
+
+.plan-chat-inputbar :deep(.btn-primary) {
+  min-width: 88px;
+  height: 48px;
+  border-radius: 9px;
+}
+
 .slide-down-enter-active,
 .slide-down-leave-active {
   transition: all 0.25s ease;
