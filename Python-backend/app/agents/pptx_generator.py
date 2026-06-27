@@ -31,7 +31,8 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
 
-from app.agents.llm_factory import get_resource_type_generator_llm
+from app.agents.llm_factory import get_resource_type_generator_llm, MIMOClient
+from app.agents.search_utils import search_tavily, download_image
 from app.utils.token_recorder import record_from_mimo
 
 logger = logging.getLogger("agents.pptx_generator")
@@ -162,6 +163,42 @@ def _add_circle(slide, left, top, size, fill):
     shape.fill.solid()
     shape.fill.fore_color.rgb = fill
     return shape
+
+
+def _add_image_to_slide(slide, image_data: io.BytesIO, left, top, max_width, max_height):
+    """将 BytesIO 图片插入幻灯片，自动缩放保持宽高比"""
+    from PIL import Image
+    try:
+        image_data.seek(0)
+        img = Image.open(image_data)
+        img_w, img_h = img.size
+        if img_w <= 0 or img_h <= 0:
+            return False
+
+        # 计算缩放比例
+        ratio_w = max_width / img_w
+        ratio_h = max_height / img_h
+        ratio = min(ratio_w, ratio_h)
+        final_w = int(img_w * ratio)
+        final_h = int(img_h * ratio)
+
+        # 居中放置在给定区域内
+        offset_x = (max_width - final_w) // 2
+        offset_y = (max_height - final_h) // 2
+
+        # python-pptx 不支持 WEBP 等格式，统一转为 PNG
+        if img.format and img.format.upper() not in ("BMP", "GIF", "JPEG", "PNG", "TIFF", "WMF"):
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="PNG")
+            buf.seek(0)
+            image_data = buf
+
+        image_data.seek(0)
+        slide.shapes.add_picture(image_data, left + offset_x, top + offset_y, final_w, final_h)
+        return True
+    except Exception as e:
+        logger.warning(f"[PPT] 图片插入失败: {e}")
+        return False
 
 
 def _color_hex(c):
@@ -539,12 +576,59 @@ def _pptx_content_v2(prs, slide, title: str, bullets: list):
 
 
 def _pptx_content(prs, data: dict, variant: int = 0):
-    """标准内容页 — 3种视觉变体"""
+    """标准内容页 — 有图片时用图文混排变体，否则走原有 3 种变体"""
+    if data.get("_image_data"):
+        _pptx_content_with_image(prs, data)
+        return
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _slide_bg(slide)
     title = data.get("title", "")
     bullets = data.get("bullets", [])
     [_pptx_content_v0, _pptx_content_v1, _pptx_content_v2][variant % 3](prs, slide, title, bullets)
+
+
+def _pptx_content_with_image(prs, data: dict):
+    """图文混排内容页：左侧文字 + 右侧图片"""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _slide_bg(slide)
+    title = data.get("title", "")
+    bullets = data.get("bullets", [])
+    image_data = data.get("_image_data")
+
+    # 标题栏：全宽深色横幅
+    _add_rect(slide, Inches(0), Inches(0), SW, Inches(1.2), fill=_C["pri"])
+    _add_textbox(slide, Inches(0.8), Inches(0.25), Inches(11), Inches(0.7),
+                 text=title, font_size=32, color=_C["white"], bold=True)
+
+    # 左侧文字区（65% 宽度）
+    text_area_w = Inches(7.2)
+    start_y = Inches(1.6)
+    for i, item in enumerate(bullets[:3]):
+        y = start_y + i * Inches(1.6)
+        # 大号序号
+        _add_textbox(slide, Inches(0.8), y, Inches(1.0), Inches(0.8),
+                     text=f"0{i+1}", font_size=30, color=_C["acc2"], bold=True,
+                     align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+        # 分隔竖线
+        _add_rect(slide, Inches(1.9), y + Inches(0.1), Pt(2), Inches(0.6), fill=_C["acc3"])
+        # 要点文字（用 paragraph 形式，完整句子）
+        _add_textbox(slide, Inches(2.2), y + Inches(0.05), Inches(5.0), Inches(0.7),
+                     text=_strip_md(str(item)), font_size=15, color=_C["txt"],
+                     anchor=MSO_ANCHOR.MIDDLE, line_spacing=1.5)
+
+    # 右侧图片区
+    img_left = Inches(7.8)
+    img_top = Inches(1.6)
+    img_max_w = Inches(4.8)
+    img_max_h = Inches(5.2)
+
+    # 图片细边框背景（比图片区域略大）
+    frame_pad = Inches(0.08)
+    _add_rect(slide, img_left - frame_pad, img_top - frame_pad,
+              img_max_w + frame_pad * 2, img_max_h + frame_pad * 2,
+              fill=None, line_color=_C.get("bdr", _hex2rgb("#E2E8F0")), line_width=Pt(0.75))
+
+    _add_image_to_slide(slide, image_data, img_left, img_top, img_max_w, img_max_h)
 
 
 def _pptx_two_column_v0(prs, slide, title: str, left: list, right: list):
@@ -594,11 +678,50 @@ def _pptx_two_column_v1(prs, slide, title: str, left: list, right: list):
 
 
 def _pptx_two_column(prs, data: dict, variant: int = 0):
-    """双栏对比页 — 2种视觉变体"""
+    """双栏对比页 — 有图片时图片替代右栏，否则走原有 2 种变体"""
+    image_data = data.get("_image_data")
+    if image_data:
+        _pptx_two_column_with_image(prs, data)
+        return
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _slide_bg(slide)
     [_pptx_two_column_v0, _pptx_two_column_v1][variant % 2](
         prs, slide, data.get("title", ""), data.get("left", []), data.get("right", []))
+
+
+def _pptx_two_column_with_image(prs, data: dict):
+    """图文混排双栏页：左栏文字 + 右栏图片"""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _slide_bg(slide)
+    title = data.get("title", "")
+    left = data.get("left", [])
+    image_data = data.get("_image_data")
+
+    # 标题栏
+    _add_title_bar(slide, title)
+
+    y = Inches(1.5)
+    col_w = Inches(5.5)
+
+    # 左栏文字
+    _add_rect(slide, Inches(0.8), y, col_w, Inches(5.2), fill=_C["bg2"])
+    _add_textbox(slide, Inches(1.0), y + Inches(0.2), Inches(2), Inches(0.4),
+                 text="要点", font_size=13, color=_C["acc"], bold=True)
+    _add_bullet_list(slide, Inches(1.0), y + Inches(0.7), col_w - Inches(0.4), Inches(4.3),
+                     left[:4], font_size=15, color=_C["txt"])
+
+    # 右栏图片
+    img_left = Inches(6.8)
+    img_top = y
+    img_max_w = Inches(5.8)
+    img_max_h = Inches(5.2)
+
+    frame_pad = Inches(0.08)
+    _add_rect(slide, img_left - frame_pad, img_top - frame_pad,
+              img_max_w + frame_pad * 2, img_max_h + frame_pad * 2,
+              fill=None, line_color=_C.get("bdr", _hex2rgb("#E2E8F0")), line_width=Pt(0.75))
+
+    _add_image_to_slide(slide, image_data, img_left, img_top, img_max_w, img_max_h)
 
 
 def _pptx_cards_v0(prs, slide, title: str, cards: list):
@@ -1225,6 +1348,158 @@ def _build_layouts_text() -> str:
     return "\n".join(layouts_info)
 
 
+IMAGE_QUERY_PROMPT = """你是一个 PPT 配图搜索助手。PPT 有配图会更生动、更专业。请为每个页面生成图片搜索关键词。
+
+## 规则
+- 每个 content/two_column 页面都应该配图，除非内容完全不适合（如纯代码、纯引用）
+- 根据页面摘要和主题，用**中文**描述要搜索的图片
+- 关键词要具体，例如："TCP三次握手流程图" 而不是 "网络"
+- 优先搜索：概念图解、流程图、架构图、数据可视化、示意图、实物照片
+
+## 页面信息
+$slides_info
+
+## 输出格式
+严格输出 JSON 对象，包含 slides 数组，每个元素对应一页：
+{{"slides": [{{"index": 0, "image_query": "TCP三次握手流程图"}}, {{"index": 1, "image_query": "拥塞控制算法示意图"}}]}}
+
+请直接输出 JSON:"""
+
+
+def _image_query_desc(slide: Dict) -> str:
+    """返回图片搜索关键词的简短描述"""
+    return slide.get("_image_query", "配图")[:30]
+
+
+def _generate_image_queries(outline_slides: List[Dict], llm) -> Dict[int, str]:
+    """批量为 outline 页面生成图片搜索关键词，返回 {slide_index: query}"""
+    # 只处理适合配图的布局
+    imageable_layouts = ("content", "two_column")
+    slides_info = []
+    for idx, s in enumerate(outline_slides):
+        layout = s.get("layout", "content")
+        summary = s.get("summary", "")
+        if layout in imageable_layouts:
+            slides_info.append(f"第{idx}页 [layout={layout}]: {summary}")
+
+    if not slides_info:
+        return {}
+
+    prompt = IMAGE_QUERY_PROMPT.replace("$slides_info", "\n".join(slides_info))
+    try:
+        result = llm.chat_json([{"role": "system", "content": prompt}])
+        logger.info(f"[PPT] 图片查询 LLM 返回: {str(result)[:500]}")
+        queries = {}
+        items = []
+        if isinstance(result, list):
+            items = result
+        elif isinstance(result, dict):
+            items = result.get("slides", result.get("images", []))
+            if not items:
+                # 兼容单个对象的情况
+                items = [result]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            idx = item.get("index", -1)
+            q = item.get("image_query", item.get("query", "")).strip()
+            if 0 <= idx < len(outline_slides) and q:
+                queries[idx] = q
+        logger.info(f"[PPT] 图片查询生成: {len(queries)}/{len(slides_info)} 页需要配图")
+        return queries
+    except Exception as e:
+        logger.warning(f"[PPT] 图片查询生成失败: {e}")
+        return {}
+
+
+def _validate_image_relevance(image_data: io.BytesIO, page_summary: str) -> bool:
+    """用 mimo-v2.5 分析图片是否与 PPT 页面内容相关，相关返回 True"""
+    import base64
+    try:
+        image_data.seek(0)
+        b64 = base64.b64encode(image_data.read()).decode("utf-8")
+        image_data.seek(0)
+
+        llm = MIMOClient(model=MIMOClient.MODEL_STANDARD, temperature=0, max_tokens=256,
+                         thinking=None)
+        messages = [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"这是一张用于 PPT 配图的图片。PPT 页面的主题是：「{page_summary}」\n\n"
+                            f"请判断这张图片是否与主题相关。如果相关（图片内容能辅助说明主题），回答 \"yes\"；"
+                            f"如果不相关（图片内容与主题无关、是广告、水印过多、纯文字截图等），回答 \"no\"。\n\n"
+                            f"只回答 yes 或 no，不要解释。"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+                }
+            ]
+        }]
+        result = llm.chat(messages).strip().lower()
+        record_from_mimo(llm, 0, "pptx_image_validate")
+        relevant = result.startswith("y")
+        if not relevant:
+            logger.info(f"[PPT] 图片相关性检查: 不相关 (LLM: {result[:20]})")
+        return relevant
+    except Exception as e:
+        logger.warning(f"[PPT] 图片相关性检查失败: {e}")
+        return True  # 检查失败时保留图片
+
+
+def _search_images_for_slides(outline_slides: List[Dict], image_queries: Dict[int, str],
+                               emit_thinking=None) -> List[Dict]:
+    """根据搜索关键词并行搜索下载图片，附加到 outline_slides 对应项"""
+    if not image_queries:
+        return outline_slides
+
+    if emit_thinking:
+        emit_thinking(f"正在搜索 {len(image_queries)} 张配图并验证相关性...")
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    query_images = {}
+    queries_list = list(image_queries.values())
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_map = {executor.submit(search_tavily, q, 3, True): q for q in queries_list}
+        for future in as_completed(future_map):
+            q = future_map[future]
+            try:
+                _, images = future.result()
+                query_images[q] = images
+            except Exception as e:
+                logger.warning(f"[PPT] 图片搜索失败 '{q}': {e}")
+                query_images[q] = []
+
+    # 下载图片并附加到 outline_slides
+    attached = 0
+    for idx, query in image_queries.items():
+        images = query_images.get(query, [])
+        if not images:
+            continue
+        page_summary = outline_slides[idx].get("summary", query)
+        for img in images[:3]:
+            url = img.get("url", "")
+            if not url:
+                continue
+            image_data = download_image(url, timeout=10, max_size_mb=5)
+            if not image_data:
+                continue
+            # 用 mimo-v2.5 检查图片是否与内容相关
+            if not _validate_image_relevance(image_data, page_summary):
+                logger.info(f"[PPT] 第{idx+1}页: 跳过不相关配图")
+                continue
+            outline_slides[idx]["_image_data"] = image_data
+            outline_slides[idx]["_image_query"] = query
+            attached += 1
+            logger.info(f"[PPT] 第{idx+1}页: 已下载配图 ({len(image_data.getvalue()) // 1024}KB)")
+            break
+
+    logger.info(f"[PPT] 图片搜索完成: {attached}/{len(image_queries)} 张配图")
+    return outline_slides
+
+
 OUTLINE_PROMPT = Template("""你是一个专业的 PPT 布局设计师。你的任务是根据内容手稿，为每一页选择最合适的布局类型。
 
 ## 输入手稿
@@ -1279,6 +1554,7 @@ $manuscript
 
 ## 布局元素规格
 $layouts_text
+$image_info
 
 ## 输出格式
 严格输出 JSON，不要输出其他内容。对于 content 和 two_column 布局，要点需要提供双编码（paragraph + bullet 两种形式）:
@@ -1623,16 +1899,43 @@ def generate_pptx(
     if not outline_slides:
         raise Exception("Stage 2a: LLM 未生成任何布局大纲")
     layout_names = [s.get('layout', 'content') for s in outline_slides]
-    _emit_thinking(f"布局规划完成，共 {len(outline_slides)} 页，正在填充每页内容...")
+    _emit_thinking(f"布局规划完成，共 {len(outline_slides)} 页，正在搜索配图...")
     logger.info(f"[PPT] 布局选择完成，{len(outline_slides)} 页: {layout_names}")
 
-    # ═══ Stage 2b: 内容填充（参照 PPTAgent 的 editor）═══
+    # ═══ Stage 2b: 图片搜索（在内容生成之前，让 LLM 知道有什么图可用）═══
+    _emit_progress("正在搜索配图...")
+    logger.info("[PPT] Stage 2b: 图片搜索...")
+    image_queries = _generate_image_queries(outline_slides, llm)
+    if image_queries:
+        outline_slides = _search_images_for_slides(outline_slides, image_queries, _emit_thinking)
+        record_from_mimo(llm, user_id, "pptx_image_query")
+    else:
+        logger.info("[PPT] Stage 2b: 无需搜索配图")
+
+    # 构建配图信息，传给 CONTENT_PROMPT
+    image_info_lines = []
+    for idx, s in enumerate(outline_slides):
+        if "_image_data" in s:
+            image_info_lines.append(f"- 第{idx+1}页 [{s.get('layout')}]: 已有配图（{_image_query_desc(s)}）")
+    if image_info_lines:
+        image_info = "\n\n## 可用配图\n以下页面已有配图，填充内容时文字要精简（控制在 3 条要点以内），为图片留出空间：\n" + "\n".join(image_info_lines)
+    else:
+        image_info = ""
+
+    # ═══ Stage 2c: 内容填充（参照 PPTAgent 的 editor）═══
     _emit_progress("正在填充页面内容...")
-    logger.info("[PPT] Stage 2b: 内容填充...")
+    logger.info("[PPT] Stage 2c: 内容填充...")
+    # 序列化前去除内部字段（_image_data 是 BytesIO，不可序列化）
+    outline_for_prompt = {k: v for k, v in outline_result.items() if k != "slides"}
+    outline_for_prompt["slides"] = [
+        {k: v for k, v in s.items() if not k.startswith("_")}
+        for s in outline_slides
+    ]
     content_prompt = CONTENT_PROMPT.substitute(
-        outline_json=json.dumps(outline_result, ensure_ascii=False, indent=2),
+        outline_json=json.dumps(outline_for_prompt, ensure_ascii=False, indent=2),
         manuscript=manuscript[:12000],
         layouts_text=layouts_text,
+        image_info=image_info,
     )
 
     content_result = None
@@ -1651,6 +1954,12 @@ def generate_pptx(
         raise Exception("Stage 2b: LLM 未生成任何 slide 内容")
     _emit_thinking(f"内容填充完成，共 {len(slides_data)} 页 slide，正在优化排版...")
     logger.info(f"[PPT] 内容填充完成，{len(slides_data)} 页 slide")
+
+    # ═══ 将图片数据从 outline_slides 传递到 slides_data（此时索引 1:1 对应）═══
+    for idx, sd in enumerate(slides_data):
+        if idx < len(outline_slides) and "_image_data" in outline_slides[idx]:
+            sd["_image_data"] = outline_slides[idx]["_image_data"]
+            sd["_image_query"] = outline_slides[idx].get("_image_query", "")
 
     # ═══ 双编码后处理 ═══
     slides_data = _resolve_dual_encoding(slides_data)
