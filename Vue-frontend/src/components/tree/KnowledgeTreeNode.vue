@@ -97,12 +97,17 @@
     <button
       v-if="draggable"
       class="node-split mt-3 w-full"
-      :class="{ 'node-split--disabled': atMaxDepth }"
-      :title="atMaxDepth ? '已达最深层，无法继续拆分' : '拆分当前节点为子知识点'"
-      :disabled="atMaxDepth"
-      @click.stop="!atMaxDepth && emit('open-subdivide', node.id)"
+      :class="{ 'node-split--disabled': atMaxDepth || anyNodeSplitting }"
+      :title="buttonTitle"
+      :disabled="atMaxDepth || anyNodeSplitting"
+      @click.stop="!atMaxDepth && !anyNodeSplitting && emit('open-subdivide', node.id)"
     >
-      <svg class="node-split-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <!-- 拆分中：显示旋转动画 -->
+      <svg v-if="isSplitting" class="node-split-icon animate-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="8" cy="8" r="6" stroke-dasharray="28" stroke-dashoffset="8" stroke-linecap="round" />
+      </svg>
+      <!-- 正常状态：分叉图标 -->
+      <svg v-else class="node-split-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
         <path d="M4 3v10" />
         <path d="M4 5.5h4.5a2 2 0 0 1 2 2v0" />
         <path d="M4 10.5h4.5a2 2 0 0 0 2-2v0" />
@@ -110,7 +115,7 @@
         <circle cx="12" cy="5" r="0.8" fill="currentColor" stroke="none" />
         <circle cx="12" cy="10" r="0.8" fill="currentColor" stroke="none" />
       </svg>
-      <span class="truncate">拆分为子知识点</span>
+      <span class="truncate">{{ isSplitting ? '拆分中...' : '拆分为子知识点' }}</span>
     </button>
   </div>
 </template>
@@ -151,6 +156,23 @@ function handleClick() {
 
 /** depth=3 为最深层，不可再拆分 */
 const atMaxDepth = computed(() => treeStore.isAtMaxDepth(props.node.id))
+
+/** 当前节点是否正在拆分中 */
+const isSplitting = computed(() =>
+  treeStore.loading && treeStore.streamingNodeId === props.node.id,
+)
+
+/** 是否有任意节点正在拆分（用于禁用其他节点的拆分按钮） */
+const anyNodeSplitting = computed(() =>
+  treeStore.loading && !!treeStore.streamingNodeId,
+)
+
+const buttonTitle = computed(() => {
+  if (atMaxDepth.value) return '已达最深层，无法继续拆分'
+  if (isSplitting.value) return '正在拆分中，请稍候'
+  if (anyNodeSplitting.value) return '其他节点正在拆分中'
+  return '拆分当前节点为子知识点'
+})
 
 const hasPrerequisites = computed(() => Boolean(props.node.prerequisiteIds?.length))
 

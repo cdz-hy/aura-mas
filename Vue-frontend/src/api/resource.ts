@@ -37,7 +37,7 @@ export function bulkCreateResources(resources: Array<{
   planId: number
   moduleOrder: number
   moduleType: string
-  moduleData: Record<string, any>
+  moduleData: Record<string, any> | string
   status?: number
 }>) {
   return request.post<any, { data: LearningResource[] }>('/resource/bulk', resources)

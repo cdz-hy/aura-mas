@@ -1097,6 +1097,9 @@ const quizSubmitting = ref(false)
 const sidebarCollapsed = ref(false)
 
 function clearSelectedResource() {
+  if (selectedResourceId.value !== null) {
+    heartbeat.stop()
+  }
   selectedResourceId.value = null
   selectedResource.value = null
   quizData.value = null
@@ -1105,6 +1108,7 @@ function clearSelectedResource() {
   quizSubmittedAnswers.value = null
   showExplanations.value = false
   isFullscreen.value = false
+  chatStore.selectedModuleContext = null
 }
 
 // ==================== 数据加载 ====================
@@ -1325,7 +1329,11 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
     parentId: null,
     moduleOrder,
     moduleType,
-    moduleData,
+    moduleData: {
+      ...moduleData,
+      nodeId: moduleData.nodeId || chatStore.selectedModuleContext?.nodeId || undefined,
+      node_id: moduleData.node_id || chatStore.selectedModuleContext?.nodeId || undefined,
+    },
     status: resource.status ?? 2,
     storagePath: null,
     generatedByAgent: moduleType === 'animation' ? 'animation_skill_generator' : 'resource_type_generator',
@@ -1407,9 +1415,9 @@ const selectedTreeNode = computed(() =>
   knowledgeTreeStore.nodes.find(node => node.id === knowledgeTreeStore.currentNodeId) || null
 )
 
-/** 知识树模式下是否展示内容面板（资源预览 / 流式生成） */
+/** 知识树模式下是否展示内容面板（仅用户主动选中资源时隐藏树画布） */
 const treeContentVisible = computed(() =>
-  isTreeMode.value && !!(selectedResource.value || showResourceStreamPreview.value)
+  isTreeMode.value && !!selectedResource.value
 )
 
 const treePopoverNode = computed(() =>
@@ -1508,6 +1516,8 @@ function onOutlineSelectModule(moduleId: string, nodeId?: string) {
       })?.id
     if (resourceId) {
       void openResourceById(resourceId)
+    } else {
+      clearSelectedResource()
     }
   })
 }
@@ -1549,11 +1559,12 @@ async function ensureNodePlaceholderResource(node: KnowledgeNode): Promise<numbe
     planId: planId.value,
     moduleOrder: maxOrder + 1,
     moduleType: 'text',
-    moduleData: {
+    moduleData: JSON.stringify({
       title: node.title,
+      module_title: node.title,
       description: node.summary || '',
       nodeId: node.id,
-    },
+    }),
     status: 1,
   }])
   const created = res.data?.[0]
@@ -2566,6 +2577,8 @@ watch(() => chatStore.lastQuizResource, (data) => {
     moduleData: {
       title: '练习题',
       questions: data.questions,
+      nodeId: chatStore.selectedModuleContext?.nodeId || undefined,
+      node_id: chatStore.selectedModuleContext?.nodeId || undefined,
     },
     status: 2,
     storagePath: null,
@@ -2665,7 +2678,12 @@ watch(() => chatStore.streamingResources.length, () => {
       moduleOrder: resources.value.length > 0
         ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1,
       moduleType: resource.type || 'document',
-      moduleData: { title: resource.title, content },
+      moduleData: {
+        title: resource.title,
+        content,
+        nodeId: chatStore.selectedModuleContext?.nodeId || undefined,
+        node_id: chatStore.selectedModuleContext?.nodeId || undefined,
+      },
       status: 2,
       storagePath: null,
       generatedByAgent: 'content_orchestrator',

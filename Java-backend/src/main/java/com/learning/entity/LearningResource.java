@@ -1,6 +1,8 @@
 package com.learning.entity;
 
 import com.baomidou.mybatisplus.annotation.*;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.learning.config.ModuleDataDeserializer;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -20,6 +22,7 @@ public class LearningResource {
 
     private String moduleType;
 
+    @JsonDeserialize(using = ModuleDataDeserializer.class)
     private String moduleData;
 
     private Integer status;
