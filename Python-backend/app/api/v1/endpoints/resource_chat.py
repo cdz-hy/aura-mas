@@ -1025,7 +1025,7 @@ async def generate_single_resource(
     is_quiz = (type == "quiz")
     is_video = (type == "video")
     is_animation = (type == "animation")
-    is_type_resource = type in ("mindmap", "summary", "code", "podcast")
+    is_type_resource = type in ("mindmap", "summary", "code", "podcast", "pptx")
 
     # 路由决策
     if is_quiz:
@@ -1041,8 +1041,9 @@ async def generate_single_resource(
         intent = "generate_resource"
         next_node = "rag_retriever"
 
-    # 优先使用前端传入的 session_id，保持会话连续性
-    session_id = session_id if session_id else f"resource-{plan_id_int}-{module_id_int}"
+    # 资源生成必须使用独立 thread_id，避免与聊天会话的 checkpointer 状态冲突
+    # 如果复用聊天 session_id，checkpoint 中旧的 task_breakdown_confirmed=False 会覆盖 initial_state
+    effective_session_id = f"resource-{plan_id_int}-{module_id_int}-{type}-{int(datetime.now().timestamp())}"
 
     # 创建资源生成任务，用于关联 Token 消耗记录
     generation_task_id = None
@@ -1072,7 +1073,7 @@ async def generate_single_resource(
         "user_id": user_id,
         "plan_id": plan_id_int,
         "task_id": generation_task_id,
-        "session_id": session_id,
+        "session_id": effective_session_id,
         "user_message": resource_message,
         "human_feedback": None,
         "chat_history": chat_history,
@@ -1267,7 +1268,7 @@ async def generate_single_resource(
                 try:
                     async def _do_run():
                         graph = get_learning_graph()
-                        config = {"configurable": {"thread_id": session_id}}
+                        config = {"configurable": {"thread_id": effective_session_id}}
                         async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
                             if check_stop(session_id):
                                 _threadsafe_cb(None)
@@ -2008,7 +2009,7 @@ def _persist_generated_resources(
     generated_resource_info = []
 
     # 类型资源（mindmap/summary/code/animation）：直接从 generated_content 保存
-    is_direct_generated_resource = resource_type in ("mindmap", "summary", "code", "animation")
+    is_direct_generated_resource = resource_type in ("mindmap", "summary", "code", "animation", "pptx")
     if is_direct_generated_resource and generated_content and plan_id_int:
         module_data = {
             "title": generated_content.get("title", title),
@@ -2022,6 +2023,11 @@ def _persist_generated_resources(
             module_data["animationSpec"] = generated_content.get("animationSpec", {})
             module_data["duration"] = generated_content.get("duration")
             module_data["metadata"] = generated_content.get("metadata", {})
+        if resource_type == "pptx":
+            module_data["html"] = generated_content.get("content", "")
+            module_data["pptx_filename"] = generated_content.get("pptx_filename", "")
+            module_data["pptx_url"] = generated_content.get("pptx_url", "")
+            module_data["slide_count"] = generated_content.get("slide_count", 0)
         try:
             result = java_client.create_resource(
                 plan_id=plan_id_int,
@@ -2660,3 +2666,25 @@ def proxy_image(url: str = Query(..., description="图片 URL")):
         return {"data_url": f"data:{content_type};base64,{b64}"}
     except Exception as e:
         return {"data_url": None, "error": str(e)}
+
+
+@router.get("/resource/pptx/download/{filename}")
+async def download_pptx(filename: str):
+    """PPT 文件下载接口，直接从本地临时目录返回文件"""
+    import re
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+
+    # 安全校验：只允许合法文件名
+    if not re.match(r'^[a-f0-9]{12}\.pptx$', filename):
+        return {"error": "非法文件名"}
+
+    file_path = Path(__file__).resolve().parent.parent.parent.parent.parent / "temp" / "pptx" / filename
+    if not file_path.exists():
+        return {"error": "文件不存在或已过期"}
+
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=filename,
+    )

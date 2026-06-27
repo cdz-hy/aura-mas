@@ -315,7 +315,7 @@ def _generate_anomaly_clarification(
                     pass
 
         logger.info(f"  [简答智能体] 正在流式生成异常追问回复...")
-        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, stream_field="response", max_tokens=512)
+        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, stream_field="response")
         from app.utils.token_recorder import record_from_mimo
         record_from_mimo(llm, state.get("user_id", 0), "anomaly_clarify", state.get("task_id"))
         response = result.get("response", f"抱歉，我在处理你的请求时遇到了一些困惑。能否请你再详细说明一下你的需求？")

@@ -34,7 +34,6 @@ def check_content_alignment(original_goal: str, content_summary: str, user_id: i
     llm = MIMOClient(
         model=MIMOClient.MODEL_STANDARD,
         temperature=0,
-        max_tokens=128,
         thinking=THINKING_DISABLED,
     )
 
@@ -44,7 +43,7 @@ def check_content_alignment(original_goal: str, content_summary: str, user_id: i
     ]
 
     try:
-        result = llm.chat_json(messages, max_tokens=128)
+        result = llm.chat_json(messages)
         from app.utils.token_recorder import record_from_mimo
         record_from_mimo(llm, user_id, "anomaly_check", task_id)
         is_aligned = result.get("is_aligned", True)

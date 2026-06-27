@@ -7,6 +7,7 @@ from app.prompts.rag_retriever import RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT, RAG_
 from app.prompts.content_orchestrator import (
     CONTENT_ORCHESTRATOR_BATCH_PROMPT,
     CONTENT_ORCHESTRATOR_PARALLEL_PROMPT,
+    build_image_section,
 )
 from app.prompts.reviewer import REVIEWER_BATCH_PROMPT, REVIEWER_MODULE_PROMPT
 from app.prompts.resource_generator import (

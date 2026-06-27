@@ -9,11 +9,12 @@
 """
 import logging
 import json
+import re
 import asyncio
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_content_orchestrator_llm
-from app.prompts import CONTENT_ORCHESTRATOR_BATCH_PROMPT, CONTENT_ORCHESTRATOR_PARALLEL_PROMPT
+from app.prompts import CONTENT_ORCHESTRATOR_BATCH_PROMPT, CONTENT_ORCHESTRATOR_PARALLEL_PROMPT, build_image_section
 from app.utils.token_recorder import record
 from app.utils import stream_registry
 
@@ -31,6 +32,74 @@ def _normalize_modules(modules: list) -> list:
     for m in modules:
         if "module_type" in m:
             m["module_type"] = _normalize_module_type(m["module_type"])
+    return modules
+
+
+# 匹配 <img src="..."> 和 ![alt](url) 中的图片 URL
+_IMG_SRC_RE = re.compile(r'<img\s[^>]*src=["\']([^"\']+)["\']', re.IGNORECASE)
+_MD_IMG_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+
+
+def _sanitize_images(content: str, valid_urls: set) -> tuple:
+    """
+    清除内容中所有非白名单的图片引用（防止 LLM 编造 URL）。
+    返回 (清洗后的内容, 是否有幻觉被清除)。
+    """
+    if not valid_urls:
+        # 没有任何真实图片 → 删除所有图片标签和 Markdown 图片语法
+        cleaned = re.sub(r'<div[^>]*>.*?<img\b.*?</div>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        cleaned = _MD_IMG_RE.sub('', cleaned)
+        had_hallucination = cleaned != content
+        return cleaned, had_hallucination
+
+    had_hallucination = False
+
+    # 1. 清除包含非法 URL 的整块图片 div（float/居中排版模板）
+    def _check_div(match):
+        nonlocal had_hallucination
+        div_html = match.group(0)
+        urls = _IMG_SRC_RE.findall(div_html)
+        if all(u not in valid_urls for u in urls):
+            had_hallucination = True
+            return ''
+        return div_html
+
+    cleaned = re.sub(r'<div[^>]*>.*?<img\b.*?</div>', _check_div, content, flags=re.DOTALL | re.IGNORECASE)
+
+    # 2. 清除残留的非法 <img> 标签
+    def _check_img(match):
+        nonlocal had_hallucination
+        url = match.group(1)
+        if url not in valid_urls:
+            had_hallucination = True
+            return ''
+        return match.group(0)
+
+    cleaned = _IMG_SRC_RE.sub(_check_img, cleaned)
+
+    # 3. 清除非法的 Markdown 图片语法
+    def _check_md_img(match):
+        nonlocal had_hallucination
+        url = match.group(2).strip()
+        if url not in valid_urls:
+            had_hallucination = True
+            return ''
+        return match.group(0)
+
+    cleaned = _MD_IMG_RE.sub(_check_md_img, cleaned)
+
+    return cleaned, had_hallucination
+
+
+def _sanitize_modules(modules: list, rag_chunks: list) -> list:
+    """对模块列表执行幻觉图片清洗，返回清洗后的模块列表（原地修改）"""
+    valid_urls = {c.get("image_path", "") for c in rag_chunks if c.get("type") == "image" and c.get("image_path")}
+    for m in modules:
+        if m.get("content"):
+            cleaned, had_hallucination = _sanitize_images(m["content"], valid_urls)
+            if had_hallucination:
+                m["content"] = cleaned
+                logger.warning(f"  [模块{m.get('module_order')}] 检测到幻觉图片 URL，已自动清除")
     return modules
 
 
@@ -206,8 +275,17 @@ def _generate_single_module(
         if forced_type == "mindmap":
             type_hint += "- 重要: 必须输出 MindElixir nodeData JSON 格式，详见系统提示\n"
 
+    # 检测是否有可用图片，动态构造图片排版指令
+    has_images = any(
+        c.get("type") == "image" and c.get("image_path")
+        for c in relevant_chunks[:10]
+    )
+    system_prompt = CONTENT_ORCHESTRATOR_PARALLEL_PROMPT.format(
+        image_section=build_image_section(has_images)
+    )
+
     messages = [
-        {"role": "system", "content": CONTENT_ORCHESTRATOR_PARALLEL_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"""学习目标: {learning_goal}
 
 对话历史:
@@ -232,7 +310,7 @@ def _generate_single_module(
         def _on_chunk(chunk: str):
             _emit_resource_stream(sse_callback, "resource_stream_text", resource_id, chunk)
 
-        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, max_tokens=16384, stream_field="content")
+        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, stream_field="content")
         result["module_order"] = module_order
         result["module_id"] = module_info.get("module_id", module_order)
         result["_usage_records"] = llm.get_usage_records()
@@ -397,6 +475,9 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             final_modules.sort(key=lambda x: x.get("module_order", 0))
             _normalize_modules(final_modules)
 
+            # 幻觉清洗：清除编排智能体编造的图片 URL
+            _sanitize_modules(final_modules, rag_chunks)
+
             # 构造完整结果
             orchestrated_content = {
                 "title": task_breakdown.get("title", learning_goal),
@@ -554,6 +635,9 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             modules_list.sort(key=lambda x: x.get("module_order", 0))
             _normalize_modules(modules_list)
 
+            # 幻觉清洗：清除编排智能体编造的图片 URL
+            _sanitize_modules(modules_list, rag_chunks)
+
             # 构造完整结果
             orchestrated_content = {
                 "title": task_breakdown.get("title", learning_goal),
@@ -640,6 +724,9 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                             "content_orchestration", state.get("task_id"),
                             extra_records=extra_records)
 
+        # 幻觉清洗：清除编排智能体编造的图片 URL
+        _sanitize_modules(batch_result.get("module_list", []), rag_chunks)
+
         # 自主异常检测：批量模式
         batch_modules = batch_result.get("module_list", [])
         content_previews = []
@@ -708,6 +795,12 @@ def _batch_orchestration(
 
     content_text = "\n\n---\n\n".join(content_parts)
 
+    # 检测是否有可用图片，动态构造图片排版指令
+    has_images = any(
+        c.get("type") == "image" and c.get("image_path")
+        for c in rag_chunks[:15]
+    )
+
     generated_text = ""
     if generated_content:
         generated_text = f"\n\n## 自主生成的补充内容:\n{generated_content.get('content', '')}"
@@ -741,8 +834,12 @@ def _batch_orchestration(
             history_lines.append(f"{role}: {content}")
         history_text = "\n".join(history_lines)
 
+    system_prompt = CONTENT_ORCHESTRATOR_BATCH_PROMPT.format(
+        image_section=build_image_section(has_images)
+    )
+
     messages = [
-        {"role": "system", "content": CONTENT_ORCHESTRATOR_BATCH_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"""学习目标: {learning_goal}
 
 对话历史（请结合上下文理解用户需求）:
@@ -763,7 +860,7 @@ def _batch_orchestration(
 
     try:
         logger.info(f"  [内容编排智能体] 正在调用 LLM 进行批量编排...")
-        result = llm.chat_json(messages, max_tokens=16384)
+        result = llm.chat_json(messages)
         modules_list = result.get("modules", [])
         _normalize_modules(modules_list)
 

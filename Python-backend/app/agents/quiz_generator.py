@@ -135,6 +135,7 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
     ]
 
     try:
+
         _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
         
         def _emit_thinking_start(agent: str, prefix: str = ""):
@@ -180,6 +181,7 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
 
         logger.info(f"  [题目生成智能体] 正在调用 LLM...")
         result = llm.chat_json_stream(messages, max_tokens=4096, on_chunk=on_chunk)
+
         record_from_mimo(llm, state.get("user_id", 0), "quiz_generation", state.get("task_id"))
         questions = result.get("questions", [])
         custom_reqs = result.get("user_custom_requirements")

@@ -72,7 +72,7 @@ def _review_single_module(
     ]
     
     try:
-        result = llm.chat_json(messages, max_tokens=1536)
+        result = llm.chat_json(messages)
         result["module_order"] = module_order
         result["module_title"] = module_title
         result["_usage_records"] = llm.get_usage_records()

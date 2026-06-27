@@ -1,194 +1,245 @@
 <template>
-  <div ref="containerRef" class="relative">
+  <div class="card rounded-2xl p-6 animate-fade-in-up">
+    <!-- Header with streak stats -->
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+      <h2 class="font-display text-base font-semibold text-navy-800">学习连续性</h2>
+      <div class="flex items-center gap-5">
+        <div class="flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-orange-400" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+          </svg>
+          <span class="text-sm text-navy-500">连续学习</span>
+          <span class="text-sm font-bold text-navy-800">{{ heatmapData?.currentStreak ?? 0 }}</span>
+          <span class="text-sm text-navy-400">天</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-amber-500" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
+          </svg>
+          <span class="text-sm text-navy-500">最长连续</span>
+          <span class="text-sm font-bold text-navy-800">{{ heatmapData?.longestStreak ?? 0 }}</span>
+          <span class="text-sm text-navy-400">天</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+          </svg>
+          <span class="text-sm text-navy-500">活跃天数</span>
+          <span class="text-sm font-bold text-navy-800">{{ heatmapData?.totalActiveDays ?? 0 }}</span>
+          <span class="text-sm text-navy-400">天</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Heatmap grid -->
     <div class="overflow-x-auto">
-      <div class="min-w-[700px]">
+      <div class="inline-block min-w-[700px]">
         <!-- Month labels -->
-        <div class="flex mb-1 ml-8">
-          <div v-for="month in monthLabels" :key="month.label"
-            class="text-[10px] text-navy-400"
-            :style="{ marginLeft: `${month.offset * 17}px` }">
+        <div class="flex ml-8 mb-1" :style="{ gap: cellGap + 'px' }">
+          <div
+            v-for="(month, i) in monthLabels"
+            :key="i"
+            class="text-[10px] text-navy-400 whitespace-nowrap"
+            :style="{ width: month.width + 'px' }"
+          >
             {{ month.label }}
           </div>
         </div>
 
-        <div class="flex gap-1">
-          <!-- Day labels -->
-          <div class="flex flex-col gap-[3px] pr-1">
-            <div v-for="(day, i) in ['一', '二', '三', '四', '五', '六', '日']" :key="day"
-              class="h-[14px] flex items-center"
-              :class="i % 2 === 0 ? 'visible' : 'invisible'">
-              <span class="text-[10px] text-navy-400 w-6 text-right">{{ day }}</span>
+        <!-- Grid body -->
+        <div class="flex">
+          <!-- Day labels (left side) -->
+          <div class="flex flex-col mr-2" :style="{ gap: cellGap + 'px' }">
+            <div
+              v-for="d in 7"
+              :key="d"
+              class="text-[10px] text-navy-400 flex items-center"
+              :style="{ height: cellSize + 'px' }"
+            >
+              <span v-if="d === 2 || d === 4 || d === 6">{{ dayLabels[d - 1] }}</span>
             </div>
           </div>
 
-          <!-- Grid -->
-          <div class="flex gap-[3px]">
-            <div v-for="(week, wi) in weeks" :key="wi" class="flex flex-col gap-[3px]">
-              <div v-for="(day, di) in week" :key="di"
-                class="w-[14px] h-[14px] rounded-[3px] cursor-pointer transition-all hover:ring-2 hover:ring-navy-300"
-                :class="levelClass(day?.level || 0)"
-                @mouseenter="onCellEnter($event, day)"
-                @mouseleave="hoveredDay = null" />
+          <!-- Cells grid (columns = weeks, rows = days) -->
+          <div class="flex" :style="{ gap: cellGap + 'px' }">
+            <div
+              v-for="(week, wi) in weeks"
+              :key="wi"
+              class="flex flex-col"
+              :style="{ gap: cellGap + 'px' }"
+            >
+              <div
+                v-for="(day, di) in week"
+                :key="di"
+                :style="{
+                  width: cellSize + 'px',
+                  height: cellSize + 'px',
+                  backgroundColor: day ? levelColor(day.level) : 'transparent',
+                  borderRadius: '3px',
+                }"
+                class="cursor-pointer transition-all hover:ring-2 hover:ring-navy-300"
+                @mouseenter="showTooltip($event, day)"
+                @mouseleave="hideTooltip"
+              />
             </div>
           </div>
         </div>
 
         <!-- Legend -->
-        <div class="flex items-center gap-2 mt-3 ml-8">
-          <span class="text-[10px] text-navy-400">少</span>
-          <div v-for="level in [0, 1, 2, 3, 4]" :key="level"
-            class="w-[14px] h-[14px] rounded-[3px]"
-            :class="levelClass(level)" />
-          <span class="text-[10px] text-navy-400">多</span>
+        <div class="flex items-center justify-end mt-3 gap-1.5">
+          <span class="text-[10px] text-navy-400 mr-1">少</span>
+          <div
+            v-for="level in [0, 1, 2, 3, 4]"
+            :key="level"
+            :style="{
+              width: cellSize + 'px',
+              height: cellSize + 'px',
+              backgroundColor: levelColor(level),
+              borderRadius: '3px',
+            }"
+          />
+          <span class="text-[10px] text-navy-400 ml-1">多</span>
         </div>
       </div>
     </div>
 
-    <!-- Tooltip (outside overflow container, positioned relative to wrapper) -->
-    <transition name="fade">
-      <div v-if="hoveredDay"
-        class="absolute px-3 py-2 bg-navy-800 text-white text-xs rounded-lg whitespace-nowrap shadow-lg pointer-events-none z-50"
-        style="transform: translateY(-50%);"
-        :style="{ top: tooltipPos.top + 'px', left: tooltipPos.left + 'px' }">
-        <span class="font-medium">{{ formatDate(hoveredDay.date) }}</span>
+    <!-- Tooltip -->
+    <Teleport to="body">
+      <div
+        v-if="tooltip.visible"
+        class="fixed z-50 px-3 py-2 bg-navy-800 text-white text-xs rounded-lg shadow-lg pointer-events-none whitespace-nowrap"
+        :style="{ left: tooltip.x + 'px', top: tooltip.y + 'px' }"
+      >
+        <span class="font-medium">{{ tooltip.date }}</span>
         <span class="mx-1.5 text-navy-300">·</span>
-        <span>{{ hoveredDay.minutes > 0 ? `${hoveredDay.minutes} 分钟` : '未学习' }}</span>
+        <span>{{ tooltip.minutes > 0 ? `${tooltip.minutes} 分钟` : '未学习' }}</span>
       </div>
-    </transition>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import type { HeatmapData } from '@/api/analytics'
+import { computed, onMounted, ref } from 'vue'
+import { getStudyHeatmap } from '@/api/stats'
+import type { StudyHeatmapData, HeatmapDay } from '@/api/stats'
 
-const props = defineProps<{
-  heatmapData?: HeatmapData
-}>()
+const cellSize = 14
+const cellGap = 3
 
-const hoveredDay = ref<{ date: string; minutes: number; level: number } | null>(null)
-const tooltipPos = ref({ top: 0, left: 0 })
-const containerRef = ref<HTMLElement | null>(null)
+const heatmapData = ref<StudyHeatmapData | null>(null)
 
-function onCellEnter(e: MouseEvent, day: { date: string; minutes: number; level: number } | null) {
-  if (!day || !containerRef.value) return
-  hoveredDay.value = day
-  const cellRect = (e.target as HTMLElement).getBoundingClientRect()
-  const containerRect = containerRef.value.getBoundingClientRect()
-  tooltipPos.value = {
-    top: cellRect.top - containerRect.top + cellRect.height / 2,
-    left: cellRect.right - containerRect.left + 8,
-  }
+const tooltip = ref({ visible: false, x: 0, y: 0, date: '', minutes: 0 })
+
+const dayLabels = ['', '一', '', '三', '', '五', '']
+
+const LEVEL_COLORS = [
+  '#ebedf0',
+  '#9be9a8',
+  '#40c463',
+  '#30a14e',
+  '#216e39',
+]
+
+function levelColor(level: number): string {
+  return LEVEL_COLORS[level] || LEVEL_COLORS[0]
 }
 
-// Helper to format date as YYYY-MM-DD in local timezone
-function formatDateLocal(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-const dailyMap = computed(() => {
-  const map = new Map<string, { date: string; minutes: number; level: number }>()
-  if (props.heatmapData?.dailyData) {
-    for (const d of props.heatmapData.dailyData) {
-      // Normalize date format
-      const dateKey = d.date?.split('T')[0] || d.date
-      map.set(dateKey, d)
-    }
-  }
-  return map
-})
-
-// Generate weeks grid (7 rows x N columns)
+// Arrange dailyData into weeks (7 days per column, starting from Monday)
 const weeks = computed(() => {
-  const result: Array<Array<{ date: string; minutes: number; level: number } | null>> = []
-  const today = new Date()
-  const startDate = new Date(today)
-  startDate.setDate(startDate.getDate() - 179) // ~26 weeks
+  const data = heatmapData.value?.dailyData
+  if (!data || data.length === 0) return []
 
-  // Adjust to start on Monday
-  const dayOfWeek = startDate.getDay()
-  const adjust = dayOfWeek === 0 ? 6 : dayOfWeek - 1
-  startDate.setDate(startDate.getDate() - adjust)
+  const result: (HeatmapDay | null)[][] = []
+  let currentWeek: (HeatmapDay | null)[] = []
 
-  const current = new Date(startDate)
-  let week: Array<{ date: string; minutes: number; level: number } | null> = []
+  const firstDate = new Date(data[0].date)
+  let firstDow = firstDate.getDay()
+  firstDow = firstDow === 0 ? 6 : firstDow - 1
 
-  while (current <= today) {
-    const dateStr = formatDateLocal(current)
-    const dayData = dailyMap.value.get(dateStr) || { date: dateStr, minutes: 0, level: 0 }
-    week.push(dayData)
-
-    if (week.length === 7) {
-      result.push(week)
-      week = []
-    }
-    current.setDate(current.getDate() + 1)
+  for (let i = 0; i < firstDow; i++) {
+    currentWeek.push(null)
   }
 
-  if (week.length > 0) {
-    while (week.length < 7) week.push(null)
-    result.push(week)
+  for (const day of data) {
+    currentWeek.push(day)
+    if (currentWeek.length === 7) {
+      result.push(currentWeek)
+      currentWeek = []
+    }
+  }
+
+  if (currentWeek.length > 0) {
+    while (currentWeek.length < 7) {
+      currentWeek.push(null)
+    }
+    result.push(currentWeek)
   }
 
   return result
 })
 
-// Month labels for the grid
+// Compute month labels
 const monthLabels = computed(() => {
-  const labels: Array<{ label: string; offset: number }> = []
-  const today = new Date()
-  const startDate = new Date(today)
-  startDate.setDate(startDate.getDate() - 179)
+  const data = heatmapData.value?.dailyData
+  if (!data || data.length === 0) return []
 
+  const labels: { label: string; width: number }[] = []
   const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
 
-  let lastMonth = -1
-  const current = new Date(startDate)
-  let weekIndex = 0
-
-  const dayOfWeek = current.getDay()
-  const adjust = dayOfWeek === 0 ? 6 : dayOfWeek - 1
-  current.setDate(current.getDate() - adjust)
-
-  while (current <= today) {
-    const month = current.getMonth()
-    if (month !== lastMonth) {
-      labels.push({
-        label: monthNames[month],
-        offset: weekIndex - (labels.length > 0 ? labels.reduce((s, l) => s + l.offset, 0) : 0),
-      })
-      lastMonth = month
+  const weekStartMonths: number[] = []
+  for (const week of weeks.value) {
+    const firstDay = week.find(d => d !== null)
+    if (firstDay) {
+      weekStartMonths.push(new Date(firstDay.date).getMonth())
     }
-    if (current.getDay() === 1 || current.getTime() === startDate.getTime()) {
-      weekIndex++
+  }
+
+  let i = 0
+  while (i < weekStartMonths.length) {
+    const month = weekStartMonths[i]
+    let span = 0
+    while (i + span < weekStartMonths.length && weekStartMonths[i + span] === month) {
+      span++
     }
-    current.setDate(current.getDate() + 1)
+    labels.push({
+      label: monthNames[month],
+      width: span * cellSize + (span - 1) * cellGap,
+    })
+    i += span
   }
 
   return labels
 })
 
-function levelClass(level: number): string {
-  const classes = [
-    'bg-navy-50',       // 0: no study
-    'bg-navy-200',      // 1: light
-    'bg-navy-400',      // 2: medium
-    'bg-navy-600',      // 3: heavy
-    'bg-navy-800',      // 4: intense
-  ]
-  return classes[level] || classes[0]
+function showTooltip(event: MouseEvent, day: HeatmapDay | null) {
+  if (!day) return
+  const target = event.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  tooltip.value = {
+    visible: true,
+    x: rect.left + rect.width / 2 - 50,
+    y: rect.top - 50,
+    date: formatDateLabel(day.date),
+    minutes: day.minutes,
+  }
 }
 
-function formatDate(dateStr: string): string {
-  const date = new Date(dateStr)
-  return `${date.getMonth() + 1}月${date.getDate()}日`
+function hideTooltip() {
+  tooltip.value.visible = false
 }
+
+function formatDateLabel(dateStr: string): string {
+  const d = new Date(dateStr)
+  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${weekdays[d.getDay()]}`
+}
+
+onMounted(async () => {
+  try {
+    const res = await getStudyHeatmap(180)
+    heatmapData.value = res.data
+  } catch (e) {
+    console.error('Failed to load heatmap:', e)
+  }
+})
 </script>
-
-<style scoped>
-.fade-enter-active, .fade-leave-active { transition: opacity 0.15s ease; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
-</style>

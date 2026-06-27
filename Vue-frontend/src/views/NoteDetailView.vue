@@ -54,6 +54,26 @@
           </svg>
           {{ dueCount > 0 ? `复习闪卡 (${dueCount})` : '闪卡' }}
         </button>
+        <button
+          v-if="viewMode === 'preview' && isAnnotated && !exportingPdf"
+          class="px-3 py-1.5 rounded-lg text-sm text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition-colors"
+          @click="exportNotePdf"
+        >
+          <svg class="w-4 h-4 inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+          </svg>
+          导出 PDF
+        </button>
+        <button
+          v-if="exportingPdf"
+          class="px-3 py-1.5 rounded-lg text-sm text-emerald-600 bg-emerald-50 cursor-wait"
+          disabled
+        >
+          <svg class="w-4 h-4 inline mr-1 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12a9 9 0 11-6.219-8.56" />
+          </svg>
+          导出中...
+        </button>
         <!-- View mode switch: edit / split / preview -->
         <div v-if="!showFormatPreview" class="flex items-center bg-navy-50 rounded-lg p-0.5">
           <button
@@ -94,7 +114,7 @@
             ? 'bg-indigo-50 text-indigo-600 cursor-wait'
             : 'text-indigo-600 hover:bg-indigo-50 border border-indigo-200'"
           :disabled="formatting"
-          @click="handleFormat"
+          @click="showInstructionDialog = true"
         >
           <svg v-if="formatting" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 12a9 9 0 11-6.219-8.56" />
@@ -128,6 +148,35 @@
         <span v-if="res.moduleName" class="text-navy-400">{{ res.moduleName }} ·</span>
         {{ res.resourceTitle || `资源 #${res.resourceId}` }}
       </button>
+    </div>
+
+    <!-- Instruction dialog -->
+    <div v-if="showInstructionDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+        <div class="px-6 pt-6 pb-4">
+          <h3 class="text-lg font-semibold text-navy-800 mb-2">整理笔记</h3>
+          <p class="text-sm text-navy-400 mb-4">可以输入你的整理要求，也可以直接跳过使用默认整理。</p>
+          <textarea
+            v-model="formatInstruction"
+            class="w-full h-28 px-3 py-2 rounded-lg border border-navy-200 text-sm text-navy-700 placeholder-navy-300 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 transition"
+            placeholder="例如：重点整理TCP三次握手部分，用表格对比UDP和TCP的区别..."
+          />
+        </div>
+        <div class="flex items-center justify-end gap-2 px-6 py-4 bg-navy-50/50 border-t border-navy-100/50">
+          <button
+            class="px-4 py-2 text-sm text-navy-500 hover:text-navy-700 transition-colors"
+            @click="showInstructionDialog = false"
+          >
+            取消
+          </button>
+          <button
+            class="px-4 py-2 text-sm text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors"
+            @click="showInstructionDialog = false; handleFormat()"
+          >
+            开始整理
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Format comparison preview (streaming or done) -->
@@ -221,20 +270,42 @@
       <!-- Preview mode -->
       <div v-else class="flex-1 min-h-0 overflow-y-auto" @mouseup="onPreviewMouseUp">
         <!-- Annotated two-column layout -->
-        <div v-if="isAnnotated" class="annotated-layout">
+        <div v-if="isAnnotated" ref="annotatedLayoutRef" class="annotated-layout">
           <aside class="annotation-sidebar">
             <p class="text-xs font-medium text-navy-400 mb-3 px-1">批注 ({{ annotations.length }})</p>
             <div
               v-for="ann in annotations"
               :key="ann.id"
               :data-ann-id="ann.id"
-              :class="['annotation-card', `ann-type-${ann.type}`, { 'ann-active': activeAnnotation === ann.id }]"
+              :class="['annotation-card', `ann-type-${ann.type}`, { 'ann-active': activeAnnotation === ann.id, 'ann-editing': editingAnnotationId === ann.id }]"
               @mouseenter="activeAnnotation = ann.id"
               @mouseleave="activeAnnotation = null"
               @click="scrollToContent(ann.id)"
             >
-              <span class="ann-type-badge">{{ ann.type }}</span>
-              <p class="ann-text">{{ ann.text }}</p>
+              <div class="ann-card-header">
+                <span
+                  class="ann-type-badge ann-type-clickable"
+                  :title="editingAnnotationId === ann.id ? '点击切换类型' : ''"
+                  @click.stop="editingAnnotationId === ann.id && cycleAnnotationType(ann)"
+                >{{ ann.type }}</span>
+                <div class="ann-card-actions">
+                  <button class="ann-action-btn" title="编辑" @click.stop="startInlineEdit(ann)">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  </button>
+                  <button class="ann-action-btn ann-action-delete" title="删除" @click.stop="deleteAnnotation(ann.id)">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </div>
+              </div>
+              <p
+                class="ann-text"
+                :contenteditable="editingAnnotationId === ann.id"
+                :ref="el => { if (el && editingAnnotationId === ann.id) editingTextRef = el as HTMLElement }"
+                @keydown.enter.prevent="editingAnnotationId === ann.id && saveInlineEdit(ann, $event)"
+                @keydown.escape.prevent="editingAnnotationId === ann.id && cancelInlineEdit(ann)"
+                @blur="editingAnnotationId === ann.id && saveInlineEdit(ann, $event)"
+                @click.stop
+              >{{ ann.text }}</p>
             </div>
           </aside>
           <div
@@ -349,7 +420,7 @@
           <p class="annotation-popup-title" @mousedown.prevent="startDrag($event, 'annotation')">
             <span class="popup-drag-dots">···</span>
             <span class="ann-type-dot" :style="{ background: ANNOTATION_TYPES.find(t => t.type === annotationType)?.color }"></span>
-            {{ annotationType }}
+            {{ editingAnnotationId ? '编辑' : '' }}{{ annotationType }}
           </p>
           <input
             ref="annotationInputRef"
@@ -420,6 +491,7 @@ import { getNoteById, createNote, updateNote, getNoteResources } from '@/api/not
 import { getFlashcardsByNote, generateFlashcardsSSE } from '@/api/flashcard'
 import { issueTicket } from '@/api/auth'
 import { formatNoteSSE } from '@/api/noteAgent'
+import { PYTHON_AI_BASE } from '@/api/request'
 import type { NoteAnnotation } from '@/api/noteAgent'
 import type { Note, NoteResourceRel } from '@/types/note'
 import type { Flashcard } from '@/types/flashcard'
@@ -548,6 +620,9 @@ const annotationStep = ref<'type' | 'text'>('type')
 const annotationType = ref('')
 const annotationText = ref('')
 const annotationInputRef = ref<HTMLInputElement | null>(null)
+const editingAnnotationId = ref<string | null>(null)
+const editingTextRef = ref<HTMLElement | null>(null)
+const exportingPdf = ref(false)
 
 // Drag state for popups
 const isDragging = ref(false)
@@ -586,6 +661,8 @@ function stopDrag() {
 const formatting = ref(false)
 const formatStatus = ref('')
 const showFormatFlashcardPrompt = ref(false)
+const showInstructionDialog = ref(false)
+const formatInstruction = ref('')
 
 // Format comparison preview state
 const showFormatPreview = ref(false)
@@ -599,6 +676,7 @@ const acceptedDuringStream = ref(false)
 const annotations = ref<NoteAnnotation[]>([])
 const activeAnnotation = ref<string | null>(null)
 const annotatedContentRef = ref<HTMLElement | null>(null)
+const annotatedLayoutRef = ref<HTMLElement | null>(null)
 const isAnnotated = computed(() => annotations.value.length > 0)
 const annotationTypeColor: Record<string, string> = {
   '易混淆': '#8b5cf6',
@@ -724,7 +802,6 @@ function confirmAnnotation() {
   if (!annotationType.value || !annotationText.value.trim()) return
   const id = getNextAnnotationId()
   const marker = `<<A:${id}|${annotationType.value}|${annotationText.value.trim()}>>`
-  // Insert marker at the end of selection (after the selected text)
   const before = content.value.substring(0, annotationSelEnd.value)
   const after = content.value.substring(annotationSelEnd.value)
   saveSnapshot()
@@ -738,6 +815,126 @@ function closeAnnotationPopup() {
   annotationStep.value = 'type'
   annotationType.value = ''
   annotationText.value = ''
+  editingAnnotationId.value = null
+}
+
+function deleteAnnotation(id: string) {
+  const re = new RegExp(`<<A:${id}\\|[^|]+\\|[^>]+>>`)
+  if (!re.test(content.value)) return
+  saveSnapshot()
+  content.value = content.value.replace(re, '')
+  const { annotations: anns } = parseAnnotations(content.value)
+  annotations.value = anns
+  onInput()
+}
+
+function startInlineEdit(ann: NoteAnnotation) {
+  editingAnnotationId.value = ann.id
+  nextTick(() => {
+    const el = editingTextRef.value
+    if (!el) return
+    el.focus()
+    // Select all text
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  })
+}
+
+function saveInlineEdit(ann: NoteAnnotation, event?: Event) {
+  if (editingAnnotationId.value !== ann.id) return
+  const el = editingTextRef.value
+  const newText = (el?.textContent ?? '').trim()
+  if (!newText || newText === ann.text) {
+    editingAnnotationId.value = null
+    return
+  }
+  const oldRe = new RegExp(`<<A:${ann.id}\\|([^|]+)\\|([^>]+)>>`)
+  const match = oldRe.exec(content.value)
+  if (!match) { editingAnnotationId.value = null; return }
+  const newMarker = `<<A:${ann.id}|${match[1]}|${newText}>`
+  saveSnapshot()
+  content.value = content.value.replace(oldRe, newMarker)
+  const { annotations: anns } = parseAnnotations(content.value)
+  annotations.value = anns
+  editingAnnotationId.value = null
+  onInput()
+}
+
+function cancelInlineEdit(ann: NoteAnnotation) {
+  // Restore original text in DOM before leaving edit mode
+  const el = editingTextRef.value
+  if (el) el.textContent = ann.text
+  editingAnnotationId.value = null
+}
+
+function cycleAnnotationType(ann: NoteAnnotation) {
+  const types = ANNOTATION_TYPES.map(t => t.type)
+  const idx = types.indexOf(ann.type)
+  const nextType = types[(idx + 1) % types.length]
+  const oldRe = new RegExp(`<<A:${ann.id}\\|([^|]+)\\|([^>]+)>>`)
+  const match = oldRe.exec(content.value)
+  if (!match) return
+  const newMarker = `<<A:${ann.id}|${nextType}|${match[2]}>`
+  saveSnapshot()
+  content.value = content.value.replace(oldRe, newMarker)
+  const { annotations: anns } = parseAnnotations(content.value)
+  annotations.value = anns
+  onInput()
+}
+
+// === 导出 PDF ===
+async function exportNotePdf() {
+  if (!annotatedLayoutRef.value) return
+  exportingPdf.value = true
+
+  try {
+    // 完全复用 PlanDetailView 的模式：克隆真实渲染的 DOM → 隐藏占位符 → html2pdf
+    const clone = annotatedLayoutRef.value.cloneNode(true) as HTMLElement
+
+    // 移除交互元素
+    clone.querySelectorAll('.ann-card-actions').forEach(el => el.remove())
+    clone.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'))
+
+    // 隐藏占位符（与 PlanDetailView 完全一致）
+    const placeholder = document.createElement('div')
+    placeholder.style.cssText = 'position:absolute;left:-9999px;top:-9999px;'
+    document.body.appendChild(placeholder)
+    placeholder.appendChild(clone)
+
+    // 处理图片 CORS
+    const images = clone.querySelectorAll('img')
+    const convertPromises = Array.from(images).map(async (img) => {
+      const src = img.getAttribute('src')
+      if (!src || src.startsWith('data:')) return
+      try {
+        const resp = await fetch(`${PYTHON_AI_BASE}/api/ai/proxy-image?url=${encodeURIComponent(src)}`)
+        const data = await resp.json()
+        if (data.data_url) img.setAttribute('src', data.data_url)
+      } catch { /* 保留原图 */ }
+    })
+    await Promise.all(convertPromises)
+
+    // 导出（与 PlanDetailView 完全一致的配置）
+    const html2pdf = (await import('html2pdf.js')).default
+    const opt = {
+      margin: 10,
+      filename: `${noteName.value || '笔记'}.pdf`,
+      image: { type: 'jpeg' as const, quality: 0.98 },
+      html2canvas: { scale: 2 },
+      jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const },
+      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] as string[] },
+    }
+    await html2pdf().set(opt).from(clone).save()
+
+    document.body.removeChild(placeholder)
+  } catch (err) {
+    console.error('Failed to export PDF:', err)
+  } finally {
+    exportingPdf.value = false
+  }
 }
 
 marked.setOptions({
@@ -1063,6 +1260,7 @@ async function handleFormat() {
 
     formatStatus.value = '正在整理笔记...'
 
+    const instruction = formatInstruction.value.trim()
     const { abort } = formatNoteSSE(ticket, originalBeforeFormat.value, {
       onProgress(message) {
         formatStatus.value = message
@@ -1104,7 +1302,7 @@ async function handleFormat() {
         formatStreamAbort.value = null
         console.error('Note format error:', error)
       },
-    })
+    }, instruction)
     formatStreamAbort.value = abort
   } catch (e) {
     content.value = originalBeforeFormat.value
@@ -1125,6 +1323,7 @@ function acceptFormat() {
   const { annotations: anns } = parseAnnotations(formattedResult.value)
   content.value = formattedResult.value
   annotations.value = anns
+  formatInstruction.value = ''
   showFormatPreview.value = false
   // If stream already finished, save now; otherwise onDone will save
   if (!formatting.value) {
@@ -1179,6 +1378,105 @@ function onAnnotatedContentClick(e: MouseEvent) {
 
 // === Selection popup ===
 
+/** 从渲染容器中计算选区的文本偏移量
+ *  使用 Range.toString() 测量，与 selection.toString() 文本序列化方式完全一致 */
+function getRenderedOffset(range: Range, container: HTMLElement): number {
+  try {
+    const beforeRange = document.createRange()
+    beforeRange.setStart(container, 0)
+    beforeRange.setEnd(range.startContainer, range.startOffset)
+    return beforeRange.toString().length
+  } catch {
+    // fallback: 如果 setStart(container, 0) 失败（container 不是 Node），返回 0
+    return 0
+  }
+}
+
+/** 将渲染文本中的偏移量映射回原始 markdown 中的位置
+ *  构建 rawMap 数组：rawMap[renderedIdx] = rawPos，每个渲染字符对应原始位置
+ *  正确处理 markdown 语法（#标题、**粗体**、*斜体*、>引用、- 列表、`代码`、[链接](url) 等） */
+function mapRenderedToRaw(raw: string, renderedOffset: number, renderedLength: number): number {
+  const rawMap: number[] = []
+  let rawPos = 0
+
+  while (rawPos < raw.length) {
+    // 跳过批注标记 <<A:id|type|text>>
+    const markerMatch = raw.substring(rawPos).match(/^<<A:\d+\|[^|]+\|[^>]+>>/)
+    if (markerMatch) { rawPos += markerMatch[0].length; continue }
+
+    // HTML 实体（如 &amp; → &）：占一个渲染字符
+    const entityMatch = raw.substring(rawPos).match(/^&(amp|lt|gt|quot|apos|#\d+|#x[\da-fA-F]+);/)
+    if (entityMatch) { rawMap.push(rawPos); rawPos += entityMatch[0].length; continue }
+
+    // 行首块级语法（不产生渲染字符，只推进 rawPos）
+    const atLineStart = rawPos === 0 || raw[rawPos - 1] === '\n'
+    if (atLineStart) {
+      const rest = raw.substring(rawPos)
+      const headingMatch = rest.match(/^#{1,6} /)
+      if (headingMatch) { rawPos += headingMatch[0].length; continue }
+      const quoteMatch = rest.match(/^>(?:>|\s)*>? /)
+      if (quoteMatch && quoteMatch[0].length > 0) { rawPos += quoteMatch[0].length; continue }
+      const ulMatch = rest.match(/^[-*+] /)
+      if (ulMatch) { rawPos += ulMatch[0].length; continue }
+      const olMatch = rest.match(/^\d+\. /)
+      if (olMatch) { rawPos += olMatch[0].length; continue }
+    }
+
+    // 围栏代码块：```...```（跳过围栏，内容逐字符映射）
+    if (raw.substring(rawPos, rawPos + 3) === '```') {
+      rawPos += 3
+      const closeIdx = raw.indexOf('```', rawPos)
+      if (closeIdx !== -1) {
+        while (rawPos < closeIdx) { rawMap.push(rawPos); rawPos++ }
+        rawPos += 3
+      }
+      continue
+    }
+
+    // 行内代码：`code`（跳过反引号，内容逐字符映射）
+    if (raw[rawPos] === '`') {
+      const closeBacktick = raw.indexOf('`', rawPos + 1)
+      if (closeBacktick !== -1) {
+        rawPos++ // 跳过开引号
+        while (rawPos < closeBacktick) { rawMap.push(rawPos); rawPos++ }
+        rawPos++ // 跳过闭引号
+        continue
+      }
+    }
+
+    // 粗体：**（优先匹配，跳过）
+    if (raw[rawPos] === '*' && rawPos + 1 < raw.length && raw[rawPos + 1] === '*') { rawPos += 2; continue }
+    // 斜体：*（仅当后面不是 * 时匹配，避免与 ** 冲突）
+    if (raw[rawPos] === '*' && (rawPos + 1 >= raw.length || raw[rawPos + 1] !== '*')) { rawPos++; continue }
+    // 粗体下划线：__
+    if (raw[rawPos] === '_' && rawPos + 1 < raw.length && raw[rawPos + 1] === '_') { rawPos += 2; continue }
+    // 斜体下划线：_
+    if (raw[rawPos] === '_') { rawPos++; continue }
+    // 删除线：~~
+    if (raw[rawPos] === '~' && rawPos + 1 < raw.length && raw[rawPos + 1] === '~') { rawPos += 2; continue }
+
+    // 链接/图片：[text](url) → 跳过 [ ] ( url )，内容逐字符映射
+    if (raw[rawPos] === '!' && raw[rawPos + 1] === '[') { rawPos += 2; continue }
+    if (raw[rawPos] === '[') { rawPos++; continue }
+    if (raw[rawPos] === ']') {
+      rawPos++
+      const urlMatch = raw.substring(rawPos).match(/^\([^)]*\)/)
+      if (urlMatch) rawPos += urlMatch[0].length
+      continue
+    }
+
+    // 普通字符（含 \n）：产生一个渲染字符
+    rawMap.push(rawPos)
+    rawPos++
+  }
+
+  // 从 rawMap 中提取选区对应的原始位置
+  const startIdx = renderedOffset
+  const endIdx = renderedOffset + renderedLength - 1
+  if (startIdx < 0 || endIdx >= rawMap.length || startIdx > endIdx) return -1
+  return rawMap[endIdx] + 1 // 返回选区结束位置（不含），即标记插入点
+}
+
 function onPreviewMouseUp(e: MouseEvent) {
   const selection = window.getSelection()
   const text = selection?.toString().trim() || ''
@@ -1192,10 +1490,12 @@ function onPreviewMouseUp(e: MouseEvent) {
   if (!range) return
   const rect = range.getBoundingClientRect()
 
-  // Find annotation insert position in raw markdown
+  // 通过位置映射将渲染文本偏移量转换为原始 markdown 位置
   const raw = content.value
+  const container = (e.currentTarget as HTMLElement).querySelector('.markdown-body') || e.currentTarget
+  const renderedOffset = getRenderedOffset(range, container as HTMLElement)
   const cleanSelected = text.replace(/<<A:\d+\|[^|]+\|[^>]+>>/g, '').trim()
-  const pos = raw.indexOf(cleanSelected)
+  const rawEndPos = mapRenderedToRaw(raw, renderedOffset, cleanSelected.length)
 
   const popupPos = calcPopupPos(rect)
   selectionPopup.value = {
@@ -1206,8 +1506,8 @@ function onPreviewMouseUp(e: MouseEvent) {
   }
 
   // Prepare annotation state (for preview mode annotation insertion)
-  if (pos !== -1) {
-    annotationSelEnd.value = pos + cleanSelected.length
+  if (rawEndPos !== -1) {
+    annotationSelEnd.value = rawEndPos
   }
 }
 
@@ -1665,7 +1965,6 @@ watch(activeAnnotation, (id) => {
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 4px;
-  margin-bottom: 4px;
 }
 
 .ann-text {
@@ -1673,6 +1972,68 @@ watch(activeAnnotation, (id) => {
   line-height: 1.5;
   color: #374151;
   margin: 0;
+}
+
+.ann-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.ann-card-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.annotation-card:hover .ann-card-actions,
+.ann-editing .ann-card-actions {
+  opacity: 1;
+}
+
+.ann-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.ann-action-btn:hover {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.ann-action-delete:hover {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+.ann-text[contenteditable="true"] {
+  outline: none;
+  border-radius: 3px;
+  background: rgba(99, 102, 241, 0.04);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.2);
+  padding: 1px 4px;
+  margin: -1px -4px;
+}
+
+.ann-type-clickable {
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.ann-editing {
+  background: #fafbff;
 }
 
 /* Type colors */
