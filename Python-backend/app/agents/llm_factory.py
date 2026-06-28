@@ -675,6 +675,21 @@ def get_quiz_generator_llm() -> MIMOClient:
                       thinking=THINKING_DISABLED)
 
 
+def get_tree_lightweight_json_llm() -> MIMOClient:
+    """知识树结构化 JSON 任务 - pro 模型，关闭思维链以降低 token 成本。
+
+    用于 subdivide / first_principles / options / quiz / flashcards 等结构化输出。
+    关闭思维链可将 output token 减半，JSON 格式任务质量几乎不受影响。
+    """
+    return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=3072,
+                      thinking=THINKING_DISABLED)
+
+
+def get_tree_structured_json_llm() -> MIMOClient:
+    """知识树结构化生成别名，与 get_tree_lightweight_json_llm 相同。"""
+    return get_tree_lightweight_json_llm()
+
+
 def get_resource_type_generator_llm() -> MIMOClient:
     """多模态类型资源生成智能体 - pro 模型，支持 mindmap/summary/code 等结构化输出"""
     return MIMOClient(model=MIMOClient.MODEL_PRO, temperature=0.5, max_tokens=65536,

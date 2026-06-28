@@ -56,6 +56,64 @@ CREATE TABLE IF NOT EXISTS `learning_resource` (
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学习资源表';
 
+CREATE TABLE IF NOT EXISTS `knowledge_tree` (
+    `id` VARCHAR(64) NOT NULL,
+    `plan_id` BIGINT UNSIGNED NOT NULL,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `title` VARCHAR(160) NOT NULL,
+    `field` VARCHAR(160) DEFAULT '',
+    `current_problem` TEXT,
+    `learning_background` TEXT,
+    `current_node_id` VARCHAR(64) DEFAULT NULL,
+    `context_summary` TEXT,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_tree_plan_user` (`plan_id`, `user_id`),
+    KEY `idx_tree_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='交互式知识树';
+
+CREATE TABLE IF NOT EXISTS `knowledge_node` (
+    `id` VARCHAR(64) NOT NULL,
+    `tree_id` VARCHAR(64) NOT NULL,
+    `parent_id` VARCHAR(64) DEFAULT NULL,
+    `resource_id` BIGINT UNSIGNED DEFAULT NULL,
+    `title` VARCHAR(160) NOT NULL,
+    `summary` TEXT,
+    `content` TEXT,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'pending',
+    `relevance` INT NOT NULL DEFAULT 0,
+    `importance` INT NOT NULL DEFAULT 2,
+    `relevance_score` INT NOT NULL DEFAULT 2,
+    `difficulty` INT NOT NULL DEFAULT 2,
+    `depth` INT NOT NULL DEFAULT 0,
+    `sort_order` INT NOT NULL DEFAULT 0,
+    `prerequisite_ids` JSON DEFAULT NULL,
+    `is_fundamental` TINYINT NOT NULL DEFAULT 0,
+    `fp_relation` VARCHAR(80) DEFAULT '',
+    `fp_reason` TEXT,
+    `collapsed` TINYINT NOT NULL DEFAULT 0,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_node_tree` (`tree_id`),
+    KEY `idx_node_parent` (`parent_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识树节点';
+
+CREATE TABLE IF NOT EXISTS `tree_message` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `tree_id` VARCHAR(64) NOT NULL,
+    `node_id` VARCHAR(64) NOT NULL,
+    `role` VARCHAR(16) NOT NULL,
+    `content` TEXT NOT NULL,
+    `next_actions` JSON DEFAULT NULL,
+    `search_sources` JSON DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_tree_message_tree` (`tree_id`),
+    KEY `idx_tree_message_node` (`node_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识树节点消息';
+
 CREATE TABLE IF NOT EXISTS `ai_dialogue` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '用户ID',

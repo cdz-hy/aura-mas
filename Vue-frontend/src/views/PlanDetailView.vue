@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full w-full flex flex-col overflow-hidden">
+  <div class="plan-detail-page h-full w-full flex flex-col overflow-hidden">
     <div v-if="!plan" class="flex items-center justify-center h-full flex-1">
       <div class="text-center">
         <svg class="w-12 h-12 mx-auto text-navy-200 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -9,15 +9,15 @@
       </div>
     </div>
 
-    <div v-else class="flex gap-0 h-full w-full overflow-x-auto overflow-y-hidden flex-1 custom-scrollbar">
+    <div v-else class="plan-detail-workspace flex gap-0 h-full w-full overflow-x-auto overflow-y-hidden flex-1 custom-scrollbar">
     <!-- ==================== 左侧栏：模块列表（可折叠） ==================== -->
     <div
-      class="flex-shrink-0 flex flex-col card overflow-hidden transition-all duration-300 animate-fade-in-up"
-      :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-[280px]'"
+      class="plan-detail-sidebar flex-shrink-0 flex flex-col overflow-hidden transition-all duration-300 animate-fade-in-up"
+      :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-[320px]'"
     >
-      <div class="flex flex-col h-full min-w-[280px]">
+      <div class="plan-detail-sidebar__inner flex flex-col h-full min-w-[320px]">
         <!-- Plan header -->
-        <div class="px-4 py-4 border-b border-navy-100/50">
+        <div class="plan-detail-sidebar__header px-4 py-3.5">
           <div class="flex items-center gap-2">
             <input
               v-if="editingTitle"
@@ -28,6 +28,23 @@
               autofocus
             />
             <h2 v-else class="font-display text-base font-semibold text-navy-800 truncate flex-1">{{ plan.title }}</h2>
+            <button
+              v-if="!editingTitle"
+              class="p-1 rounded transition-colors"
+              :class="isTreeMode ? 'text-navy-600 bg-navy-50' : 'text-navy-300 hover:text-navy-600 hover:bg-navy-50'"
+              :title="isTreeMode ? '返回学习模式' : '进入知识树'"
+              @click="toggleTreeMode"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 3v6" />
+                <path d="M6 13h12" />
+                <path d="M6 13v5" />
+                <path d="M18 13v5" />
+                <circle cx="12" cy="9" r="2" />
+                <circle cx="6" cy="19" r="2" />
+                <circle cx="18" cy="19" r="2" />
+              </svg>
+            </button>
             <button
               v-if="!editingTitle"
               class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
@@ -151,7 +168,7 @@
 
     <!-- 折叠/展开按钮 -->
     <button
-      class="flex-shrink-0 w-6 flex items-center justify-center bg-navy-50 hover:bg-navy-100 transition-colors rounded-r-lg my-2"
+      class="plan-detail-collapse flex-shrink-0 flex items-center justify-center transition-colors"
       @click="sidebarCollapsed = !sidebarCollapsed"
       :title="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
     >
@@ -160,21 +177,126 @@
       </svg>
     </button>
 
-    <!-- ==================== 中间栏：资源详情（始终在 DOM 中，width 过渡动画） ==================== -->
+    <template v-if="isTreeMode">
+      <section
+        v-if="!treeContentVisible"
+        class="plan-tree-stage flex min-w-[720px] flex-1 flex-col overflow-hidden"
+      >
+        <header class="flex flex-shrink-0 items-center justify-between gap-3 border-b border-navy-100 px-4 py-3">
+          <div class="min-w-0">
+            <h3 class="truncate font-display text-sm font-semibold text-navy-800">
+              {{ knowledgeTreeStore.tree?.title || plan.title }}
+            </h3>
+            <p class="mt-0.5 truncate text-xs text-navy-400">
+              {{ selectedTreeNode?.title || '选择节点后开始拆分' }}
+            </p>
+          </div>
+          <div class="flex flex-shrink-0 items-center gap-2">
+            <button
+              v-if="knowledgeTreeStore.activeSource"
+              class="h-8 rounded-lg bg-red-50 px-3 text-xs font-semibold text-red-600 hover:bg-red-100"
+              @click="knowledgeTreeStore.stopStream"
+            >
+              {{ knowledgeTreeStore.fpStreamingActive ? '■ 停止拆解' : '停止' }}
+            </button>
+          </div>
+        </header>
+
+        <div v-if="knowledgeTreeStore.error" class="mx-4 mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
+          {{ knowledgeTreeStore.error }}
+        </div>
+
+        <div v-if="showBootstrapPreview" class="mx-4 mt-3">
+          <TreeBootstrapPreview
+            :topics="knowledgeTreeStore.previewTopics"
+            :loading="knowledgeTreeStore.previewLoading"
+            :error="knowledgeTreeStore.previewError"
+            :growing="knowledgeTreeStore.growProgress.growing"
+            :current-branch="knowledgeTreeStore.growProgress.currentBranch"
+            :done-count="knowledgeTreeStore.growProgress.doneCount"
+            :total-count="knowledgeTreeStore.growProgress.totalCount"
+            @confirm="knowledgeTreeStore.confirmPreviewGrow"
+            @skip="knowledgeTreeStore.skipPreviewAndGrow"
+            @retry="knowledgeTreeStore.startPreview"
+          />
+        </div>
+
+        <div class="relative min-h-0 flex-1 p-3">
+          <KnowledgeTreeCanvas
+            :nodes="knowledgeTreeStore.nodes"
+            :root-node-id="rootTreeNodeId"
+            :selected-node-id="knowledgeTreeStore.currentNodeId"
+            v-model:pan-x="knowledgeTreeStore.panX"
+            v-model:pan-y="knowledgeTreeStore.panY"
+            v-model:zoom="knowledgeTreeStore.zoom"
+            @select="selectTreeNode"
+            @toggle-collapse="toggleTreeNodeCollapse"
+            @open-subdivide="openTreeSubdivide"
+            @delete-node="confirmDeleteTreeNode"
+            @node-drag-start="knowledgeTreeStore.setDraggingNodeId($event)"
+            @node-drag-end="knowledgeTreeStore.setDraggingNodeId(null)"
+          />
+          <div
+            v-if="knowledgeTreeStore.loading && !knowledgeTreeStore.activeSource"
+            class="absolute inset-3 flex items-center justify-center rounded-lg bg-white/60"
+          >
+            <svg class="h-8 w-8 animate-spin text-navy-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10" class="opacity-25" />
+              <path d="M4 12a8 8 0 0 1 8-8" class="opacity-75" stroke-linecap="round" />
+            </svg>
+          </div>
+        </div>
+        <button
+          v-if="knowledgeTreeStore.fpStreamingActive"
+          type="button"
+          class="fp-stop-button"
+          title="停止第一性原理拆解；已拆出的卡片会保留"
+          @click="knowledgeTreeStore.stopStream"
+        >
+          ■ 停止拆解
+        </button>
+      </section>
+
+      <TreeSubdividePopover
+        :node="treePopoverNode"
+        :options="treeSubdivisionOptions"
+        :caution="knowledgeTreeStore.subdivisionCaution"
+        :loading="knowledgeTreeStore.subdivisionOptionsLoading"
+        :error="knowledgeTreeStore.subdivisionOptionsError"
+        @close="closeTreeSubdivide"
+        @load-options="loadTreeSubdivideOptions"
+        @single-angle="runSingleAngleSplit"
+        @multi-angle="runMultiAngleSplit"
+        @first-principles="runFirstPrinciplesSplit"
+      />
+    </template>
+
+    <template v-if="!isTreeMode || treeContentVisible">
+    <!-- ==================== 中间栏：资源详情（学习模式 / 知识树内容预览） ==================== -->
     <div
-      class="resource-panel flex flex-col card overflow-hidden"
+      class="plan-resource-panel resource-panel flex flex-col overflow-hidden"
       :class="{
         'resource-panel--closed': !selectedResource && !showResourceStreamPreview,
         '!transition-none': isDragging,
         'fixed inset-0 z-40 m-0 bg-white rounded-none border-none shadow-none': isFullscreen,
-        'mx-2': !isFullscreen
+        'plan-resource-panel--spaced': !isFullscreen
       }"
       :style="isFullscreen ? {} : panelStyle"
     >
       <template v-if="selectedResource">
         <!-- 标题栏 -->
-        <div class="px-4 py-3 border-b border-navy-100/50 flex items-center justify-between">
+        <div class="plan-resource-panel__header px-4 py-3 flex items-center justify-between">
           <div class="flex items-center gap-2 min-w-0">
+            <button
+              v-if="isTreeMode"
+              class="p-1 rounded text-navy-400 hover:text-navy-700 hover:bg-navy-50 transition-colors flex-shrink-0"
+              title="返回知识树"
+              @click="closeTreeContentPanel"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
             <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0" :class="badgeClass(selectedResource.moduleType)">
               {{ typeLabels[selectedResource.moduleType] || selectedResource.moduleType }}
             </span>
@@ -461,7 +583,7 @@
 
     <!-- 拖拽分隔线（始终在 DOM 中，width 过渡动画） -->
     <div
-      class="resource-divider flex-shrink-0 flex items-center justify-center cursor-col-resize group"
+      class="plan-resource-divider resource-divider flex-shrink-0 flex items-center justify-center cursor-col-resize group"
       :class="{ 'resource-divider--closed': !selectedResource && !showResourceStreamPreview, 'w-2': isDragging, 'w-1.5': !isDragging }"
       @mousedown="onDividerMouseDown"
     >
@@ -469,16 +591,20 @@
     </div>
 
     <!-- ==================== 右侧栏：对话界面 ==================== -->
-    <PlanChatPanel
-      ref="planChatPanelRef"
-      :plan-id="planIdStr"
-      :resource-id="selectedResource?.id ?? null"
-      v-model:mode="chatPanelMode"
-      @confirm-breakdown="confirmBreakdown()"
-      @submit-modification="submitModification"
-      @generate-resource="generateResource"
-      @open-resource="openResourceById"
-    />
+    <aside class="plan-chat-shell">
+      <PlanChatPanel
+        ref="planChatPanelRef"
+        class="plan-chat-panel"
+        :plan-id="planIdStr"
+        :resource-id="selectedResource?.id ?? null"
+        v-model:mode="chatPanelMode"
+        @confirm-breakdown="confirmBreakdown()"
+        @submit-modification="submitModification"
+        @generate-resource="generateResource"
+        @open-resource="openResourceById"
+      />
+    </aside>
+    </template>
   </div>
 
   <!-- 引用悬浮预览卡片 -->
@@ -590,10 +716,10 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { getPlan, updatePlan, generatePlanIcon } from '@/api/plan'
-import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi, deleteResource as deleteResourceApi, markResourceComplete, unmarkResourceComplete, getProgressByPlan } from '@/api/resource'
-import { parseMarkdown, extractCitations } from '@/utils/markdown'
+import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi, deleteResource as deleteResourceApi, markResourceComplete, unmarkResourceComplete, getProgressByPlan, updateResourceContent, bulkCreateResources } from '@/api/resource'
+import { parseMarkdown, extractCitations, normalizeMermaidCode } from '@/utils/markdown'
 import { normalizeAnimationHtml } from '@/utils/animationHtml'
 import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
@@ -610,17 +736,47 @@ import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import VideoPlayer from '@/components/resource/VideoPlayer.vue'
 import PptxViewer from '@/components/resource/PptxViewer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
+import KnowledgeTreeCanvas from '@/components/tree/KnowledgeTreeCanvas.vue'
+import PlanResourceOutline from '@/components/plan/PlanResourceOutline.vue'
+import {
+  buildOutlineTreeFromTreeItems,
+  countOutlineTreeModules,
+  countOutlineTreeResources,
+} from '@/components/plan/usePlanResourceOutline'
+import TreeSubdividePopover from '@/components/tree/TreeSubdividePopover.vue'
+import TreeBootstrapPreview from '@/components/tree/TreeBootstrapPreview.vue'
+import { buildTreePlanOutline } from '@/components/tree/useTreePlanOutline'
+import { useKnowledgeTreeStore } from '@/stores/knowledgeTree'
+import { updateKnowledgeNode } from '@/api/knowledgeTree'
+import type { KnowledgeNode } from '@/types/knowledgeTree'
 import type { LearningPlan, LearningResource } from '@/types/plan'
 import type { Note } from '@/types/note'
 import type { GeneratedResourceRef } from '@/utils/sse'
 import type { QuizData, QuizQuestion } from '@/types/quiz'
+import type { TreeSubdivisionOption } from '@/types/knowledgeTree'
 import type { MindElixirData } from 'mind-elixir'
 
 const route = useRoute()
+const router = useRouter()
 const planId = computed(() => Number(route.params.id))
 const planIdStr = computed(() => String(planId.value))
+const isTreeMode = computed(() => route.query.view === 'tree')
 const chatStore = useChatStore()
 const authStore = useAuthStore()
+const knowledgeTreeStore = useKnowledgeTreeStore()
+const treePopoverNodeId = ref<string | null>(null)
+const treeSubdivisionOptions = ref<TreeSubdivisionOption[]>([])
+const bootstrapPreviewDismissed = ref(false)
+
+const showBootstrapPreview = computed(() => {
+  if (bootstrapPreviewDismissed.value) return false
+  if (!knowledgeTreeStore.tree || !isTreeMode.value) return false
+  // 仅在主动预览/生成过程中显示，L1 节点已从学习资源同步时不再弹出
+  if (knowledgeTreeStore.growProgress.growing) return true
+  if (knowledgeTreeStore.previewTopics.length > 0) return true
+  if (knowledgeTreeStore.previewLoading) return true
+  return false
+})
 const chatPanelMode = ref<'assistant' | 'tutor'>(
   (localStorage.getItem('chatPanelMode') as 'assistant' | 'tutor') || 'assistant'
 )
@@ -1069,6 +1225,21 @@ const questionResults = computed(() => {
 const quizSubmitting = ref(false)
 const sidebarCollapsed = ref(false)
 
+function clearSelectedResource() {
+  if (selectedResourceId.value !== null) {
+    heartbeat.stop()
+  }
+  selectedResourceId.value = null
+  selectedResource.value = null
+  quizData.value = null
+  mindmapData.value = null
+  gradingResult.value = null
+  quizSubmittedAnswers.value = null
+  showExplanations.value = false
+  isFullscreen.value = false
+  chatStore.selectedModuleContext = null
+}
+
 // ==================== 数据加载 ====================
 async function loadPlan() {
   const id = planId.value
@@ -1156,7 +1327,7 @@ onMounted(async () => {
   document.addEventListener('mousedown', onDocumentMouseDown)
   // 支持 ?resource=xxx 跳转自动打开对应资源
   const queryResource = route.query.resource
-  if (queryResource) {
+  if (queryResource && !isTreeMode.value) {
     const resId = Number(queryResource)
     if (resId > 0) {
       openResourceById(resId)
@@ -1181,21 +1352,29 @@ watch(planId, () => {
     loadPlan()
     loadResources()
     selectedModuleIndex.value = -1
-    selectedResourceId.value = null
-    selectedResource.value = null
-    quizData.value = null
-    mindmapData.value = null
-    gradingResult.value = null
-    quizSubmittedAnswers.value = null
+    clearSelectedResource()
+    if (isTreeMode.value) {
+      ensureTreeLoaded(true)
+    }
   }
 })
 
 // 监听 ?resource= 查询参数变化（同 plan 内跳转不同资源）
 watch(() => route.query.resource, (resId) => {
-  if (resId && resources.value.length > 0) {
+  if (resId && resources.value.length > 0 && !isTreeMode.value) {
     openResourceById(Number(resId))
   }
 })
+
+watch(isTreeMode, async value => {
+  if (value) {
+    bootstrapPreviewDismissed.value = false
+  } else {
+    closeTreeSubdivide()
+  }
+  // 两个模式都需要加载知识树（大纲侧栏统一展示树节点）
+  await ensureTreeLoaded()
+}, { immediate: true })
 
 // 标题编辑
 const editingTitle = ref(false)
@@ -1371,7 +1550,11 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
     parentId: null,
     moduleOrder,
     moduleType,
-    moduleData,
+    moduleData: {
+      ...moduleData,
+      nodeId: moduleData.nodeId || chatStore.selectedModuleContext?.nodeId || undefined,
+      node_id: moduleData.node_id || chatStore.selectedModuleContext?.nodeId || undefined,
+    },
     status: resource.status ?? 2,
     storagePath: null,
     generatedByAgent: moduleType === 'animation' ? 'animation_skill_generator' : 'resource_type_generator',
@@ -1420,6 +1603,293 @@ const planProgress = computed(() => {
   ).length
   return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
 })
+
+
+const rootTreeNodeId = computed(() => {
+  const root = knowledgeTreeStore.nodes.find(node => !node.parentId)
+    || knowledgeTreeStore.nodes.find(node => node.depth === 0)
+    || knowledgeTreeStore.nodes[0]
+  return root?.id || null
+})
+
+const treePlanOutline = computed(() =>
+  buildTreePlanOutline(knowledgeTreeStore.nodes, resources.value, rootTreeNodeId.value)
+)
+
+const outlineTreeModules = computed(() => {
+  return buildOutlineTreeFromTreeItems(treePlanOutline.value, resources.value)
+})
+
+const selectedOutlineModuleId = computed(() => {
+  const nodeId = knowledgeTreeStore.currentNodeId
+  return nodeId ? `node:${nodeId}` : null
+})
+
+const outlineLoading = computed(() =>
+  knowledgeTreeStore.loading && outlineTreeModules.value.length === 0
+)
+
+const outlineHeaderSubtitle = '由知识树管理 · 在此生成学习内容'
+
+const outlineEmptyTitle = '暂无知识树节点'
+
+const outlineEmptyHint = '在画布中拆分节点后会出现在这里'
+
+const outlineMetaText = computed(() => {
+  const mods = outlineTreeModules.value
+  if (mods.length === 0) return ''
+  const moduleCount = countOutlineTreeModules(mods)
+  const resourceCount = countOutlineTreeResources(mods)
+  return `${moduleCount} 节点 · ${resourceCount} 资源`
+})
+
+const selectedTreeNode = computed(() =>
+  knowledgeTreeStore.nodes.find(node => node.id === knowledgeTreeStore.currentNodeId) || null
+)
+
+/** 知识树模式下是否展示内容面板（仅用户主动选中资源时隐藏树画布） */
+const treeContentVisible = computed(() =>
+  isTreeMode.value && !!selectedResource.value
+)
+
+const treePopoverNode = computed(() =>
+  knowledgeTreeStore.nodes.find(node => node.id === treePopoverNodeId.value) || null
+)
+
+async function ensureTreeLoaded(force = false) {
+  if (!Number.isFinite(planId.value)) return
+  if (!force && knowledgeTreeStore.tree?.planId === planId.value && knowledgeTreeStore.nodes.length > 0) return
+  if (force) {
+    await loadResources()
+  }
+  await knowledgeTreeStore.loadByPlan(planId.value)
+}
+
+async function enterTreeMode() {
+  heartbeat.stop()
+  clearSelectedResource()
+  await router.replace({ query: { ...route.query, view: 'tree', resource: undefined } })
+  await ensureTreeLoaded(true)
+}
+
+async function toggleTreeMode() {
+  if (isTreeMode.value) {
+    await exitTreeMode()
+    return
+  }
+  await enterTreeMode()
+}
+
+async function exitTreeMode() {
+  closeTreeSubdivide()
+  const nextQuery = { ...route.query }
+  delete nextQuery.view
+  await router.replace({ query: nextQuery })
+}
+
+async function selectTreeNode(nodeId: string) {
+  await knowledgeTreeStore.selectNode(nodeId)
+}
+
+async function toggleTreeNodeCollapse(nodeId: string) {
+  await knowledgeTreeStore.toggleCollapsed(nodeId)
+}
+
+async function confirmDeleteTreeNode(nodeId: string) {
+  const node = knowledgeTreeStore.nodes.find(n => n.id === nodeId)
+  if (!node || !node.parentId) return // 根节点不可删除
+
+  const hasChildren = knowledgeTreeStore.nodes.some(n => n.parentId === nodeId)
+  const title = node.title || '未命名节点'
+  const msg = hasChildren
+    ? `确定删除「${title}」及其所有子节点？此操作不可恢复。`
+    : `确定删除「${title}」？此操作不可恢复。`
+
+  if (!window.confirm(msg)) return
+
+  await knowledgeTreeStore.deleteNode(nodeId)
+}
+
+async function openOutlineResource(resourceId: number) {
+  const resource = resources.value.find(item => item.id === resourceId)
+  const nodeId = resource?.moduleData?.nodeId as string | undefined
+
+  if (isTreeMode.value) {
+    // 树模式下：只选中节点，不打开资源面板
+    if (nodeId) {
+      await knowledgeTreeStore.selectNode(nodeId)
+    }
+    return
+  }
+
+  await openResourceById(resourceId)
+  if (nodeId) {
+    await knowledgeTreeStore.selectNode(nodeId)
+  }
+}
+
+function onOutlineSelectModule(moduleId: string, nodeId?: string) {
+  if (!nodeId) return
+  // 两个模式统一处理：选中/取消选中树节点，并打开关联资源
+  if (knowledgeTreeStore.currentNodeId === nodeId) {
+    // 重复点击同一节点 → 取消选中
+    knowledgeTreeStore.currentNodeId = null
+    clearSelectedResource()
+    return
+  }
+  void selectTreeNode(nodeId).then(() => {
+    if (isTreeMode.value) return
+    // 计划模式下：打开节点关联的资源
+    const node = knowledgeTreeStore.nodes.find(n => n.id === nodeId)
+    const resourceId = node?.resourceId
+      || resources.value.find(r => {
+        const data = r.moduleData || {}
+        return data.nodeId === nodeId || data.node_id === nodeId
+      })?.id
+    if (resourceId) {
+      void openResourceById(resourceId)
+    } else {
+      clearSelectedResource()
+    }
+  })
+}
+
+function onOutlineSelectResource(resourceId: number) {
+  void openOutlineResource(resourceId)
+}
+
+async function handleRetryById(resourceId: number) {
+  const res = resources.value.find(item => item.id === resourceId)
+  if (res) await handleRetry(res)
+}
+
+function closeTreeContentPanel() {
+  clearSelectedResource()
+}
+
+/** 为知识树节点创建或复用占位资源，供内容生成管线使用 */
+async function ensureNodePlaceholderResource(node: KnowledgeNode): Promise<number> {
+  if (node.resourceId) return node.resourceId
+
+  const linked = resources.value.find(item => {
+    const data = item.moduleData || {}
+    return data.nodeId === node.id || data.node_id === node.id
+  })
+  if (linked?.id) {
+    if (!node.resourceId) {
+      await updateKnowledgeNode(node.id, { resourceId: linked.id })
+      const idx = knowledgeTreeStore.nodes.findIndex(n => n.id === node.id)
+      if (idx >= 0) knowledgeTreeStore.nodes[idx] = { ...knowledgeTreeStore.nodes[idx], resourceId: linked.id }
+    }
+    return linked.id
+  }
+
+  const maxOrder = resources.value.length > 0
+    ? Math.max(...resources.value.map(r => r.moduleOrder))
+    : 0
+  const res = await bulkCreateResources([{
+    planId: planId.value,
+    moduleOrder: maxOrder + 1,
+    moduleType: 'text',
+    moduleData: JSON.stringify({
+      title: node.title,
+      module_title: node.title,
+      description: node.summary || '',
+      nodeId: node.id,
+    }),
+    status: 1,
+  }])
+  const created = res.data?.[0]
+  if (!created?.id) throw new Error('创建占位资源失败')
+
+  await updateKnowledgeNode(node.id, { resourceId: created.id })
+  const nodeIdx = knowledgeTreeStore.nodes.findIndex(n => n.id === node.id)
+  if (nodeIdx >= 0) {
+    knowledgeTreeStore.nodes[nodeIdx] = { ...knowledgeTreeStore.nodes[nodeIdx], resourceId: created.id }
+  }
+  parseModuleData([created])
+  resources.value.push(created)
+  return created.id
+}
+
+async function generateFromTreeNode(payload: { nodeId: string; type: string }) {
+  const node = knowledgeTreeStore.nodes.find(item => item.id === payload.nodeId)
+  if (!node) return
+
+  try {
+    await knowledgeTreeStore.selectNode(payload.nodeId)
+    const resourceId = await ensureNodePlaceholderResource(node)
+    const ctx = {
+      title: node.title,
+      description: node.summary || '',
+      moduleId: resourceId,
+      nodeId: node.id,
+      planId: planId.value,
+    }
+    chatStore.selectedModuleContext = ctx
+    await chatStore.requestNodeResourceGeneration(String(planId.value), ctx, payload.type)
+    if (!isTreeMode.value) {
+      await openResourceById(resourceId, payload.type)
+    }
+  } catch (e) {
+    knowledgeTreeStore.error = e instanceof Error ? e.message : '生成内容失败'
+  }
+}
+
+async function handleOutlineDropNode(payload: { nodeId: string; targetNodeId: string }) {
+  const ok = await knowledgeTreeStore.reparentNode(payload.nodeId, payload.targetNodeId)
+  if (ok) {
+    await knowledgeTreeStore.selectNode(payload.targetNodeId)
+  }
+  knowledgeTreeStore.setDraggingNodeId(null)
+}
+
+async function handleOutlineMountResource(payload: { resourceId: number; targetNodeId: string }) {
+  const resource = resources.value.find(item => item.id === payload.resourceId)
+  if (!resource) return
+  try {
+    const moduleData = {
+      ...(resource.moduleData || {}),
+      nodeId: payload.targetNodeId,
+    }
+    await updateResourceContent(payload.resourceId, moduleData, resource.status ?? 2)
+    await loadResources()
+    await knowledgeTreeStore.selectNode(payload.targetNodeId)
+  } catch (e) {
+    knowledgeTreeStore.error = e instanceof Error ? e.message : '关联资源失败'
+  }
+}
+
+async function openTreeSubdivide(nodeId: string) {
+  const selected = await knowledgeTreeStore.selectNode(nodeId)
+  if (!selected) return
+  treeSubdivisionOptions.value = []
+  treePopoverNodeId.value = nodeId
+}
+
+function closeTreeSubdivide() {
+  treePopoverNodeId.value = null
+  treeSubdivisionOptions.value = []
+}
+
+async function loadTreeSubdivideOptions() {
+  treeSubdivisionOptions.value = await knowledgeTreeStore.loadSubdivisionOptionsCurrent()
+}
+
+async function runSingleAngleSplit(angle: string) {
+  closeTreeSubdivide()
+  await knowledgeTreeStore.subdivideCurrent(angle)
+}
+
+async function runMultiAngleSplit(options: TreeSubdivisionOption[]) {
+  closeTreeSubdivide()
+  await knowledgeTreeStore.multiAngleSubdivideCurrent(options)
+}
+
+async function runFirstPrinciplesSplit() {
+  closeTreeSubdivide()
+  await knowledgeTreeStore.firstPrinciplesCurrent()
+}
 
 function renderMd(text: string) { return parseMarkdown(text) }
 
@@ -1511,9 +1981,7 @@ async function renderMermaidInResource() {
 
         try {
           const rawCode = decodeURIComponent(codeBase64)
-          const normalizedCode = rawCode
-            .replace(/[    　]/g, ' ')
-            .replace(/[​‌‍﻿]/g, '')
+          const normalizedCode = normalizeMermaidCode(rawCode)
 
           const id = 'mermaid-' + Math.random().toString(36).substr(2, 9)
           const { svg } = await mermaid.render(id, normalizedCode)
@@ -2084,6 +2552,7 @@ function toggleResource(res: LearningResource) {
     description: moduleDesc,
     moduleId: res.id,
     planId: res.planId || planId.value,
+    nodeId: (res.moduleData?.nodeId || res.moduleData?.node_id) as string | undefined,
   }
   // 仅在非 quiz 资源时提示（quiz 本身已是补充资源）
   if (res.moduleType !== 'quiz') {
@@ -2530,6 +2999,8 @@ watch(() => chatStore.lastQuizResource, (data) => {
     moduleData: {
       title: '练习题',
       questions: data.questions,
+      nodeId: chatStore.selectedModuleContext?.nodeId || undefined,
+      node_id: chatStore.selectedModuleContext?.nodeId || undefined,
     },
     status: 2,
     storagePath: null,
@@ -2612,6 +3083,7 @@ watch(() => chatStore.lastGeneratedResources, async (resList) => {
       toggleResource(firstUpdatedRes)
     }
   }
+  await ensureTreeLoaded(true)
   chatStore.lastGeneratedResources = null
 })
 
@@ -2628,7 +3100,12 @@ watch(() => chatStore.streamingResources.length, () => {
       moduleOrder: resources.value.length > 0
         ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1,
       moduleType: resource.type || 'document',
-      moduleData: { title: resource.title, content },
+      moduleData: {
+        title: resource.title,
+        content,
+        nodeId: chatStore.selectedModuleContext?.nodeId || undefined,
+        node_id: chatStore.selectedModuleContext?.nodeId || undefined,
+      },
       status: 2,
       storagePath: null,
       generatedByAgent: 'content_orchestrator',
@@ -2696,6 +3173,153 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
 </script>
 
 <style scoped>
+.plan-detail-page {
+  background:
+    radial-gradient(circle at top left, rgba(239, 244, 255, 0.72), transparent 30%),
+    linear-gradient(180deg, #fbfcff 0%, #f7f9fd 100%);
+}
+
+.plan-detail-workspace {
+  gap: 10px;
+  padding: 20px 20px 26px;
+  align-items: stretch;
+}
+
+.plan-detail-sidebar {
+  border: 1px solid rgba(185, 201, 232, 0.72);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 28px rgba(42, 67, 113, 0.06);
+}
+
+.plan-detail-sidebar__inner {
+  overflow: hidden;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 251, 255, 0.96) 100%);
+}
+
+.plan-detail-sidebar__header {
+  min-height: 116px;
+  border-bottom: 1px solid rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-detail-sidebar__outline {
+  background: rgba(248, 251, 255, 0.78);
+}
+
+.plan-detail-collapse {
+  width: 24px;
+  align-self: stretch;
+  margin: 14px -3px;
+  border: 1px solid rgba(185, 201, 232, 0.62);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 8px 18px rgba(42, 67, 113, 0.05);
+}
+
+.plan-detail-collapse:hover {
+  background: #eef3fb;
+}
+
+.plan-tree-stage,
+.plan-resource-panel,
+.plan-chat-shell :deep(.plan-chat-panel) {
+  border: 1px solid rgba(185, 201, 232, 0.72);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 28px rgba(42, 67, 113, 0.06);
+}
+
+.plan-tree-stage {
+  margin: 0;
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.plan-tree-stage > header {
+  min-height: 78px;
+  border-bottom-color: rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-resource-panel {
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.98);
+  transition: width 0.3s ease, min-width 0.3s ease, margin 0.3s ease;
+}
+
+.plan-resource-panel--spaced {
+  margin: 0;
+}
+
+.plan-resource-panel__header {
+  min-height: 64px;
+  border-bottom: 1px solid rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-resource-divider {
+  width: 12px;
+  margin: 14px -1px;
+  border-radius: 999px;
+  transition: width 0.25s ease, margin 0.25s ease, opacity 0.25s ease;
+}
+
+.plan-resource-divider.resource-divider--closed {
+  width: 0;
+  margin: 14px 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.plan-chat-shell {
+  display: flex;
+  min-width: 340px;
+  flex: 1 1 0;
+  transition: flex-basis 0.3s ease;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel) {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  animation-delay: 0.1s;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel.card) {
+  box-shadow: 0 10px 28px rgba(42, 67, 113, 0.06);
+}
+
+.plan-chat-shell :deep(.plan-chat-panel > div:first-child) {
+  min-height: 72px;
+  border-bottom-color: rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-chat-shell :deep(.plan-chat-panel > .flex-1.overflow-y-auto) {
+  padding: 18px 24px;
+  background: #fff;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel > div:last-child) {
+  border-top-color: rgba(188, 203, 232, 0.58);
+  background: #fff;
+  padding: 16px 24px;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel .input-field) {
+  height: 48px;
+  border-radius: 9px;
+  border-color: rgba(154, 176, 218, 0.78);
+  color: #5a7099;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel .btn-primary) {
+  min-width: 88px;
+  height: 48px;
+  border-radius: 9px;
+}
+
 .resource-content--animation {
   padding: 0;
   overflow: hidden;
@@ -2816,6 +3440,29 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.fp-stop-button {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  z-index: 1200;
+  transform: translateX(-50%);
+  padding: 10px 20px;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 999px;
+  background: rgba(254, 242, 242, 0.96);
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 12px 36px rgba(26, 40, 71, 0.12);
+  backdrop-filter: blur(12px);
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.fp-stop-button:hover {
+  background: rgba(254, 226, 226, 0.98);
+  border-color: rgba(248, 113, 113, 0.65);
 }
 </style>
 

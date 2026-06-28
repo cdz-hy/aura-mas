@@ -4,7 +4,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, nextTick } from 'vue'
-import { parseMarkdown } from '@/utils/markdown'
+import { parseMarkdown, normalizeMermaidCode } from '@/utils/markdown'
 
 const props = defineProps<{
   content: string
@@ -37,9 +37,7 @@ async function renderMermaidDiagrams() {
       try {
         const rawCode = decodeURIComponent(codeBase64)
         // 空白字符规范化：处理NBSP/零宽空格等容易导致解析崩溃的字符
-        const normalizedCode = rawCode
-          .replace(/[\u00A0\u2003\u2002\u2009\u3000]/g, ' ')
-          .replace(/[\u200B\u200C\u200D\uFEFF]/g, '')
+        const normalizedCode = normalizeMermaidCode(rawCode)
 
         // Record what code we are rendering on this element
         el.setAttribute('data-rendering-code', codeBase64)

@@ -9,6 +9,7 @@ const componentMap: Record<string, () => Promise<Component>> = {
   'note-list':         () => import('@/views/NoteListView.vue'),
   'profile':           () => import('@/views/ProfileView.vue'),
   'analytics':         () => import('@/views/AnalyticsDashboard.vue'),
+  'knowledge-tree':    () => import('@/views/KnowledgeTreeView.vue'),
   'admin-dashboard':   () => import('@/views/admin/AdminDashboard.vue'),
   'kb-management':     () => import('@/views/admin/KBManagement.vue'),
   'user-management':   () => import('@/views/admin/UserManagement.vue'),
@@ -49,6 +50,16 @@ function buildImplicitRoutes(menuCodes: Set<string>): RouteRecordRaw[] {
       props: true,
       meta: { fullWidth: true },
     })
+    routes.push({
+      path: 'plan/:planId/tree',
+      name: 'PlanKnowledgeTree',
+      redirect: to => ({
+        name: 'PlanDetail',
+        params: { id: to.params.planId },
+        query: { ...to.query, view: 'tree' },
+      }),
+      meta: { fullWidth: true },
+    })
   }
 
   if (menuCodes.has('note-list')) {
@@ -81,10 +92,7 @@ export function buildRoutes(menus: MenuItem[]): RouteRecordRaw[] {
           path: menu.path.replace(/^\//, ''),
           name: menu.code,
           component: componentMap[menu.code],
-          meta: { 
-            title: menu.name,
-            fullWidth: menu.code === 'knowledge-graph'
-          },
+          meta: { title: menu.name, fullWidth: ['knowledge-graph', 'knowledge-tree'].includes(menu.code) },
         })
       }
       if (menu.children?.length) {

@@ -41,6 +41,7 @@
               type="text"
               class="input-field"
               placeholder="请输入登录账号"
+              autocomplete="username"
               required
             />
           </div>
@@ -52,6 +53,7 @@
               type="password"
               class="input-field"
               placeholder="请输入密码"
+              autocomplete="current-password"
               required
             />
           </div>
