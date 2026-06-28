@@ -87,80 +87,32 @@
           </div>
         </div>
 
-        <!-- Module list -->
-        <div class="flex-1 overflow-y-auto p-3 space-y-2">
-          <div v-if="modules.length === 0" class="text-center py-8 text-navy-300 text-sm">
-            <p>暂无学习模块</p>
-            <p class="text-xs mt-1">在右侧对话中描述学习目标，AI 会自动规划</p>
-          </div>
-          <div
-            v-for="(mod, i) in modules"
-            :key="i"
-            class="rounded-lg cursor-pointer transition-all duration-200 border"
-            :class="selectedModuleIndex === i ? 'border-navy-300 bg-navy-50 shadow-sm' : 'border-transparent hover:bg-navy-50/50'"
-            @click="selectModule(i)"
-          >
-            <div class="p-3">
-              <div class="flex items-center gap-2.5">
-                <span class="w-6 h-6 rounded-full text-xs flex items-center justify-center font-bold flex-shrink-0"
-                  :class="selectedModuleIndex === i ? 'bg-navy-600 text-white' : 'bg-navy-100 text-navy-500'">
-                  {{ i + 1 }}
-                </span>
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium text-navy-800 truncate">{{ mod.title }}</p>
-                  <p class="text-xs text-navy-400 mt-0.5">{{ mod.estimatedHours || 2 }}学时</p>
-                </div>
-              </div>
-              <div class="flex flex-wrap gap-1 mt-2 ml-8">
-                <span v-for="type in mod.resourceTypes" :key="type"
-                  class="text-[10px] px-1.5 py-0.5 rounded-full"
-                  :class="badgeClass(type)">
-                  {{ typeLabels[type] || type }}
-                </span>
-              </div>
-            </div>
-
-            <!-- 模块资源列表 -->
-            <div v-if="selectedModuleIndex === i && mod.resources.length > 0" class="border-t border-navy-100/50 px-3 py-2 space-y-1.5">
-              <div
-                v-for="res in mod.resources"
-                :key="res.id"
-                class="group flex items-center gap-2 p-1.5 rounded-md text-xs transition-colors cursor-pointer"
-                :class="selectedResourceId === res.id ? 'bg-navy-100' : 'hover:bg-white'"
-                @click.stop="toggleResource(res)"
-              >
-                <span class="w-2 h-2 rounded-full flex-shrink-0" :class="res.status === 2 ? 'bg-emerald-400' : res.status === 1 ? 'bg-blue-400' : res.status === 3 ? 'bg-red-400' : 'bg-navy-200'"></span>
-                <span class="text-navy-600 truncate flex-1">{{ res.moduleData?.title || typeLabels[res.moduleType] || res.moduleType }}</span>
-                <template v-if="res.status >= 2">
-                  <button
-                    v-if="progressMap[res.id] === 2"
-                    class="text-emerald-600 text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 transition-colors"
-                    @click.stop="toggleResourceComplete(res, $event)"
-                    title="点击取消完成"
-                  >已完成</button>
-                  <button
-                    v-else-if="res.moduleType !== 'quiz'"
-                    class="text-navy-400 text-[10px] px-1.5 py-0.5 rounded bg-navy-50 hover:bg-navy-100 transition-colors"
-                    @click.stop="toggleResourceComplete(res, $event)"
-                    title="点击标记完成"
-                  >未完成</button>
-                  <span v-else class="text-navy-300 text-[10px]">未完成</span>
-                </template>
-                <span v-else-if="res.status === 1 && !stuckResources.has(res.id)" class="text-blue-500 text-[10px]">生成中</span>
-                <span v-else-if="res.status === 1 || res.status === 3" class="text-red-500 text-[10px] cursor-pointer hover:underline" @click.stop="handleRetry(res)">重试</span>
-                <span v-else class="text-navy-300 text-[10px]">待生成</span>
-                <button
-                  class="flex-shrink-0 p-0.5 rounded text-navy-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100"
-                  title="删除资源"
-                  @click.stop="confirmDeleteResource(res)"
-                >
-                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
+        <!-- 知识树大纲 -->
+        <div class="plan-detail-sidebar__outline flex-1 min-h-0">
+          <PlanResourceOutline
+            :tree-modules="outlineTreeModules"
+            :selected-module-id="selectedOutlineModuleId"
+            :selected-resource-id="selectedResourceId"
+            :type-labels="typeLabels"
+            :loading="outlineLoading"
+            :header-subtitle="outlineHeaderSubtitle"
+            :meta-text="outlineMetaText"
+            :empty-title="outlineEmptyTitle"
+            :empty-hint="outlineEmptyHint"
+            :progress-map="progressMap"
+            :stuck-resource-ids="stuckResources"
+            :drag-hint="isTreeMode && knowledgeTreeStore.draggingNodeId ? '松开鼠标，将节点挂到目标模块下' : undefined"
+            :tree-mode="isTreeMode"
+            :tree-dn-d="isTreeMode"
+            @select-module="onOutlineSelectModule"
+            @select-resource="onOutlineSelectResource"
+            @retry-resource="handleRetryById"
+            @generate-content="generateFromTreeNode"
+            @drop-node="handleOutlineDropNode"
+            @mount-resource="handleOutlineMountResource"
+            @toggle-complete="onOutlineToggleComplete"
+            @delete-resource="onOutlineDeleteResource"
+          />
         </div>
 
       </div>
@@ -2411,6 +2363,16 @@ function selectModule(index: number) {
   if (mod?.resources.length > 0) {
     toggleResource(mod.resources[0])
   }
+}
+
+function onOutlineToggleComplete(resourceId: number) {
+  const res = resources.value.find(r => r.id === resourceId)
+  if (res) toggleResourceComplete(res, new Event('click'))
+}
+
+function onOutlineDeleteResource(resourceId: number) {
+  const res = resources.value.find(r => r.id === resourceId)
+  if (res) confirmDeleteResource(res)
 }
 
 // 删除资源

@@ -7,6 +7,7 @@ export interface OutlineContext {
   treeMode: boolean
   treeDnD: boolean
   stuckResourceIds?: Set<number>
+  progressMap?: Record<number, number>
   generateMenuNodeId: string | null
   dropTargetId: string | null
   generateOptions: Array<{ type: string; label: string }>
@@ -22,6 +23,8 @@ export interface OutlineContext {
   emitGenerate: (nodeId: string, type: string) => void
   selectResource: (resourceId: number) => void
   retryResource: (resourceId: number) => void
+  toggleComplete: (resourceId: number) => void
+  deleteResource: (resourceId: number) => void
   onResourceDragStart: (event: DragEvent, resourceId: number, title: string) => void
   onModuleClick: (mod: PlanOutlineTreeModule) => void
   onModuleDragOver: (mod: PlanOutlineModule) => void

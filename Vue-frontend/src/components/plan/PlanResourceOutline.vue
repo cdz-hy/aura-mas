@@ -78,6 +78,7 @@ const props = withDefaults(defineProps<{
   treeMode?: boolean
   treeDnD?: boolean
   stuckResourceIds?: Set<number>
+  progressMap?: Record<number, number>
 }>(), {
   selectedModuleId: null,
   selectedResourceId: null,
@@ -86,6 +87,7 @@ const props = withDefaults(defineProps<{
   headerLabel: '学习大纲',
   emptyTitle: '暂无学习模块',
   emptyHint: '在右侧对话中描述学习目标，AI 会自动规划',
+  progressMap: () => ({}),
 })
 
 const emit = defineEmits<{
@@ -95,6 +97,8 @@ const emit = defineEmits<{
   'generate-content': [payload: { nodeId: string; type: string }]
   'drop-node': [payload: { nodeId: string; targetNodeId: string }]
   'mount-resource': [payload: { resourceId: number; targetNodeId: string }]
+  'toggle-complete': [resourceId: number]
+  'delete-resource': [resourceId: number]
 }>()
 
 const expandedIds = ref<Set<string>>(new Set())
@@ -277,6 +281,7 @@ provide(OUTLINE_CONTEXT_KEY, {
   get treeMode() { return !!props.treeMode },
   get treeDnD() { return !!props.treeDnD },
   get stuckResourceIds() { return props.stuckResourceIds },
+  get progressMap() { return props.progressMap },
   get generateMenuNodeId() { return generateMenuNodeId.value },
   get dropTargetId() { return dropTargetId.value },
   generateOptions,
@@ -292,6 +297,8 @@ provide(OUTLINE_CONTEXT_KEY, {
   emitGenerate,
   selectResource: (resourceId: number) => emit('select-resource', resourceId),
   retryResource: (resourceId: number) => emit('retry-resource', resourceId),
+  toggleComplete: (resourceId: number) => emit('toggle-complete', resourceId),
+  deleteResource: (resourceId: number) => emit('delete-resource', resourceId),
   onResourceDragStart,
   onModuleClick,
   onModuleDragOver,
