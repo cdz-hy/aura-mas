@@ -339,8 +339,8 @@ def review_orchestrate_node(state: AgentState) -> Dict[str, Any]:
             "failed_modules": failed_modules,
             "passed_modules": passed_modules,
             "retry_module_ids": retry_ids,
-            # 保留已通过模块的编排结果，供重试时合并
-            "module_list": passed_orchestrated,
+            # 保留完整的模块列表（包含通过和未通过的），供重试时合并使用
+            "module_list": module_list,
             "orchestrated_content": {
                 "title": orchestrated_content.get("title", "") if orchestrated_content else "",
                 "modules": passed_orchestrated,

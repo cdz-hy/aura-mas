@@ -46,7 +46,9 @@ async def _ingest_background(doc_id: int, doc_name: str, file_path: str):
         result = await mineru_client.poll_task(task_id)
         zip_url = result.get("full_zip_url")
         if not zip_url:
-            raise Exception("MinerU 未返回 zip 下载链接")
+            raise Exception(f"MinerU 未返回 zip 下载链接: result={result}")
+
+        logger.info(f"  [KB摄入] MinerU 解析完成: doc_id={doc_id}, zip_url={zip_url[:80]}...")
 
         # 4. 下载并解压
         extract_dir = f"data/mineru_output/{doc_id}"
@@ -55,6 +57,8 @@ async def _ingest_background(doc_id: int, doc_name: str, file_path: str):
         # 5. 读取 MD 内容
         with open(md_path, "r", encoding="utf-8") as f:
             md_content = f.read()
+
+        logger.info(f"  [KB摄入] MD 文件读取完成: doc_id={doc_id}, 内容长度={len(md_content)}")
 
         # 6. 调用现有处理器进行切片、向量化、入库
         logger.info(f"  [KB摄入] 开始切片入库: doc_id={doc_id}")
@@ -67,7 +71,8 @@ async def _ingest_background(doc_id: int, doc_name: str, file_path: str):
         logger.info(f"  [KB摄入] 完成: doc_id={doc_id}, chunks={chunk_count}, collection={vector_db.collection_name}")
 
     except Exception as e:
-        logger.error(f"  [KB摄入] 失败: doc_id={doc_id}, error={e}")
+        error_msg = str(e) if e else "未知错误"
+        logger.error(f"  [KB摄入] 失败: doc_id={doc_id}, error={error_msg}", exc_info=True)
         try:
             await java_client.update_kb_status_async(doc_id, 3)
         except Exception:

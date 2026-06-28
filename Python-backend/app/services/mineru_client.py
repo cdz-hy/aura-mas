@@ -116,7 +116,15 @@ class MinerUClient:
                 state = data.get("state", "")
 
                 if state == "done":
+                    # 验证返回的数据完整性
+                    zip_url = data.get("full_zip_url", "")
+                    if not zip_url:
+                        raise Exception(f"MinerU 任务完成但未返回下载链接: task_id={task_id}")
+                    
+                    # 打印完整的返回数据用于调试
                     logger.info(f"  [MinerU] 任务完成: task_id={task_id}")
+                    logger.info(f"  [MinerU] 返回数据: {data}")
+                    
                     return data
                 elif state == "failed":
                     raise Exception(f"MinerU 任务失败: {data.get('err_msg', '未知错误')}")
