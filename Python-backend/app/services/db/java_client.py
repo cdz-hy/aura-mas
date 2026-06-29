@@ -365,11 +365,13 @@ class JavaBackendClient:
         """获取同一模块下的所有资源"""
         return self._request("GET", f"/api/resource/internal/plan/{plan_id}/module/{module_order}")
 
-    def update_resource_content(self, resource_id: int, module_data: str, status: Optional[int] = None):
+    def update_resource_content(self, resource_id: int, module_data: str, status: Optional[int] = None, module_type: Optional[str] = None):
         """更新资源内容"""
         body = {"moduleData": module_data}
         if status is not None:
             body["status"] = status
+        if module_type is not None:
+            body["moduleType"] = module_type
         self._request("PUT", f"/api/resource/internal/{resource_id}/content", json=body)
 
     def update_resource_status(self, resource_id: int, status: int):

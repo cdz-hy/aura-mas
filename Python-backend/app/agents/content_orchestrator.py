@@ -597,7 +597,7 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
         try:
             tasks = []
             for i, module in enumerate(modules):
-                module_order = i + 1
+                module_order = module.get("module_order") or (i + 1)
                 placeholder = placeholder_map.get(module_order, {})
                 res_id = placeholder.get("id", 0)
                 task = asyncio.to_thread(
@@ -620,11 +620,12 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             modules_list = []
             for i, result in enumerate(module_results):
                 if isinstance(result, Exception):
-                    logger.error(f"  [模块{i+1}] 生成异常: {str(result)}")
+                    mod_order = modules[i].get("module_order") or (i + 1)
+                    logger.error(f"  [模块{mod_order}] 生成异常: {str(result)}")
                     modules_list.append({
-                        "module_order": i + 1,
+                        "module_order": mod_order,
                         "module_type": "text",
-                        "title": modules[i].get("title", f"模块 {i+1}"),
+                        "title": modules[i].get("title", f"模块 {mod_order}"),
                         "content": f"内容生成失败: {str(result)}",
                         "metadata": {"error": str(result)},
                     })

@@ -147,10 +147,11 @@ public class LearningResourceService {
     }
 
     @Transactional
-    public void updateContent(Long resourceId, String moduleData, Integer status) {
+    public void updateContent(Long resourceId, String moduleData, String moduleType, Integer status) {
         LearningResource resource = resourceMapper.selectById(resourceId);
         if (resource != null) {
             if (moduleData != null) resource.setModuleData(moduleData);
+            if (moduleType != null) resource.setModuleType(moduleType);
             if (status != null) resource.setStatus(status);
             resource.setUpdatedAt(LocalDateTime.now());
             resourceMapper.updateById(resource);

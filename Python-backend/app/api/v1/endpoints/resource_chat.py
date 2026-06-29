@@ -1151,6 +1151,7 @@ async def generate_single_resource(
             "title": title,
             "modules": [{
                 "module_id": module_id,
+                "module_order": current_module_order,
                 "title": title,
                 "description": description,
                 "node_id": node_id or None,
@@ -1244,7 +1245,7 @@ async def generate_single_resource(
                             yield f'data: {json.dumps({"type": "error", "content": item.get("error")}, ensure_ascii=False)}\n\n'
 
                 if videos:
-                    res_id = _save_video_resource(plan_id_int, videos, current_module_order)
+                    res_id = _save_video_resource(plan_id_int, videos, current_module_order, node_id=node_id)
                     if res_id:
                         res_info = [{"id": res_id, "type": "video", "title": f"{title} - 教学视频"}]
                         yield f'data: {json.dumps({"type": "resource_generated", "resources": res_info}, ensure_ascii=False)}\n\n'
@@ -1293,30 +1294,63 @@ async def generate_single_resource(
 
             initial_state["sse_callback"] = _threadsafe_cb
             real_placeholder_id = None
+            # 只有当前端占位类型与目标类型一致时才复用，否则创建新占位
+            can_reuse_frontend = module_id_int and current_module_order and _placeholder_type_matches(module_id_int, type)
             if is_quiz:
-                # 创建真实 DB 占位符
-                ph_map = _create_placeholder_resources(
-                    plan_id_int,
-                    [{"title": title, "description": description, "resources": [{"resource_type": type}]}],
-                    fixed_order=current_module_order if current_module_order else None
-                )
-
-                real_placeholder_id = list(ph_map.values())[0].get("id") if ph_map else None
-                stream_start_id = real_placeholder_id if real_placeholder_id else module_id_int
-                placeholder_order = list(ph_map.values())[0].get("moduleOrder") if ph_map else current_module_order
+                if can_reuse_frontend:
+                    ph_map = {
+                        current_module_order: {
+                            "id": module_id_int,
+                            "type": type,
+                            "title": title,
+                            "moduleOrder": current_module_order,
+                        }
+                    }
+                    real_placeholder_id = module_id_int
+                    stream_start_id = module_id_int
+                    placeholder_order = current_module_order
+                else:
+                    ph_map = _create_placeholder_resources(
+                        plan_id_int,
+                        [{"title": title, "description": description, "resources": [{"resource_type": type}]}],
+                        fixed_order=current_module_order if current_module_order else None
+                    )
+                    real_placeholder_id = list(ph_map.values())[0].get("id") if ph_map else None
+                    stream_start_id = real_placeholder_id if real_placeholder_id else module_id_int
+                    placeholder_order = list(ph_map.values())[0].get("moduleOrder") if ph_map else current_module_order
 
                 initial_state["placeholder_resource_map"] = ph_map
+                bg_state["placeholder_map"] = ph_map
 
                 # 注入占位回调（为了 quiz_generator）
                 def _create_placeholder_callback(modules: list) -> dict:
                     return ph_map
                 initial_state["create_placeholder_callback"] = _create_placeholder_callback
             else:
-                # 非 quiz 类型：使用前端传入的 module_id_int 作为占位资源 ID
-                ph_map = {}
-                real_placeholder_id = module_id_int if module_id_int else None
-                stream_start_id = module_id_int
-                placeholder_order = current_module_order
+                if can_reuse_frontend:
+                    ph_map = {
+                        current_module_order: {
+                            "id": module_id_int,
+                            "type": type,
+                            "title": title,
+                            "moduleOrder": current_module_order,
+                        }
+                    }
+                    real_placeholder_id = module_id_int
+                    stream_start_id = module_id_int
+                    placeholder_order = current_module_order
+                else:
+                    ph_map = _create_placeholder_resources(
+                        plan_id_int,
+                        [{"title": title, "description": description, "resources": [{"resource_type": type}]}],
+                        fixed_order=current_module_order if current_module_order else None
+                    )
+                    real_placeholder_id = list(ph_map.values())[0].get("id") if ph_map else None
+                    stream_start_id = real_placeholder_id if real_placeholder_id else module_id_int
+                    placeholder_order = list(ph_map.values())[0].get("moduleOrder") if ph_map else current_module_order
+
+                initial_state["placeholder_resource_map"] = ph_map
+                bg_state["placeholder_map"] = ph_map
 
             # 提前推送占位记录，通知前端初始化对应的资源流式区域
             _threadsafe_cb(
@@ -1364,7 +1398,7 @@ async def generate_single_resource(
                     if generated_content and not module_list and not orchestrated_content:
                         gc = generated_content
                         module_list = [{
-                            "module_order": 1,
+                            "module_order": current_module_order or 1,
                             "module_id": gc.get("module_id", 1),
                             "title": gc.get("title", ""),
                             "content": gc.get("content", ""),
@@ -1390,6 +1424,7 @@ async def generate_single_resource(
                         current_module_order, session_id,
                         bg_state.get("thinkings", []),
                         placeholder_id=real_placeholder_id,
+                        node_id=node_id,
                     )
                     if res_info:
                         bg_state["generated_resource_info"].extend(res_info)
@@ -2054,6 +2089,18 @@ def _build_resource_summary(module_list: list, quiz_questions: list = None, orch
     return "；".join(parts) if parts else "学习资源生成完成"
 
 
+def _placeholder_type_matches(placeholder_id: int, target_type: str) -> bool:
+    """检查占位资源的 module_type 是否与目标类型一致，不一致时不应覆盖"""
+    if not placeholder_id:
+        return False
+    try:
+        existing = java_client.get_resource_by_id(placeholder_id)
+        existing_type = (existing.get("moduleType") or existing.get("module_type") or "text") if existing else "text"
+        return existing_type == target_type
+    except Exception:
+        return True  # 查询失败时保守处理，允许更新
+
+
 def _persist_generated_resources(
     plan_id_int: int,
     user_id: int,
@@ -2070,6 +2117,7 @@ def _persist_generated_resources(
     session_id: str = "",
     thinkings: list = None,
     placeholder_id: int = None,
+    node_id: str = None,
 ) -> list:
     """将生成的资源持久化到数据库（与 SSE 解耦，确保断开连接时也能保存）"""
     generated_resource_info = []
@@ -2084,6 +2132,8 @@ def _persist_generated_resources(
             "module_title": generated_content.get("title", title),
             "references": generated_content.get("references", []),
         }
+        if node_id:
+            module_data["node_id"] = node_id
         if resource_type == "animation":
             module_data["html"] = generated_content.get("html", generated_content.get("content", ""))
             module_data["animationSpec"] = generated_content.get("animationSpec", {})
@@ -2095,12 +2145,13 @@ def _persist_generated_resources(
             module_data["pptx_url"] = generated_content.get("pptx_url", "")
             module_data["slide_count"] = generated_content.get("slide_count", 0)
         try:
-            # 如果有占位资源，更新它而不是创建新资源
-            if placeholder_id:
+            # 如果有占位资源且类型匹配，更新它；类型不同时创建新资源
+            if _placeholder_type_matches(placeholder_id, resource_type):
                 java_client.update_resource_content(
                     placeholder_id,
                     json.dumps(module_data, ensure_ascii=False),
                     status=2,
+                    module_type=resource_type,
                 )
                 generated_resource_info.append({
                     "id": placeholder_id,
@@ -2135,7 +2186,8 @@ def _persist_generated_resources(
                 quiz_questions,
                 quiz_config,
                 module_order=current_module_order,
-                placeholder_id=placeholder_id
+                placeholder_id=placeholder_id,
+                node_id=node_id,
             )
             if quiz_res_id:
                 generated_resource_info.append({
@@ -2182,13 +2234,16 @@ def _persist_generated_resources(
                     module_data["references"] = references
             if not module_data.get("title"):
                 module_data["title"] = title
+            if node_id:
+                module_data["node_id"] = node_id
             try:
-                # 如果有占位资源，更新它而不是创建新资源
-                if placeholder_id:
+                # 如果有占位资源且类型匹配，更新它；类型不同时创建新资源
+                if _placeholder_type_matches(placeholder_id, resource_type):
                     java_client.update_resource_content(
                         placeholder_id,
                         json.dumps(module_data, ensure_ascii=False),
                         status=2,
+                        module_type=resource_type,
                     )
                     generated_resource_info.append({
                         "id": placeholder_id,
@@ -2312,7 +2367,7 @@ def _search_videos(module_title: str) -> list:
     return videos
 
 
-def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -> int:
+def _save_video_resource(plan_id: int, videos: list, module_order: int = None, node_id: str = None) -> int:
     """将视频搜索结果保存为 video 类型的学习资源"""
     try:
         if not videos:
@@ -2322,6 +2377,8 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -
             "description": "相关教学视频资源",
             "videos": videos,
         }
+        if node_id:
+            module_data["node_id"] = node_id
         if module_order is None:
             existing = java_client.get_plan_resources(plan_id)
             module_order = max((r.get("moduleOrder", 0) for r in existing), default=0) + 1
@@ -2341,7 +2398,7 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -
         return 0
 
 
-def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None, module_order: int = None, placeholder_id: int = None) -> int:
+def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None, module_order: int = None, placeholder_id: int = None, node_id: str = None) -> int:
     """将生成的题目保存为 quiz 类型的学习资源，返回资源 ID。如果有 placeholder_id 则覆盖更新。"""
     try:
         if not questions:
@@ -2366,12 +2423,15 @@ def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None,
             "totalPoints": len(questions),
             "estimatedMinutes": len(questions) * 2,
         }
+        if node_id:
+            module_data["node_id"] = node_id
 
-        if placeholder_id:
+        if _placeholder_type_matches(placeholder_id, "quiz"):
             java_client.update_resource_content(
                 placeholder_id,
                 json.dumps(module_data, ensure_ascii=False),
                 status=2,
+                module_type="quiz",
             )
             return placeholder_id
 
@@ -2492,7 +2552,7 @@ def _async_profile_maintenance_sync(
         logger.error(f"[画像维护] 更新失败: {str(e)}", exc_info=True)
 
 
-VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap", "animation", "quiz", "video", "podcast"}
+VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap", "animation", "quiz", "video", "podcast", "pptx"}
 
 
 def _normalize_module_type(module_type) -> str:
@@ -2643,6 +2703,7 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
                         placeholder_id,
                         json.dumps(module_data, ensure_ascii=False),
                         status=2,
+                        module_type=module_type,
                     )
                     resource_ids.append(placeholder_id)
                 except Exception as e:

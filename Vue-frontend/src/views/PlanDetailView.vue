@@ -1156,6 +1156,14 @@ const progressMap = ref<Record<number, number>>({}) // resourceId -> status (0/1
 const selectedModuleIndex = ref(-1)
 const selectedResourceId = ref<number | null>(null)
 const selectedResource = ref<LearningResource | null>(null)
+
+// 流式资源生成开始时，清除选中的资源，让中间面板显示流式预览
+watch(() => chatStore.isResourceStreaming, (streaming) => {
+  if (streaming) {
+    selectedResource.value = null
+    selectedResourceId.value = null
+  }
+})
 const isFullscreen = ref(false)
 const quizData = ref<QuizData | null>(null)
 const mindmapData = ref<MindElixirData | null>(null)
@@ -1758,14 +1766,14 @@ function closeTreeContentPanel() {
 }
 
 /** 为知识树节点创建或复用占位资源，供内容生成管线使用 */
-async function ensureNodePlaceholderResource(node: KnowledgeNode): Promise<number> {
-  if (node.resourceId) return node.resourceId
+async function ensureNodePlaceholderResource(node: KnowledgeNode, resourceType: string = 'text'): Promise<number> {
+  if (node.resourceId && resourceType === 'text') return node.resourceId
 
   const linked = resources.value.find(item => {
     const data = item.moduleData || {}
     return data.nodeId === node.id || data.node_id === node.id
   })
-  if (linked?.id) {
+  if (linked?.id && resourceType === 'text') {
     if (!node.resourceId) {
       await updateKnowledgeNode(node.id, { resourceId: linked.id })
       const idx = knowledgeTreeStore.nodes.findIndex(n => n.id === node.id)
@@ -1780,7 +1788,7 @@ async function ensureNodePlaceholderResource(node: KnowledgeNode): Promise<numbe
   const res = await bulkCreateResources([{
     planId: planId.value,
     moduleOrder: maxOrder + 1,
-    moduleType: 'text',
+    moduleType: resourceType,
     moduleData: JSON.stringify({
       title: node.title,
       module_title: node.title,
@@ -1808,7 +1816,7 @@ async function generateFromTreeNode(payload: { nodeId: string; type: string }) {
 
   try {
     await knowledgeTreeStore.selectNode(payload.nodeId)
-    const resourceId = await ensureNodePlaceholderResource(node)
+    const resourceId = await ensureNodePlaceholderResource(node, payload.type)
     const ctx = {
       title: node.title,
       description: node.summary || '',
@@ -1818,7 +1826,8 @@ async function generateFromTreeNode(payload: { nodeId: string; type: string }) {
     }
     chatStore.selectedModuleContext = ctx
     await chatStore.requestNodeResourceGeneration(String(planId.value), ctx, payload.type)
-    if (!isTreeMode.value) {
+    // quiz 类型由流式预览（QuizStreamPreview）处理，不要提前打开占位资源
+    if (!isTreeMode.value && payload.type !== 'quiz') {
       await openResourceById(resourceId, payload.type)
     }
   } catch (e) {
@@ -3048,6 +3057,15 @@ watch(() => chatStore.lastGeneratedResources, async (resList) => {
       if (fullRes) {
         // 解析 moduleData（API 返回 JSON 字符串，需转为对象）
         parseModuleData([fullRes])
+
+        // 防御性：确保 moduleData 中有 nodeId，以便侧栏正确挂载到树节点
+        if (fullRes.moduleData && !fullRes.moduleData.nodeId && !fullRes.moduleData.node_id) {
+          const ctxNodeId = chatStore.selectedModuleContext?.nodeId
+          if (ctxNodeId) {
+            fullRes.moduleData.nodeId = ctxNodeId
+            fullRes.moduleData.node_id = ctxNodeId
+          }
+        }
 
         // 清理由于提前接收到内联内容而创建的临时资源
         const tempIndex = resources.value.findIndex(res => res.id < 0 && res.moduleType === fullRes.moduleType)

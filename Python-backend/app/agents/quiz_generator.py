@@ -169,6 +169,12 @@ def quiz_generator_node(state: AgentState) -> Dict[str, Any]:
                 if ph_map:
                     placeholder_id = list(ph_map.values())[0].get("id")
                     logger.info(f"  [题目生成智能体] 创建占位成功: {placeholder_id}")
+                    # 通知前端注册占位，触发 QuizStreamPreview 渲染
+                    if _sse_cb:
+                        try:
+                            _sse_cb(f'data: {json.dumps({"type": "resource_stream_start", "content": json.dumps(list(ph_map.values()), ensure_ascii=False)}, ensure_ascii=False)}\n\n')
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.error(f"  [题目生成智能体] 创建占位失败: {e}")
 

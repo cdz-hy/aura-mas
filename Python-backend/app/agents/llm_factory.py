@@ -55,8 +55,23 @@ class MIMOClient:
         self.stop_callback: Optional[callable] = None
 
     @staticmethod
-    def _estimate_tokens(text: str) -> int:
-        """粗略估算 token 数：中文约 1.5 token/字，英文约 0.25 token/字符"""
+    def _estimate_tokens(text) -> int:
+        """粗略估算 token 数：中文约 1.5 token/字，英文约 0.25 token/字符。
+        支持 str 或 list（多模态 content）类型。"""
+        if isinstance(text, list):
+            # 多模态消息：只估算文本部分，图片按固定值估算
+            total = 0
+            for part in text:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        total += MIMOClient._estimate_tokens(part.get("text", ""))
+                    elif part.get("type") == "image_url":
+                        total += 300  # 图片 token 固定估算
+                elif isinstance(part, str):
+                    total += MIMOClient._estimate_tokens(part)
+            return total
+        if not isinstance(text, str):
+            text = str(text)
         cn_chars = sum(1 for c in text if '一' <= c <= '鿿')
         other_chars = len(text) - cn_chars
         return int(cn_chars * 1.5 + other_chars * 0.25)
