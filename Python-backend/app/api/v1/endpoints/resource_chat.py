@@ -1000,6 +1000,7 @@ async def generate_single_resource(
 
     plan_id_int = int(plan_id) if plan_id and plan_id.isdigit() else 0
     module_id_int = int(module_id) if module_id and module_id.isdigit() else 0
+    generated_parent_id = module_id_int or None
 
     logger.info(f"[资源生成] 用户 {user_id}, 计划 {plan_id_int}, 模块 {module_id_int}")
     logger.info(f"[资源生成] 类型: {type}, 标题: {title}")
@@ -1244,7 +1245,10 @@ async def generate_single_resource(
                             yield f'data: {json.dumps({"type": "error", "content": item.get("error")}, ensure_ascii=False)}\n\n'
 
                 if videos:
-                    res_id = _save_video_resource(plan_id_int, videos, current_module_order)
+                    res_id = _save_video_resource(
+                        plan_id_int, videos, current_module_order,
+                        parent_id=generated_parent_id, node_id=node_id,
+                    )
                     if res_id:
                         res_info = [{"id": res_id, "type": "video", "title": f"{title} - 教学视频"}]
                         yield f'data: {json.dumps({"type": "resource_generated", "resources": res_info}, ensure_ascii=False)}\n\n'
@@ -1296,9 +1300,11 @@ async def generate_single_resource(
             if is_quiz:
                 # 创建真实 DB 占位符
                 ph_map = _create_placeholder_resources(
-                    plan_id_int, 
-                    [{"title": title, "description": description, "resources": [{"resource_type": type}]}], 
-                    fixed_order=current_module_order if current_module_order else None
+                    plan_id_int,
+                    [{"title": title, "description": description, "resources": [{"resource_type": type}]}],
+                    fixed_order=current_module_order if current_module_order else None,
+                    parent_id=generated_parent_id,
+                    node_id=node_id,
                 )
                 
                 real_placeholder_id = list(ph_map.values())[0].get("id") if ph_map else None
@@ -1388,6 +1394,8 @@ async def generate_single_resource(
                         current_module_order, session_id,
                         bg_state.get("thinkings", []),
                         placeholder_id=real_placeholder_id,
+                        parent_id=generated_parent_id,
+                        node_id=node_id,
                     )
                     if res_info:
                         bg_state["generated_resource_info"].extend(res_info)
@@ -1410,6 +1418,8 @@ async def generate_single_resource(
                             [], None, None, None, None,
                             current_module_order, session_id,
                             bg_state.get("thinkings", []),
+                            parent_id=generated_parent_id,
+                            node_id=node_id,
                         )
                     if generation_task_id:
                         try:
@@ -2068,6 +2078,8 @@ def _persist_generated_resources(
     session_id: str = "",
     thinkings: list = None,
     placeholder_id: int = None,
+    parent_id: int = None,
+    node_id: str = "",
 ) -> list:
     """将生成的资源持久化到数据库（与 SSE 解耦，确保断开连接时也能保存）"""
     generated_resource_info = []
@@ -2092,12 +2104,14 @@ def _persist_generated_resources(
             module_data["pptx_filename"] = generated_content.get("pptx_filename", "")
             module_data["pptx_url"] = generated_content.get("pptx_url", "")
             module_data["slide_count"] = generated_content.get("slide_count", 0)
+        module_data = _attach_node_metadata(module_data, node_id)
         try:
             result = java_client.create_resource(
                 plan_id=plan_id_int,
                 module_type=resource_type,
                 module_data=json.dumps(module_data, ensure_ascii=False),
                 module_order=current_module_order,
+                parent_id=parent_id,
                 status=2,
                 generated_by_agent="animation_skill_generator" if resource_type == "animation" else "resource_type_generator",
             )
@@ -2119,7 +2133,9 @@ def _persist_generated_resources(
                 quiz_questions,
                 quiz_config,
                 module_order=current_module_order,
-                placeholder_id=placeholder_id
+                placeholder_id=placeholder_id,
+                parent_id=parent_id,
+                node_id=node_id,
             )
             if quiz_res_id:
                 generated_resource_info.append({
@@ -2166,12 +2182,14 @@ def _persist_generated_resources(
                     module_data["references"] = references
             if not module_data.get("title"):
                 module_data["title"] = title
+            module_data = _attach_node_metadata(module_data, node_id)
             try:
                 result = java_client.create_resource(
                     plan_id=plan_id_int,
                     module_type=resource_type,
                     module_data=json.dumps(module_data, ensure_ascii=False),
                     module_order=current_module_order,
+                    parent_id=parent_id,
                     status=2,
                     generated_by_agent="content_orchestrator",
                 )
@@ -2282,16 +2300,17 @@ def _search_videos(module_title: str) -> list:
     return videos
 
 
-def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -> int:
+def _save_video_resource(plan_id: int, videos: list, module_order: int = None,
+                         parent_id: int = None, node_id: str = "") -> int:
     """将视频搜索结果保存为 video 类型的学习资源"""
     try:
         if not videos:
             return 0
-        module_data = {
+        module_data = _attach_node_metadata({
             "title": "教学视频",
             "description": "相关教学视频资源",
             "videos": videos,
-        }
+        }, node_id)
         if module_order is None:
             existing = java_client.get_plan_resources(plan_id)
             module_order = max((r.get("moduleOrder", 0) for r in existing), default=0) + 1
@@ -2300,6 +2319,7 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -
             module_type="video",
             module_data=json.dumps(module_data, ensure_ascii=False),
             module_order=module_order,
+            parent_id=parent_id,
             status=2,
             generated_by_agent="video_search",
         )
@@ -2311,7 +2331,8 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -
         return 0
 
 
-def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None, module_order: int = None, placeholder_id: int = None) -> int:
+def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None, module_order: int = None,
+                        placeholder_id: int = None, parent_id: int = None, node_id: str = "") -> int:
     """将生成的题目保存为 quiz 类型的学习资源，返回资源 ID。如果有 placeholder_id 则覆盖更新。"""
     try:
         if not questions:
@@ -2336,6 +2357,7 @@ def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None,
             "totalPoints": len(questions),
             "estimatedMinutes": len(questions) * 2,
         }
+        module_data = _attach_node_metadata(module_data, node_id)
 
         if placeholder_id:
             java_client.update_resource_content(
@@ -2354,6 +2376,7 @@ def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None,
             module_type="quiz",
             module_data=json.dumps(module_data, ensure_ascii=False),
             module_order=module_order,
+            parent_id=parent_id,
             status=2,
             generated_by_agent="quiz_generator",
         )
@@ -2465,6 +2488,13 @@ def _async_profile_maintenance_sync(
 VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap", "animation", "quiz", "video", "podcast"}
 
 
+def _attach_node_metadata(module_data: dict, node_id: str = "") -> dict:
+    if node_id:
+        module_data["nodeId"] = node_id
+        module_data["node_id"] = node_id
+    return module_data
+
+
 def _normalize_module_type(module_type) -> str:
     """将 LLM 输出的 module_type 归一化为前端支持的类型"""
     if not isinstance(module_type, str) or not module_type:
@@ -2514,7 +2544,8 @@ def _save_breakdown_dialogue(user_id: int, session_id: str, plan_id: int, breakd
         logger.warning(f"[任务分解持久化] 保存失败: {e}")
 
 
-def _create_placeholder_resources(plan_id: int, modules: list, fixed_order: int = None) -> dict:
+def _create_placeholder_resources(plan_id: int, modules: list, fixed_order: int = None,
+                                  parent_id: int = None, node_id: str = "") -> dict:
     """在 learning_resource 表中创建占位记录，返回 {module_order: {id, type, title}} 映射"""
     placeholder_map = {}
     try:
@@ -2534,10 +2565,10 @@ def _create_placeholder_resources(plan_id: int, modules: list, fixed_order: int 
                     module_type = "text"
             module_type = _normalize_module_type(module_type)
             title = mod.get("title", f"模块 {module_order}")
-            module_data = {
+            module_data = _attach_node_metadata({
                 "title": title,
                 "description": mod.get("description", ""),
-            }
+            }, node_id)
             try:
                 final_order = fixed_order if fixed_order is not None else (max_order + module_order)
                 result = java_client.create_resource(
@@ -2545,6 +2576,7 @@ def _create_placeholder_resources(plan_id: int, modules: list, fixed_order: int 
                     module_type=module_type,
                     module_data=json.dumps(module_data, ensure_ascii=False),
                     module_order=final_order,
+                    parent_id=parent_id,
                     status=1,  # 生成中
                     generated_by_agent="content_orchestrator",
                 )
