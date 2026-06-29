@@ -159,34 +159,36 @@
   height: 13px;
 }
 
-/* ── 生成菜单 ── */
+/* ── 生成菜单（与右侧助手气泡样式一致） ── */
 .plan-outline__generate-menu {
   display: flex;
   flex-wrap: wrap;
-  gap: 3px;
+  gap: 4px;
+  max-width: 236px;
   margin: 0 8px 6px 30px;
-  padding: 4px;
-  border: 1px solid rgba(154, 173, 216, 0.3);
+  padding: 6px 8px;
+  border: 1px solid rgba(154, 173, 216, 0.35);
   border-radius: 8px;
   background: #fff;
-  box-shadow: 0 4px 14px rgba(30, 51, 88, 0.08);
+  box-shadow: 0 6px 16px rgba(30, 51, 88, 0.08);
 }
 
 .plan-outline__generate-menu button {
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  padding: 5px 10px;
-  text-align: left;
-  font-size: 11.5px;
-  color: #3d5278;
+  border: 1px solid #b3c1e0;
+  border-radius: 999px;
+  background: #fff;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #34508e;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .plan-outline__generate-menu button:hover {
   background: #eef3fb;
-  color: #4164b2;
+  border-color: #8ea4d0;
+  color: #294a8d;
 }
 
 /* ── 展开/收起动画 ── */
