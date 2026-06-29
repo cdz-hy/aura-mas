@@ -149,6 +149,8 @@ function mountResources(
   const nodeById = new Map(nodes.map(node => [node.id, node]))
   const nodeByResourceId = new Map<number, string>()
   const nodeByTitle = new Map<string, string>()
+  const resourceById = new Map(resources.map(resource => [resource.id, resource]))
+  const resolvedNodeByResourceId = new Map<number, string | null>()
 
   for (const node of nodes) {
     if (node.resourceId != null) nodeByResourceId.set(node.resourceId, node.id)
@@ -156,9 +158,7 @@ function mountResources(
   }
 
   for (const resource of resources) {
-    const nodeId = resourceNodeId(resource)
-      || (resource.id != null ? nodeByResourceId.get(resource.id) : undefined)
-      || titleMatchedNodeId(resource, nodeByTitle)
+    const nodeId = resourceNodeId(resource, resourceById, nodeByResourceId, nodeByTitle, resolvedNodeByResourceId)
     if (!nodeId || !nodeById.has(nodeId) || resource.id == null) continue
 
     const mounted = result.get(nodeId) || []
@@ -170,7 +170,36 @@ function mountResources(
   return result
 }
 
-function resourceNodeId(resource: LearningResource) {
+function resourceNodeId(
+  resource: LearningResource,
+  resourceById: Map<number, LearningResource>,
+  nodeByResourceId: Map<number, string>,
+  nodeByTitle: Map<string, string>,
+  resolvedNodeByResourceId: Map<number, string | null>,
+): string | null {
+  if (resource.id != null && resolvedNodeByResourceId.has(resource.id)) {
+    return resolvedNodeByResourceId.get(resource.id) || null
+  }
+
+  const direct = directResourceNodeId(resource) || (resource.id != null ? nodeByResourceId.get(resource.id) : undefined)
+  if (direct) {
+    if (resource.id != null) resolvedNodeByResourceId.set(resource.id, direct)
+    return direct
+  }
+
+  const parent = resource.parentId != null ? resourceById.get(resource.parentId) : undefined
+  if (parent) {
+    const parentNodeId = resourceNodeId(parent, resourceById, nodeByResourceId, nodeByTitle, resolvedNodeByResourceId)
+    if (resource.id != null) resolvedNodeByResourceId.set(resource.id, parentNodeId)
+    return parentNodeId
+  }
+
+  const titleMatch = titleMatchedNodeId(resource, nodeByTitle) || null
+  if (resource.id != null) resolvedNodeByResourceId.set(resource.id, titleMatch)
+  return titleMatch
+}
+
+function directResourceNodeId(resource: LearningResource) {
   const data = resource.moduleData || {}
   return (resource as LearningResource & { nodeId?: string }).nodeId
     || data.nodeId
