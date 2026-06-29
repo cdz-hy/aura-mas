@@ -1296,15 +1296,15 @@ async def generate_single_resource(
             if is_quiz:
                 # 创建真实 DB 占位符
                 ph_map = _create_placeholder_resources(
-                    plan_id_int, 
-                    [{"title": title, "description": description, "resources": [{"resource_type": type}]}], 
+                    plan_id_int,
+                    [{"title": title, "description": description, "resources": [{"resource_type": type}]}],
                     fixed_order=current_module_order if current_module_order else None
                 )
-                
+
                 real_placeholder_id = list(ph_map.values())[0].get("id") if ph_map else None
                 stream_start_id = real_placeholder_id if real_placeholder_id else module_id_int
                 placeholder_order = list(ph_map.values())[0].get("moduleOrder") if ph_map else current_module_order
-                
+
                 initial_state["placeholder_resource_map"] = ph_map
 
                 # 注入占位回调（为了 quiz_generator）
@@ -1312,7 +1312,9 @@ async def generate_single_resource(
                     return ph_map
                 initial_state["create_placeholder_callback"] = _create_placeholder_callback
             else:
+                # 非 quiz 类型：使用前端传入的 module_id_int 作为占位资源 ID
                 ph_map = {}
+                real_placeholder_id = module_id_int if module_id_int else None
                 stream_start_id = module_id_int
                 placeholder_order = current_module_order
 
@@ -2093,22 +2095,36 @@ def _persist_generated_resources(
             module_data["pptx_url"] = generated_content.get("pptx_url", "")
             module_data["slide_count"] = generated_content.get("slide_count", 0)
         try:
-            result = java_client.create_resource(
-                plan_id=plan_id_int,
-                module_type=resource_type,
-                module_data=json.dumps(module_data, ensure_ascii=False),
-                module_order=current_module_order,
-                status=2,
-                generated_by_agent="animation_skill_generator" if resource_type == "animation" else "resource_type_generator",
-            )
-            new_resource_id = result.get("id") if isinstance(result, dict) else 0
-            if new_resource_id:
+            # 如果有占位资源，更新它而不是创建新资源
+            if placeholder_id:
+                java_client.update_resource_content(
+                    placeholder_id,
+                    json.dumps(module_data, ensure_ascii=False),
+                    status=2,
+                )
                 generated_resource_info.append({
-                    "id": new_resource_id,
+                    "id": placeholder_id,
                     "type": resource_type,
                     "title": module_data.get("title", title),
                 })
-                logger.info(f"[资源持久化] 已创建{resource_type}补充资源，ID={new_resource_id}，moduleOrder={current_module_order}")
+                logger.info(f"[资源持久化] 已更新{resource_type}占位资源，ID={placeholder_id}，moduleOrder={current_module_order}")
+            else:
+                result = java_client.create_resource(
+                    plan_id=plan_id_int,
+                    module_type=resource_type,
+                    module_data=json.dumps(module_data, ensure_ascii=False),
+                    module_order=current_module_order,
+                    status=2,
+                    generated_by_agent="animation_skill_generator" if resource_type == "animation" else "resource_type_generator",
+                )
+                new_resource_id = result.get("id") if isinstance(result, dict) else 0
+                if new_resource_id:
+                    generated_resource_info.append({
+                        "id": new_resource_id,
+                        "type": resource_type,
+                        "title": module_data.get("title", title),
+                    })
+                    logger.info(f"[资源持久化] 已创建{resource_type}补充资源，ID={new_resource_id}，moduleOrder={current_module_order}")
         except Exception as e:
             logger.warning(f"[资源持久化] 创建{resource_type}补充资源失败: {e}")
 
@@ -2167,22 +2183,36 @@ def _persist_generated_resources(
             if not module_data.get("title"):
                 module_data["title"] = title
             try:
-                result = java_client.create_resource(
-                    plan_id=plan_id_int,
-                    module_type=resource_type,
-                    module_data=json.dumps(module_data, ensure_ascii=False),
-                    module_order=current_module_order,
-                    status=2,
-                    generated_by_agent="content_orchestrator",
-                )
-                new_resource_id = result.get("id") if isinstance(result, dict) else 0
-                if new_resource_id:
+                # 如果有占位资源，更新它而不是创建新资源
+                if placeholder_id:
+                    java_client.update_resource_content(
+                        placeholder_id,
+                        json.dumps(module_data, ensure_ascii=False),
+                        status=2,
+                    )
                     generated_resource_info.append({
-                        "id": new_resource_id,
+                        "id": placeholder_id,
                         "type": resource_type,
                         "title": module_data.get("title", title),
                     })
-                    logger.info(f"[资源持久化] 已创建{resource_type}补充资源，ID={new_resource_id}，moduleOrder={current_module_order}")
+                    logger.info(f"[资源持久化] 已更新{resource_type}占位资源，ID={placeholder_id}，moduleOrder={current_module_order}")
+                else:
+                    result = java_client.create_resource(
+                        plan_id=plan_id_int,
+                        module_type=resource_type,
+                        module_data=json.dumps(module_data, ensure_ascii=False),
+                        module_order=current_module_order,
+                        status=2,
+                        generated_by_agent="content_orchestrator",
+                    )
+                    new_resource_id = result.get("id") if isinstance(result, dict) else 0
+                    if new_resource_id:
+                        generated_resource_info.append({
+                            "id": new_resource_id,
+                            "type": resource_type,
+                            "title": module_data.get("title", title),
+                        })
+                        logger.info(f"[资源持久化] 已创建{resource_type}补充资源，ID={new_resource_id}，moduleOrder={current_module_order}")
             except Exception as e:
                 logger.warning(f"[资源持久化] 创建{resource_type}补充资源失败: {e}")
 

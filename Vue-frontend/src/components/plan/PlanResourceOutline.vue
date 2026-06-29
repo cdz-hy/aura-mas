@@ -174,10 +174,22 @@ function typeLabel(type: string) {
 }
 
 function tagClass(type: string) {
-  if (type === 'quiz') return 'plan-outline__tag--quiz'
-  if (type === 'mindmap') return 'plan-outline__tag--mindmap'
-  if (type === 'video') return 'plan-outline__tag--video'
-  return 'plan-outline__tag--default'
+  const classMap: Record<string, string> = {
+    quiz: 'plan-outline__tag--quiz',
+    mindmap: 'plan-outline__tag--mindmap',
+    video: 'plan-outline__tag--video',
+    text: 'plan-outline__tag--text',
+    document: 'plan-outline__tag--document',
+    code: 'plan-outline__tag--code',
+    summary: 'plan-outline__tag--summary',
+    reading: 'plan-outline__tag--reading',
+    image: 'plan-outline__tag--image',
+    diagram: 'plan-outline__tag--diagram',
+    animation: 'plan-outline__tag--animation',
+    podcast: 'plan-outline__tag--podcast',
+    pptx: 'plan-outline__tag--pptx',
+  }
+  return classMap[type] || 'plan-outline__tag--default'
 }
 
 function statusLabel(status: number) {

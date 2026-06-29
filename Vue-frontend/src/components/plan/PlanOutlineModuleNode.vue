@@ -1,11 +1,14 @@
 <template>
   <article
+    ref="cardRef"
     class="plan-outline__card"
     :class="{
       'plan-outline__card--active': module.id === ctx.selectedModuleId,
       'plan-outline__card--drop': ctx.treeDnD && ctx.dropTargetId === module.nodeId,
     }"
+    :draggable="ctx.treeDnD && !!module.nodeId"
     @click.stop="onModuleClick"
+    @dragstart="onNodeDragStart"
     @dragover.prevent="onModuleDragOver"
     @dragleave="onModuleDragLeave"
     @drop.prevent="onModuleDrop"
@@ -116,11 +119,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, ref, watch, nextTick } from 'vue'
 import PlanOutlineModuleNode from './PlanOutlineModuleNode.vue'
 import PlanOutlineResourceCard from './PlanOutlineResourceCard.vue'
 import type { PlanOutlineTreeModule } from './usePlanResourceOutline'
 import { OUTLINE_CONTEXT_KEY, type OutlineContext } from './planOutlineContext'
+import { setNodeDragData } from '@/components/tree/useTreeDragDrop'
 
 const props = defineProps<{
   module: PlanOutlineTreeModule
@@ -128,6 +132,26 @@ const props = defineProps<{
 }>()
 
 const ctx = inject(OUTLINE_CONTEXT_KEY) as OutlineContext
+const cardRef = ref<HTMLElement | null>(null)
+
+// 当选中状态变化时，自动滚动到可见区域
+watch(
+  () => ctx.selectedModuleId,
+  async (newId) => {
+    if (newId === props.module.id && cardRef.value) {
+      await nextTick()
+      cardRef.value.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  },
+)
+
+function onNodeDragStart(event: DragEvent) {
+  if (!ctx.treeDnD || !props.module.nodeId) {
+    event.preventDefault()
+    return
+  }
+  setNodeDragData(event, { nodeId: props.module.nodeId, title: props.module.title })
+}
 
 const childCount = computed(() => {
   const countResources = (items: PlanOutlineTreeModule['resources']): number =>

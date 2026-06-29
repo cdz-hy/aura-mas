@@ -1,5 +1,6 @@
 <template>
   <article
+    ref="cardRef"
     class="plan-outline__card plan-outline__card--resource"
     :class="{ 'plan-outline__card--active': isActive }"
     :draggable="ctx.treeDnD"
@@ -86,7 +87,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, ref, watch, nextTick } from 'vue'
 import PlanOutlineResourceCard from './PlanOutlineResourceCard.vue'
 import type { PlanOutlineResource } from './usePlanResourceOutline'
 import { OUTLINE_CONTEXT_KEY, type OutlineContext } from './planOutlineContext'
@@ -96,9 +97,21 @@ const props = defineProps<{
 }>()
 
 const ctx = inject(OUTLINE_CONTEXT_KEY) as OutlineContext
+const cardRef = ref<HTMLElement | null>(null)
 
 const isActive = computed(() => props.resource.resourceId === ctx.selectedResourceId)
 const completionStatus = computed(() => ctx.progressMap?.[props.resource.resourceId] ?? 0)
+
+// 当选中状态变化时，自动滚动到可见区域
+watch(
+  () => ctx.selectedResourceId,
+  async (newId) => {
+    if (newId === props.resource.resourceId && cardRef.value) {
+      await nextTick()
+      cardRef.value.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  },
+)
 </script>
 
 <style scoped src="./planOutlineModule.css"></style>

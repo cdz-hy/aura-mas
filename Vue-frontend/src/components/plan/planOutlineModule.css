@@ -278,19 +278,65 @@
   color: #5a7ab8;
 }
 
+.plan-outline__tag--text,
+.plan-outline__tag--document {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
 .plan-outline__tag--quiz {
-  background: #f3efff;
-  color: #7c5cbf;
+  background: #fef3c7;
+  color: #d97706;
 }
 
 .plan-outline__tag--mindmap {
-  background: #fdf4ff;
-  color: #a855f7;
+  background: #f3e8ff;
+  color: #9333ea;
 }
 
 .plan-outline__tag--video {
-  background: #ecfdf5;
+  background: #ffe4e6;
+  color: #e11d48;
+}
+
+.plan-outline__tag--code {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.plan-outline__tag--summary {
+  background: #e0e7ff;
+  color: #4f46e5;
+}
+
+.plan-outline__tag--reading {
+  background: #cffafe;
+  color: #0891b2;
+}
+
+.plan-outline__tag--image {
+  background: #fce7f3;
+  color: #db2777;
+}
+
+.plan-outline__tag--diagram {
+  background: #ccfbf1;
+  color: #0d9488;
+}
+
+.plan-outline__tag--animation {
+  background: #ffedd5;
+  color: #ea580c;
+}
+
+.plan-outline__tag--podcast {
+  background: #d1fae5;
   color: #059669;
+}
+
+.plan-outline__tag--pptx {
+  background: #ede9fe;
+  color: #7c3aed;
 }
 
 .plan-outline__tag--muted {

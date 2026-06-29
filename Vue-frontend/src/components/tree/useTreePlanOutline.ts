@@ -155,11 +155,35 @@ function mountResources(
     if (node.title) nodeByTitle.set(normalizeTitle(node.title), node.id)
   }
 
+  // 第一轮：通过 nodeId、resourceId、标题匹配
   for (const resource of resources) {
     const nodeId = resourceNodeId(resource)
       || (resource.id != null ? nodeByResourceId.get(resource.id) : undefined)
       || titleMatchedNodeId(resource, nodeByTitle)
     if (!nodeId || !nodeById.has(nodeId) || resource.id == null) continue
+
+    const mounted = result.get(nodeId) || []
+    mounted.push(resource)
+    result.set(nodeId, mounted)
+    mountedResourceIds.add(resource.id)
+  }
+
+  // 第二轮：通过 moduleOrder 关联（相同 moduleOrder 的资源归到同一节点）
+  const nodeByModuleOrder = new Map<number, string>()
+  for (const [nodeId, mounted] of result.entries()) {
+    for (const res of mounted) {
+      if (res.moduleOrder != null && res.moduleOrder > 0) {
+        nodeByModuleOrder.set(res.moduleOrder, nodeId)
+      }
+    }
+  }
+
+  for (const resource of resources) {
+    if (resource.id == null || mountedResourceIds.has(resource.id)) continue
+    if (resource.moduleOrder == null || resource.moduleOrder <= 0) continue
+
+    const nodeId = nodeByModuleOrder.get(resource.moduleOrder)
+    if (!nodeId || !nodeById.has(nodeId)) continue
 
     const mounted = result.get(nodeId) || []
     mounted.push(resource)

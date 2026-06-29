@@ -1662,6 +1662,44 @@ async function confirmDeleteTreeNode(nodeId: string) {
   await knowledgeTreeStore.deleteNode(nodeId)
 }
 
+/** 查找资源对应的节点ID */
+function findNodeIdForResource(res: LearningResource): string | null {
+  const data = res.moduleData || {}
+
+  // 1. 优先从资源的 nodeId 字段获取
+  const directNodeId = (res as any).nodeId || data.nodeId || data.node_id
+  if (directNodeId && knowledgeTreeStore.nodes.some(n => n.id === directNodeId)) {
+    return directNodeId
+  }
+
+  // 2. 通过节点的 resourceId 字段反查
+  const nodeByResourceId = knowledgeTreeStore.nodes.find(n => n.resourceId === res.id)
+  if (nodeByResourceId) return nodeByResourceId.id
+
+  // 3. 通过标题匹配
+  const title = data.module_title || data.moduleTitle || data.title
+  if (title) {
+    const normalizedTitle = String(title).replace(/\s+/g, '').trim().toLowerCase()
+    const nodeByTitle = knowledgeTreeStore.nodes.find(n =>
+      n.title && n.title.replace(/\s+/g, '').trim().toLowerCase() === normalizedTitle
+    )
+    if (nodeByTitle) return nodeByTitle.id
+  }
+
+  // 4. 通过 moduleOrder 匹配（同 moduleOrder 的其他资源已关联的节点）
+  if (res.moduleOrder != null && res.moduleOrder > 0) {
+    const siblings = resources.value.filter(r =>
+      r.id !== res.id && r.moduleOrder === res.moduleOrder
+    )
+    for (const sibling of siblings) {
+      const siblingNodeId = findNodeIdForResource(sibling)
+      if (siblingNodeId) return siblingNodeId
+    }
+  }
+
+  return null
+}
+
 async function openOutlineResource(resourceId: number) {
   const resource = resources.value.find(item => item.id === resourceId)
   const nodeId = resource?.moduleData?.nodeId as string | undefined
@@ -2454,6 +2492,8 @@ function toggleResource(res: LearningResource) {
     quizSubmittedAnswers.value = null
     showExplanations.value = false
     chatStore.selectedModuleContext = null
+    // 取消左侧大纲高亮
+    knowledgeTreeStore.currentNodeId = null
     return
   }
 
@@ -2464,6 +2504,12 @@ function toggleResource(res: LearningResource) {
 
   selectedResourceId.value = res.id
   selectedResource.value = res
+
+  // 联动左侧大纲：找到资源对应的节点并高亮
+  const nodeId = findNodeIdForResource(res)
+  if (nodeId) {
+    knowledgeTreeStore.currentNodeId = nodeId
+  }
 
   // Start heartbeat for this resource
   heartbeat.start(planId.value, res.id)
