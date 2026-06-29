@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildOutlineFromLearningModules,
   buildOutlineFromTreeItems,
+  buildOutlineResources,
   buildOutlineTreeFromTreeItems,
   countOutlineModules,
   countOutlineResources,
@@ -9,7 +10,7 @@ import {
   deriveModuleStatus,
   moduleStatusLabel,
   nestOutlineModules,
-  nestOutlineResources,
+  shouldShowModuleContextPromptForOutlineModule,
 } from './usePlanResourceOutline'
 import type { TreePlanOutlineItem } from '@/components/tree/useTreePlanOutline'
 import type { LearningResource } from '@/types/plan'
@@ -176,19 +177,66 @@ describe('buildOutlineFromTreeItems', () => {
     expect(tree[0].childModules[0].displayIndex).toBe('1.1')
     expect(countOutlineTreeModules(tree)).toBe(2)
   })
+
+  it('renders source text and generated quiz at the same resource level', () => {
+    const items: TreePlanOutlineItem[] = [
+      {
+        kind: 'node',
+        id: 'node:env',
+        nodeId: 'env',
+        title: '环境搭建',
+        summary: '',
+        depth: 0,
+        collapsed: false,
+        children: [
+          {
+            kind: 'resource',
+            id: 'resource:100',
+            resourceId: 100,
+            title: '环境搭建说明',
+            resourceType: 'text',
+            depth: 1,
+            children: [],
+          },
+          {
+            kind: 'resource',
+            id: 'resource:101',
+            resourceId: 101,
+            title: '环境搭建练习测验',
+            resourceType: 'quiz',
+            depth: 1,
+            children: [],
+          },
+        ],
+      },
+    ]
+
+    const resources = [
+      resource({ id: 100, moduleType: 'text', moduleData: { nodeId: 'env', title: '环境搭建说明' }, status: 2 }),
+      resource({ id: 101, parentId: 100, moduleType: 'quiz', moduleData: { title: '环境搭建练习测验' }, status: 2 }),
+    ]
+
+    const outline = buildOutlineFromTreeItems(items, resources)
+    expect(outline).toHaveLength(1)
+    expect(outline[0].resources.map(r => r.resourceId)).toEqual([100, 101])
+    expect(outline[0].resources.every(r => r.childResources.length === 0)).toBe(true)
+
+    const tree = buildOutlineTreeFromTreeItems(items, resources)
+    expect(tree[0].resources.map(r => r.resourceId)).toEqual([100, 101])
+    expect(tree[0].resources.every(r => r.childResources.length === 0)).toBe(true)
+  })
 })
 
-describe('nestOutlineResources', () => {
-  it('nests supplementary resources under parentId', () => {
-    const tree = nestOutlineResources([
+describe('buildOutlineResources', () => {
+  it('keeps generated resources as sibling rows while preserving parent-adjacent order', () => {
+    const rows = buildOutlineResources([
       resource({ id: 10, moduleOrder: 1, moduleType: 'text', moduleData: { title: '正文' }, status: 2 }),
       resource({ id: 11, parentId: 10, moduleOrder: 1, moduleType: 'quiz', moduleData: { title: '测验题' }, status: 2 }),
       resource({ id: 12, parentId: 10, moduleOrder: 1, moduleType: 'mindmap', moduleData: { title: '思维导图' }, status: 1 }),
     ])
 
-    expect(tree).toHaveLength(1)
-    expect(tree[0].resourceId).toBe(10)
-    expect(tree[0].childResources.map(item => item.resourceId)).toEqual([11, 12])
+    expect(rows.map(item => item.resourceId)).toEqual([10, 11, 12])
+    expect(rows.every(item => item.childResources.length === 0)).toBe(true)
   })
 })
 
@@ -225,5 +273,31 @@ describe('nestOutlineModules', () => {
     const tree = nestOutlineModules(flat)
     expect(tree).toHaveLength(1)
     expect(tree[0].childModules[0].id).toBe('node:child')
+  })
+})
+
+describe('shouldShowModuleContextPromptForOutlineModule', () => {
+  it('returns true for top-level numbered modules', () => {
+    expect(shouldShowModuleContextPromptForOutlineModule({
+      kind: 'module',
+      depth: 0,
+      displayIndex: '1',
+    })).toBe(true)
+  })
+
+  it('returns false for nested numbered modules', () => {
+    expect(shouldShowModuleContextPromptForOutlineModule({
+      kind: 'module',
+      depth: 2,
+      displayIndex: '1.1.1',
+    })).toBe(false)
+  })
+
+  it('returns false for non-module group rows', () => {
+    expect(shouldShowModuleContextPromptForOutlineModule({
+      kind: 'group',
+      depth: 0,
+      displayIndex: '',
+    })).toBe(false)
   })
 })

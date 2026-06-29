@@ -74,8 +74,12 @@ function toOutlineResource(
   }
 }
 
-/** 按 parentId 将同模块资源组装为「主资源 + 子资源」树 */
-export function nestOutlineResources(resources: LearningResource[]): PlanOutlineResource[] {
+function sortResourcesByOrder(a: LearningResource, b: LearningResource): number {
+  return (a.moduleOrder - b.moduleOrder) || (a.id - b.id)
+}
+
+/** 同模块资源 flat 列表：parentId 仅用于邻接排序，不构建嵌套 UI */
+export function buildOutlineResources(resources: LearningResource[]): PlanOutlineResource[] {
   if (resources.length === 0) return []
 
   const byId = new Map<number, PlanOutlineResource>()
@@ -83,29 +87,47 @@ export function nestOutlineResources(resources: LearningResource[]): PlanOutline
     byId.set(resource.id, resourceFromLearning(resource))
   }
 
-  const roots: PlanOutlineResource[] = []
+  const childrenByParent = new Map<number, LearningResource[]>()
+  const roots: LearningResource[] = []
+
   for (const resource of resources) {
-    const item = byId.get(resource.id)!
     const parentId = resource.parentId
     if (parentId != null && byId.has(parentId)) {
-      byId.get(parentId)!.childResources.push(item)
+      const list = childrenByParent.get(parentId) || []
+      list.push(resource)
+      childrenByParent.set(parentId, list)
     } else {
-      roots.push(item)
+      roots.push(resource)
     }
   }
 
-  return roots
-}
+  roots.sort(sortResourcesByOrder)
+  for (const list of childrenByParent.values()) {
+    list.sort(sortResourcesByOrder)
+  }
 
-function flattenOutlineResources(resources: PlanOutlineResource[]): PlanOutlineResource[] {
-  const result: PlanOutlineResource[] = []
+  const ordered: PlanOutlineResource[] = []
+  const placed = new Set<number>()
+
+  function appendResource(learning: LearningResource) {
+    if (placed.has(learning.id)) return
+    placed.add(learning.id)
+    ordered.push(byId.get(learning.id)!)
+    for (const child of childrenByParent.get(learning.id) || []) {
+      appendResource(child)
+    }
+  }
+
+  for (const root of roots) {
+    appendResource(root)
+  }
   for (const resource of resources) {
-    result.push(resource)
-    if (resource.childResources.length > 0) {
-      result.push(...flattenOutlineResources(resource.childResources))
+    if (!placed.has(resource.id)) {
+      appendResource(resource)
     }
   }
-  return result
+
+  return ordered
 }
 
 function resourceFromLearning(r: LearningResource): PlanOutlineResource {
@@ -130,8 +152,7 @@ function resourceFromTreeItem(item: TreePlanResourceItem, resources: LearningRes
 /** 学习模式：按 moduleOrder 分组的模块列表 → 统一大纲项 */
 export function buildOutlineFromLearningModules(groups: LearningModuleGroup[]): PlanOutlineModule[] {
   return groups.map((mod, index) => {
-    const outlineResources = nestOutlineResources(mod.resources)
-    const flatResources = flattenOutlineResources(outlineResources)
+    const outlineResources = buildOutlineResources(mod.resources)
     return {
       id: `learning:${mod.order}`,
       displayIndex: String(index + 1),
@@ -140,7 +161,7 @@ export function buildOutlineFromLearningModules(groups: LearningModuleGroup[]): 
       estimatedHours: mod.estimatedHours || 2,
       resourceTypes: [...mod.resourceTypes],
       resources: outlineResources,
-      moduleStatus: deriveModuleStatus(flatResources),
+      moduleStatus: deriveModuleStatus(outlineResources),
       kind: 'module',
     }
   })
@@ -185,8 +206,7 @@ function flattenNodeItems(
     const nodeResources = resourceItems
       .map(resourceItem => resources.find(r => r.id === resourceItem.resourceId))
       .filter((resource): resource is LearningResource => Boolean(resource))
-    const outlineResources = nestOutlineResources(nodeResources)
-    const flatResources = flattenOutlineResources(outlineResources)
+    const outlineResources = buildOutlineResources(nodeResources)
 
     result.push({
       id: item.id,
@@ -195,9 +215,9 @@ function flattenNodeItems(
       title: item.title,
       summary: item.summary || undefined,
       estimatedHours: 2,
-      resourceTypes: collectResourceTypes(flatResources),
+      resourceTypes: collectResourceTypes(outlineResources),
       resources: outlineResources,
-      moduleStatus: deriveModuleStatus(flatResources),
+      moduleStatus: deriveModuleStatus(outlineResources),
       nodeId: item.nodeId,
       kind: 'module',
     })
@@ -222,17 +242,16 @@ function convertGroupItem(
   const groupLearningResources = item.children
     .map(child => resources.find(r => r.id === child.resourceId))
     .filter((resource): resource is LearningResource => Boolean(resource))
-  const groupResources = nestOutlineResources(groupLearningResources)
-  const flatGroupResources = flattenOutlineResources(groupResources)
+  const groupResources = buildOutlineResources(groupLearningResources)
   return {
     id: item.id,
     displayIndex: '',
     depth: item.depth,
     title: item.title,
     estimatedHours: 2,
-    resourceTypes: collectResourceTypes(flatGroupResources),
+    resourceTypes: collectResourceTypes(groupResources),
     resources: groupResources,
-    moduleStatus: deriveModuleStatus(flatGroupResources),
+    moduleStatus: deriveModuleStatus(groupResources),
     kind: 'group',
     childModules: [],
   }
@@ -249,8 +268,7 @@ function convertNodeItem(
   const nodeResources = resourceItems
     .map(resourceItem => resources.find(r => r.id === resourceItem.resourceId))
     .filter((resource): resource is LearningResource => Boolean(resource))
-  const outlineResources = nestOutlineResources(nodeResources)
-  const flatResources = flattenOutlineResources(outlineResources)
+  const outlineResources = buildOutlineResources(nodeResources)
 
   let childCounter = 0
   const childModules = childNodes.map(child => {
@@ -266,9 +284,9 @@ function convertNodeItem(
     title: item.title,
     summary: item.summary || undefined,
     estimatedHours: 2,
-    resourceTypes: collectResourceTypes(flatResources),
+    resourceTypes: collectResourceTypes(outlineResources),
     resources: outlineResources,
-    moduleStatus: deriveModuleStatus(flatResources),
+    moduleStatus: deriveModuleStatus(outlineResources),
     nodeId: item.nodeId,
     kind: 'module',
     childModules,
@@ -352,11 +370,8 @@ export function countOutlineTreeModules(modules: PlanOutlineTreeModule[]): numbe
 }
 
 export function countOutlineTreeResources(modules: PlanOutlineTreeModule[]): number {
-  const countResources = (items: PlanOutlineResource[]): number =>
-    items.reduce((sum, item) => sum + 1 + countResources(item.childResources), 0)
-
   return modules.reduce((sum, mod) => {
-    return sum + countResources(mod.resources) + countOutlineTreeResources(mod.childModules)
+    return sum + mod.resources.length + countOutlineTreeResources(mod.childModules)
   }, 0)
 }
 
@@ -365,7 +380,15 @@ export function countOutlineModules(modules: PlanOutlineModule[]): number {
 }
 
 export function countOutlineResources(modules: PlanOutlineModule[]): number {
-  const countResources = (items: PlanOutlineResource[]): number =>
-    items.reduce((sum, item) => sum + 1 + countResources(item.childResources), 0)
-  return modules.reduce((sum, mod) => sum + countResources(mod.resources), 0)
+  return modules.reduce((sum, mod) => sum + mod.resources.length, 0)
+}
+
+/** 仅顶级编号模块（如 1、2）展示右侧「你正在查看模块」提示 */
+export function shouldShowModuleContextPromptForOutlineModule(
+  module: Pick<PlanOutlineTreeModule, 'kind' | 'depth' | 'displayIndex'>,
+): boolean {
+  return module.kind === 'module'
+    && module.depth === 0
+    && module.displayIndex.length > 0
+    && !module.displayIndex.includes('.')
 }
