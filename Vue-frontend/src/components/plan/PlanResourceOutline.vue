@@ -61,6 +61,7 @@ import {
   readResourceDragData,
   setResourceDragData,
 } from '@/components/tree/useTreeDragDrop'
+import { resourceGenerationOptions } from '@/constants/resourceGenerationOptions'
 
 const props = withDefaults(defineProps<{
   modules?: PlanOutlineModule[]
@@ -91,7 +92,7 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
-  'select-module': [moduleId: string, nodeId?: string]
+  'select-module': [module: PlanOutlineTreeModule]
   'select-resource': [resourceId: number]
   'retry-resource': [resourceId: number]
   'generate-content': [payload: { nodeId: string; type: string }]
@@ -104,14 +105,6 @@ const emit = defineEmits<{
 const expandedIds = ref<Set<string>>(new Set())
 const generateMenuNodeId = ref<string | null>(null)
 const dropTargetId = ref<string | null>(null)
-
-const generateOptions = [
-  { type: 'text', label: '正文讲解' },
-  { type: 'mindmap', label: '思维导图' },
-  { type: 'quiz', label: '测验题' },
-  { type: 'summary', label: '总结' },
-  { type: 'code', label: '代码示例' },
-]
 
 const outlineTree = computed(() =>
   props.treeModules?.length ? props.treeModules : nestOutlineModules(props.modules || []),
@@ -146,6 +139,7 @@ watch(
     const validIds = collectModuleIds(outlineTree.value)
     expandedIds.value = new Set([...expandedIds.value].filter(id => validIds.has(id)))
     syncExpandedToSelection(props.selectedModuleId)
+    syncGenerateMenuState()
   },
   { immediate: true, deep: true },
 )
@@ -155,12 +149,37 @@ watch(
   id => syncExpandedToSelection(id),
 )
 
+watch(
+  () => props.treeMode,
+  () => syncGenerateMenuState(),
+)
+
 function collectModuleIds(items: PlanOutlineTreeModule[], acc = new Set<string>()) {
   for (const item of items) {
     acc.add(item.id)
     collectModuleIds(item.childModules, acc)
   }
   return acc
+}
+
+function collectNodeIds(items: PlanOutlineTreeModule[], acc = new Set<string>()) {
+  for (const item of items) {
+    if (item.nodeId) acc.add(item.nodeId)
+    collectNodeIds(item.childModules, acc)
+  }
+  return acc
+}
+
+function syncGenerateMenuState() {
+  if (!props.treeMode) {
+    generateMenuNodeId.value = null
+    return
+  }
+  const openId = generateMenuNodeId.value
+  if (!openId) return
+  if (!collectNodeIds(outlineTree.value).has(openId)) {
+    generateMenuNodeId.value = null
+  }
 }
 
 function syncExpandedToSelection(id: string | null | undefined) {
@@ -224,7 +243,7 @@ function toggleExpand(id: string) {
 
 function onModuleClick(mod: PlanOutlineTreeModule) {
   generateMenuNodeId.value = null
-  emit('select-module', mod.id, mod.nodeId)
+  emit('select-module', mod)
 }
 
 function toggleGenerateMenu(nodeId: string) {
@@ -284,7 +303,7 @@ provide(OUTLINE_CONTEXT_KEY, {
   get progressMap() { return props.progressMap },
   get generateMenuNodeId() { return generateMenuNodeId.value },
   get dropTargetId() { return dropTargetId.value },
-  generateOptions,
+  generateOptions: resourceGenerationOptions,
   typeLabel,
   tagClass,
   statusLabel,

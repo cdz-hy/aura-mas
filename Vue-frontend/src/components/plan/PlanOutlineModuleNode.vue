@@ -74,7 +74,7 @@
     </div>
 
     <div
-      v-if="ctx.generateMenuNodeId === module.nodeId"
+      v-if="ctx.treeMode && ctx.generateMenuNodeId === module.nodeId"
       class="plan-outline__generate-menu"
       @click.stop
     >
