@@ -47,6 +47,19 @@ public class UserController {
         return Result.success();
     }
 
+    @Operation(summary = "直接替换学习行为数据（前端手动编辑用）")
+    @PutMapping("/profile/behavior")
+    public Result<Void> replaceLearningBehavior(Authentication authentication,
+                                                 @RequestBody Map<String, String> body) {
+        Long userId = (Long) authentication.getPrincipal();
+        String learningBehavior = body.get("learningBehavior");
+        if (learningBehavior == null || learningBehavior.isBlank()) {
+            return Result.error(400, "learningBehavior 不能为空");
+        }
+        userService.replaceLearningBehavior(userId, learningBehavior);
+        return Result.success();
+    }
+
     @Operation(summary = "更新个人信息")
     @PutMapping("/info")
     public Result<User> updateUserInfo(Authentication authentication,

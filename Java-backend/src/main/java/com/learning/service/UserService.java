@@ -203,6 +203,38 @@ public class UserService {
         userProfileMapper.insert(profile);
     }
 
+    /**
+     * 直接替换 learningBehavior（前端手动编辑用，不做 merge）
+     */
+    @Transactional
+    public void replaceLearningBehavior(Long userId, String newBehaviorJson) {
+        UserProfile existing = getCurrentProfile(userId);
+        if (existing == null) return;
+
+        existing.setIsCurrent(0);
+        userProfileMapper.updateById(existing);
+
+        UserProfile latest = userProfileMapper.selectOne(
+                new LambdaQueryWrapper<UserProfile>()
+                        .eq(UserProfile::getUserId, userId)
+                        .orderByDesc(UserProfile::getVersion)
+                        .last("LIMIT 1"));
+        int maxVersion = (latest != null && latest.getVersion() != null) ? latest.getVersion() : 0;
+
+        UserProfile newProfile = new UserProfile();
+        newProfile.setId(null);
+        newProfile.setUserId(userId);
+        newProfile.setVersion(maxVersion + 1);
+        newProfile.setIsCurrent(1);
+        newProfile.setAge(existing.getAge());
+        newProfile.setGender(existing.getGender());
+        newProfile.setDomain(existing.getDomain());
+        newProfile.setLearningBehavior(newBehaviorJson);
+        newProfile.setUpdateReason("用户手动编辑");
+        newProfile.setCreatedAt(LocalDateTime.now());
+        userProfileMapper.insert(newProfile);
+    }
+
     private static final Set<String> LIST_FIELDS = new HashSet<>(
             java.util.Arrays.asList("knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types", "preferred_quiz_types"));
 
