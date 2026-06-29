@@ -694,6 +694,8 @@ import {
   buildOutlineTreeFromTreeItems,
   countOutlineTreeModules,
   countOutlineTreeResources,
+  shouldShowModuleContextPromptForOutlineModule,
+  type PlanOutlineTreeModule,
 } from '@/components/plan/usePlanResourceOutline'
 import TreeSubdividePopover from '@/components/tree/TreeSubdividePopover.vue'
 import TreeBootstrapPreview from '@/components/tree/TreeBootstrapPreview.vue'
@@ -1488,6 +1490,39 @@ function moduleDataFromGeneratedResource(resource: GeneratedResourceRef): Record
   return normalizeResourceModuleData(moduleType, baseData)
 }
 
+type GeneratedResourcePlacement = {
+  parentId: number | null
+  moduleOrder: number
+  nodeId?: string
+}
+
+function generatedResourcePlacement(): GeneratedResourcePlacement {
+  const ctx = chatStore.selectedModuleContext
+  const parent = ctx ? resources.value.find(resource => resource.id === ctx.moduleId) : null
+  const fallbackOrder = resources.value.length > 0
+    ? Math.max(...resources.value.map(resource => resource.moduleOrder)) + 1
+    : 1
+
+  return {
+    parentId: parent?.id ?? null,
+    moduleOrder: parent?.moduleOrder ?? fallbackOrder,
+    nodeId: ctx?.nodeId
+      || (parent?.moduleData?.nodeId as string | undefined)
+      || (parent?.moduleData?.node_id as string | undefined),
+  }
+}
+
+function withGeneratedResourceNodeData(
+  moduleData: Record<string, any>,
+  placement: GeneratedResourcePlacement = generatedResourcePlacement(),
+) {
+  return {
+    ...moduleData,
+    nodeId: moduleData.nodeId || placement.nodeId || undefined,
+    node_id: moduleData.node_id || placement.nodeId || undefined,
+  }
+}
+
 function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResource {
   const existing = resource.id ? resources.value.find(r => r.id === resource.id) : null
   const moduleType = resource.type || existing?.moduleType || resource.generated_content?.module_type || 'document'
@@ -1498,23 +1533,22 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
     existing.moduleData = { ...existing.moduleData, ...moduleData }
     existing.status = resource.status ?? 2
     existing.updatedAt = new Date().toISOString()
+    const placement = generatedResourcePlacement()
+    existing.parentId = existing.parentId ?? placement.parentId
+    existing.moduleOrder = existing.moduleOrder || placement.moduleOrder
+    existing.moduleData = withGeneratedResourceNodeData(existing.moduleData, placement)
     return existing
   }
 
-  const moduleOrder = resources.value.length > 0
-    ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1
+  const placement = generatedResourcePlacement()
 
   const newResource: LearningResource = {
     id: resource.id || -Date.now(),
     planId: planId.value,
-    parentId: null,
-    moduleOrder,
+    parentId: placement.parentId,
+    moduleOrder: placement.moduleOrder,
     moduleType,
-    moduleData: {
-      ...moduleData,
-      nodeId: moduleData.nodeId || chatStore.selectedModuleContext?.nodeId || undefined,
-      node_id: moduleData.node_id || chatStore.selectedModuleContext?.nodeId || undefined,
-    },
+    moduleData: withGeneratedResourceNodeData(moduleData, placement),
     status: resource.status ?? 2,
     storagePath: null,
     generatedByAgent: moduleType === 'animation' ? 'animation_skill_generator' : 'resource_type_generator',
@@ -1726,18 +1760,19 @@ async function openOutlineResource(resourceId: number) {
   }
 }
 
-function onOutlineSelectModule(moduleId: string, nodeId?: string) {
+function onOutlineSelectModule(mod: PlanOutlineTreeModule) {
+  const nodeId = mod.nodeId
   if (!nodeId) return
-  // 两个模式统一处理：选中/取消选中树节点，并打开关联资源
+
+  const showModuleContext = shouldShowModuleContextPromptForOutlineModule(mod)
+
   if (knowledgeTreeStore.currentNodeId === nodeId) {
-    // 重复点击同一节点 → 取消选中
     knowledgeTreeStore.currentNodeId = null
     clearSelectedResource()
     return
   }
   void selectTreeNode(nodeId).then(() => {
     if (isTreeMode.value) return
-    // 计划模式下：打开节点关联的资源
     const node = knowledgeTreeStore.nodes.find(n => n.id === nodeId)
     const resourceId = node?.resourceId
       || resources.value.find(r => {
@@ -1745,7 +1780,7 @@ function onOutlineSelectModule(moduleId: string, nodeId?: string) {
         return data.nodeId === nodeId || data.node_id === nodeId
       })?.id
     if (resourceId) {
-      void openResourceById(resourceId)
+      void openResourceById(resourceId, undefined, { showModuleContext })
     } else {
       clearSelectedResource()
     }
@@ -2489,7 +2524,11 @@ async function handleRetry(res: LearningResource) {
   }
 }
 
-function toggleResource(res: LearningResource) {
+type ToggleResourceOptions = {
+  showModuleContext?: boolean
+}
+
+function toggleResource(res: LearningResource, options: ToggleResourceOptions = {}) {
   // 点击已选中的资源 → 取消选中
   if (selectedResourceId.value === res.id) {
     heartbeat.stop()
@@ -2562,6 +2601,11 @@ function toggleResource(res: LearningResource) {
   }
 
   // 设置模块上下文并提示用户可以生成补充资源
+  if (options.showModuleContext === false) {
+    chatStore.selectedModuleContext = null
+    return
+  }
+
   const moduleTitle = res.moduleData?.module_title || res.moduleData?.title || `模块 ${res.moduleOrder}`
   const moduleDesc = res.moduleData?.description || res.moduleData?.module_description || ''
   chatStore.selectedModuleContext = {
@@ -2578,11 +2622,15 @@ function toggleResource(res: LearningResource) {
 }
 
 /** 通过资源 ID 打开资源（先从本地列表查找，未命中则请求后端） */
-async function openResourceById(resourceId: number, resourceType?: string) {
+async function openResourceById(
+  resourceId: number,
+  resourceType?: string,
+  options: ToggleResourceOptions = {},
+) {
   // 先从本地已加载的资源中查找
   const local = resources.value.find(r => r.id === resourceId)
   if (local) {
-    toggleResource(local)
+    toggleResource(local, options)
     return
   }
   // 本地未命中，从后端获取
@@ -2595,7 +2643,7 @@ async function openResourceById(resourceId: number, resourceType?: string) {
       if (!resources.value.some(r => r.id === res.data.id)) {
         resources.value.push(res.data)
       }
-      toggleResource(res.data)
+      toggleResource(res.data, options)
     }
   } catch (e) {
     console.error('Failed to open resource by ID:', e)
@@ -3006,19 +3054,17 @@ watch(() => chatStore.lastQuizResource, (data) => {
     }
   }
 
-  const maxOrder = resources.value.length > 0 ? Math.max(...resources.value.map(r => r.moduleOrder)) : 0
+  const placement = generatedResourcePlacement()
   const newResource: LearningResource = {
     id: Date.now(),
     planId: planId.value,
-    parentId: null,
-    moduleOrder: maxOrder + 1,
+    parentId: placement.parentId,
+    moduleOrder: placement.moduleOrder,
     moduleType: 'quiz',
-    moduleData: {
+    moduleData: withGeneratedResourceNodeData({
       title: '练习题',
       questions: data.questions,
-      nodeId: chatStore.selectedModuleContext?.nodeId || undefined,
-      node_id: chatStore.selectedModuleContext?.nodeId || undefined,
-    },
+    }, placement),
     status: 2,
     storagePath: null,
     generatedByAgent: 'quiz_generator',
@@ -3119,19 +3165,17 @@ watch(() => chatStore.streamingResources.length, () => {
   if (!items.length) return
   for (const { resource, content } of items) {
     if (resources.value.some(existing => existing.id === resource.id)) continue
+    const placement = generatedResourcePlacement()
     const newRes: LearningResource = {
       id: resource.id,
       planId: planId.value,
-      parentId: null,
-      moduleOrder: resources.value.length > 0
-        ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1,
+      parentId: placement.parentId,
+      moduleOrder: placement.moduleOrder,
       moduleType: resource.type || 'document',
-      moduleData: {
+      moduleData: withGeneratedResourceNodeData({
         title: resource.title,
         content,
-        nodeId: chatStore.selectedModuleContext?.nodeId || undefined,
-        node_id: chatStore.selectedModuleContext?.nodeId || undefined,
-      },
+      }, placement),
       status: 2,
       storagePath: null,
       generatedByAgent: 'content_orchestrator',
@@ -3152,14 +3196,14 @@ watch(() => chatStore.streamingPlaceholders, (placeholders) => {
   for (const p of placeholders) {
     // 跳过已存在的资源
     if (resources.value.some(r => r.id === p.id)) continue
+    const placement = generatedResourcePlacement()
     const placeholderRes: LearningResource = {
       id: p.id,
       planId: planId.value,
-      parentId: null,
-      moduleOrder: p.moduleOrder ?? (resources.value.length > 0
-        ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1),
+      parentId: placement.parentId,
+      moduleOrder: p.moduleOrder ?? placement.moduleOrder,
       moduleType: p.type || 'document',
-      moduleData: { title: p.title, content: '' },
+      moduleData: withGeneratedResourceNodeData({ title: p.title, content: '' }, placement),
       status: 1,
       storagePath: null,
       generatedByAgent: 'content_orchestrator',
