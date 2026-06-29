@@ -66,4 +66,27 @@ describe('buildTreePlanOutline', () => {
     const uncategorized = outline.find(item => item.kind === 'group' && item.title === '未归类资源')
     expect(uncategorized?.children[0]).toMatchObject({ kind: 'resource', title: '外部补充视频', resourceId: 44 })
   })
+
+  it('mounts generated child resources under the parent resource node', () => {
+    const outline = buildTreePlanOutline(nodes, [
+      resource({
+        id: 100,
+        moduleType: 'text',
+        moduleData: { nodeId: 'env', title: '环境搭建说明' },
+      }),
+      resource({
+        id: 101,
+        parentId: 100,
+        moduleType: 'quiz',
+        moduleData: { title: '环境搭建练习测验' },
+      }),
+    ], 'root')
+
+    const env = outline.find(item => item.kind === 'node' && item.nodeId === 'env')
+    expect(env?.children).toEqual([
+      expect.objectContaining({ kind: 'resource', title: '环境搭建说明', resourceId: 100 }),
+      expect.objectContaining({ kind: 'resource', title: '环境搭建练习测验', resourceId: 101 }),
+    ])
+    expect(outline.find(item => item.kind === 'group' && item.title === '未归类资源')).toBeUndefined()
+  })
 })
