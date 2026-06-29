@@ -214,18 +214,8 @@
   border-left: 1.5px solid rgba(154, 173, 216, 0.3);
 }
 
-.plan-outline__child-resources {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 0 8px 4px 19px;
-  padding-left: 12px;
-  border-left: 1.5px solid rgba(154, 173, 216, 0.25);
-}
-
 /* 子项行内连接点 */
-.plan-outline__child-modules > .plan-outline__card::after,
-.plan-outline__child-resources > .plan-outline__card::after {
+.plan-outline__child-modules > .plan-outline__card::after {
   content: '';
   position: absolute;
   left: -13px;

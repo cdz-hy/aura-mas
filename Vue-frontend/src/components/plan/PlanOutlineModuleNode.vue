@@ -130,11 +130,9 @@ const props = defineProps<{
 const ctx = inject(OUTLINE_CONTEXT_KEY) as OutlineContext
 
 const childCount = computed(() => {
-  const countResources = (items: PlanOutlineTreeModule['resources']): number =>
-    items.reduce((sum, item) => sum + 1 + countResources(item.childResources), 0)
   const countModules = (mod: PlanOutlineTreeModule): number =>
     mod.childModules.reduce((sum, child) => sum + 1 + countModules(child), 0)
-  return countResources(props.module.resources) + countModules(props.module)
+  return props.module.resources.length + countModules(props.module)
 })
 
 const hasExpandableItems = computed(() =>

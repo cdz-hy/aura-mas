@@ -71,23 +71,11 @@
         </button>
       </div>
     </div>
-
-    <div
-      v-if="resource.childResources.length > 0"
-      class="plan-outline__child-resources"
-    >
-      <PlanOutlineResourceCard
-        v-for="child in resource.childResources"
-        :key="child.id"
-        :resource="child"
-      />
-    </div>
   </article>
 </template>
 
 <script setup lang="ts">
 import { computed, inject } from 'vue'
-import PlanOutlineResourceCard from './PlanOutlineResourceCard.vue'
 import type { PlanOutlineResource } from './usePlanResourceOutline'
 import { OUTLINE_CONTEXT_KEY, type OutlineContext } from './planOutlineContext'
 
