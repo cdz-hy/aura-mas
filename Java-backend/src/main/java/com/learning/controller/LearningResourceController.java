@@ -76,7 +76,7 @@ public class LearningResourceController {
             }
         }
         Integer status = body.get("status") != null ? Integer.valueOf(body.get("status").toString()) : null;
-        resourceService.updateContent(resourceId, moduleData, status);
+        resourceService.updateContent(resourceId, moduleData, null, status);
         return Result.success();
     }
 
@@ -98,8 +98,9 @@ public class LearningResourceController {
     public Result<Void> updateContent(@PathVariable Long resourceId,
                                        @RequestBody java.util.Map<String, Object> body) {
         String moduleData = (String) body.get("moduleData");
+        String moduleType = (String) body.get("moduleType");
         Integer status = body.get("status") != null ? Integer.valueOf(body.get("status").toString()) : null;
-        resourceService.updateContent(resourceId, moduleData, status);
+        resourceService.updateContent(resourceId, moduleData, moduleType, status);
         return Result.success();
     }
 

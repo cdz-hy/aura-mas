@@ -58,7 +58,7 @@ public class TaskDispatchService {
         Long resourceId = task.getResourceId();
 
         // 先持久化资源内容（确保内容落库成功）
-        learningResourceService.updateContent(resourceId, moduleData, 2);
+        learningResourceService.updateContent(resourceId, moduleData, null, 2);
 
         // 再更新任务状态为完成
         task.setTaskStatus(2);
