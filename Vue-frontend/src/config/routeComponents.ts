@@ -14,6 +14,7 @@ const componentMap: Record<string, () => Promise<Component>> = {
   'kb-management':     () => import('@/views/admin/KBManagement.vue'),
   'user-management':   () => import('@/views/admin/UserManagement.vue'),
   'token-analysis':    () => import('@/views/admin/TokenAnalysis.vue'),
+  'log-management':    () => import('@/views/admin/LogManagement.vue'),
   'knowledge-graph':   () => import('@/views/KnowledgeGraphView.vue'),
 }
 

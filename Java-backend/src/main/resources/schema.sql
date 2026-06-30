@@ -257,13 +257,18 @@ CREATE TABLE IF NOT EXISTS `ai_kb_generation` (
 CREATE TABLE IF NOT EXISTS `system_log` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED DEFAULT NULL,
-    `operation_type` VARCHAR(50) NOT NULL,
-    `resource_id` VARCHAR(255) DEFAULT NULL,
-    `user_ip` VARCHAR(45) DEFAULT NULL,
+    `operation_type` VARCHAR(50) NOT NULL COMMENT '操作类型编码',
+    `operation_desc` VARCHAR(200) DEFAULT NULL COMMENT '操作描述（人可读）',
+    `module` VARCHAR(50) DEFAULT NULL COMMENT '所属模块',
+    `resource_id` VARCHAR(255) DEFAULT NULL COMMENT '操作目标资源ID',
+    `user_ip` VARCHAR(45) DEFAULT NULL COMMENT '操作者IP',
+    `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1=成功 0=失败',
+    `error_msg` VARCHAR(500) DEFAULT NULL COMMENT '失败原因',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     KEY `idx_user_id` (`user_id`),
-    KEY `idx_operation` (`operation_type`)
+    KEY `idx_operation` (`operation_type`),
+    KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统操作日志表';
 
 CREATE TABLE IF NOT EXISTS `ai_token_usage` (

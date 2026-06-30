@@ -142,3 +142,61 @@ export interface TokenRecordsPage {
 export function getTokenRecords(start: string, end: string, page: number, size: number, model?: string, scene?: string) {
   return request.get<any, TokenRecordsPage>('/admin/token/records', { params: { start, end, page, size, model, scene } })
 }
+
+// ========== 仪表盘 ==========
+
+export interface AdminDashboardStats {
+  totalUsers: number
+  activeUsers: number
+  totalPlans: number
+  activePlans: number
+  totalKBDocs: number
+  todayAICalls: number
+  todayTokens: number
+}
+
+export interface AdminLogItem {
+  id: number
+  user_id: number | null
+  login_name: string | null
+  operation_type: string
+  operation_desc: string | null
+  module: string | null
+  status: number
+  user_ip: string | null
+  error_msg: string | null
+  created_at: string | null
+}
+
+export function getDashboardStats() {
+  return request.get<any, AdminDashboardStats>('/admin/dashboard/stats')
+}
+
+export function getDashboardLogs() {
+  return request.get<any, AdminLogItem[]>('/admin/dashboard/logs')
+}
+
+export interface AdminLogQuery {
+  page?: number
+  size?: number
+  module?: string
+  status?: number | null
+  keyword?: string
+  startDate?: string
+  endDate?: string
+}
+
+export interface AdminLogStats {
+  total: number
+  todayCount: number
+  failCount: number
+  moduleDistribution: { module: string; count: number }[]
+}
+
+export function getLogPage(params: AdminLogQuery) {
+  return request.get<any, any>('/admin/dashboard/logs/page', { params })
+}
+
+export function getLogStats() {
+  return request.get<any, AdminLogStats>('/admin/dashboard/logs/stats')
+}

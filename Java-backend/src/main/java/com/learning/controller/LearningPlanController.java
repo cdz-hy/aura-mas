@@ -1,5 +1,7 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.PageResult;
 import com.learning.common.Result;
 import com.learning.dto.PlanCreateRequest;
@@ -21,6 +23,9 @@ public class LearningPlanController {
     private final LearningPlanService planService;
 
     @Operation(summary = "创建学习计划")
+    @OperationLog(type = OperationType.PLAN_CREATE, module = "Plan",
+            desc = "'创建学习计划: ' + #request.getTitle()",
+            resourceId = "#result?.data?.id?.toString()")
     @PostMapping
     public Result<LearningPlan> createPlan(Authentication authentication,
                                             @Valid @RequestBody PlanCreateRequest request) {
@@ -46,6 +51,9 @@ public class LearningPlanController {
     }
 
     @Operation(summary = "更新学习计划")
+    @OperationLog(type = OperationType.PLAN_UPDATE, module = "Plan",
+            desc = "'更新学习计划ID: ' + #planId",
+            resourceId = "#planId?.toString()")
     @PutMapping("/{planId}")
     public Result<LearningPlan> updatePlan(Authentication authentication,
                                             @PathVariable Long planId,
@@ -55,6 +63,9 @@ public class LearningPlanController {
     }
 
     @Operation(summary = "删除学习计划")
+    @OperationLog(type = OperationType.PLAN_DELETE, module = "Plan",
+            desc = "'删除学习计划ID: ' + #planId",
+            resourceId = "#planId?.toString()")
     @DeleteMapping("/{planId}")
     public Result<Void> deletePlan(Authentication authentication,
                                     @PathVariable Long planId) {
@@ -64,6 +75,9 @@ public class LearningPlanController {
     }
 
     @Operation(summary = "更新计划状态")
+    @OperationLog(type = OperationType.PLAN_STATUS_CHANGE, module = "Plan",
+            desc = "'更新计划状态ID: ' + #planId + ' -> ' + #status",
+            resourceId = "#planId?.toString()")
     @PutMapping("/{planId}/status")
     public Result<Void> updatePlanStatus(@PathVariable Long planId,
                                           @RequestParam Integer status) {

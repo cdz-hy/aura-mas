@@ -1,6 +1,8 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
 import com.learning.common.ErrorCode;
+import com.learning.common.OperationType;
 import com.learning.common.Result;
 import com.learning.entity.Flashcard;
 import com.learning.service.FlashcardService;
@@ -45,6 +47,9 @@ public class FlashcardController {
     }
 
     @Operation(summary = "提交复习结果")
+    @OperationLog(type = OperationType.FLASHCARD_REVIEW, module = "Flashcard",
+            desc = "'提交复习结果: cardId=' + #cardId",
+            resourceId = "#cardId?.toString()")
     @PutMapping("/{cardId}/review")
     public Result<Flashcard> reviewCard(Authentication auth,
                                          @PathVariable Long cardId,
@@ -58,6 +63,7 @@ public class FlashcardController {
     }
 
     @Operation(summary = "保存闪卡（AI 生成后调用）")
+    @OperationLog(type = OperationType.FLASHCARD_SAVE, module = "Flashcard", desc = "保存闪卡")
     @PostMapping("/save")
     public Result<Void> saveFlashcards(Authentication auth,
                                         @RequestBody Map<String, Object> body) {
@@ -101,6 +107,9 @@ public class FlashcardController {
     }
 
     @Operation(summary = "删除闪卡")
+    @OperationLog(type = OperationType.FLASHCARD_DELETE, module = "Flashcard",
+            desc = "'删除闪卡ID: ' + #cardId",
+            resourceId = "#cardId?.toString()")
     @DeleteMapping("/{cardId}")
     public Result<Void> deleteCard(Authentication auth,
                                     @PathVariable Long cardId) {

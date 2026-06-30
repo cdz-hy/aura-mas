@@ -1,5 +1,7 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.Result;
 import com.learning.service.FileService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,6 +22,7 @@ public class FileController {
     private final FileService fileService;
 
     @Operation(summary = "通用文件上传")
+    @OperationLog(type = OperationType.FILE_UPLOAD, module = "File", desc = "文件上传")
     @PostMapping("/upload")
     public Result<Map<String, String>> upload(
             @RequestParam("file") MultipartFile file,

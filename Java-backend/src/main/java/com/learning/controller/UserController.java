@@ -1,5 +1,7 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.Result;
 import com.learning.entity.User;
 import com.learning.entity.UserProfile;
@@ -39,6 +41,7 @@ public class UserController {
     }
 
     @Operation(summary = "更新用户画像")
+    @OperationLog(type = OperationType.USER_UPDATE_PROFILE, module = "User", desc = "更新学习画像")
     @PutMapping("/profile")
     public Result<Void> updateProfile(Authentication authentication,
                                        @RequestBody UserProfile profile) {
@@ -48,6 +51,7 @@ public class UserController {
     }
 
     @Operation(summary = "直接替换学习行为数据（前端手动编辑用）")
+    @OperationLog(type = OperationType.USER_UPDATE_BEHAVIOR, module = "User", desc = "替换学习行为数据")
     @PutMapping("/profile/behavior")
     public Result<Void> replaceLearningBehavior(Authentication authentication,
                                                  @RequestBody Map<String, String> body) {
@@ -61,6 +65,7 @@ public class UserController {
     }
 
     @Operation(summary = "更新个人信息")
+    @OperationLog(type = OperationType.USER_UPDATE_INFO, module = "User", desc = "更新个人信息")
     @PutMapping("/info")
     public Result<User> updateUserInfo(Authentication authentication,
                                         @RequestBody Map<String, Object> updates) {
@@ -69,6 +74,7 @@ public class UserController {
     }
 
     @Operation(summary = "上传头像")
+    @OperationLog(type = OperationType.USER_UPLOAD_AVATAR, module = "User", desc = "上传头像")
     @PostMapping("/avatar")
     public Result<Map<String, String>> uploadAvatar(Authentication authentication,
                                                      @RequestParam("file") MultipartFile file) {
@@ -98,6 +104,7 @@ public class UserController {
     }
 
     @Operation(summary = "注销账号")
+    @OperationLog(type = OperationType.USER_DELETE_ACCOUNT, module = "User", desc = "用户注销账号")
     @DeleteMapping("/account")
     public Result<Void> deleteAccount(Authentication authentication) {
         Long userId = (Long) authentication.getPrincipal();
@@ -106,6 +113,7 @@ public class UserController {
     }
 
     @Operation(summary = "清空头像")
+    @OperationLog(type = OperationType.USER_CLEAR_AVATAR, module = "User", desc = "清除头像")
     @DeleteMapping("/avatar")
     public Result<Void> clearAvatar(Authentication authentication) {
         Long userId = (Long) authentication.getPrincipal();

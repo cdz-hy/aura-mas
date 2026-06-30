@@ -1,5 +1,7 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.Result;
 import com.learning.entity.AiDialogue;
 import com.learning.service.AiDialogueService;
@@ -104,6 +106,9 @@ public class AiDialogueController {
     }
 
     @Operation(summary = "删除会话")
+    @OperationLog(type = OperationType.DIALOGUE_DELETE_SESSION, module = "Dialogue",
+            desc = "'删除对话会话: ' + #sessionId",
+            resourceId = "#sessionId")
     @DeleteMapping("/api/dialogue/session/{sessionId}")
     public Result<Void> deleteSession(@PathVariable String sessionId) {
         dialogueService.deleteBySession(sessionId);
@@ -118,6 +123,9 @@ public class AiDialogueController {
     }
 
     @Operation(summary = "删除单条消息")
+    @OperationLog(type = OperationType.DIALOGUE_DELETE_MESSAGE, module = "Dialogue",
+            desc = "'删除对话消息ID: ' + #id",
+            resourceId = "#id?.toString()")
     @DeleteMapping("/api/dialogue/{id}")
     public Result<Void> deleteMessage(Authentication authentication, @PathVariable Long id) {
         Long userId = (Long) authentication.getPrincipal();
@@ -126,6 +134,7 @@ public class AiDialogueController {
     }
 
     @Operation(summary = "批量删除消息")
+    @OperationLog(type = OperationType.DIALOGUE_BATCH_DELETE, module = "Dialogue", desc = "批量删除对话消息")
     @DeleteMapping("/api/dialogue/batch")
     public Result<Void> deleteMessages(Authentication authentication, @RequestBody Map<String, List<Long>> body) {
         Long userId = (Long) authentication.getPrincipal();

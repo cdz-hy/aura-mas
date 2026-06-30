@@ -1,5 +1,7 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.PageResult;
 import com.learning.common.Result;
 import com.learning.dto.NoteCreateRequest;
@@ -25,6 +27,9 @@ public class NoteController {
     private final NoteService noteService;
 
     @Operation(summary = "创建笔记")
+    @OperationLog(type = OperationType.NOTE_CREATE, module = "Note",
+            desc = "'创建笔记: ' + #request.getNoteName()",
+            resourceId = "#result?.data?.id?.toString()")
     @PostMapping
     public Result<Note> createNote(Authentication authentication,
                                     @Valid @RequestBody NoteCreateRequest request) {
@@ -51,6 +56,9 @@ public class NoteController {
     }
 
     @Operation(summary = "更新笔记")
+    @OperationLog(type = OperationType.NOTE_UPDATE, module = "Note",
+            desc = "'更新笔记ID: ' + #noteId",
+            resourceId = "#noteId?.toString()")
     @PutMapping("/{noteId}")
     public Result<Note> updateNote(Authentication authentication,
                                     @PathVariable Long noteId,
@@ -60,6 +68,9 @@ public class NoteController {
     }
 
     @Operation(summary = "删除笔记")
+    @OperationLog(type = OperationType.NOTE_DELETE, module = "Note",
+            desc = "'删除笔记ID: ' + #noteId",
+            resourceId = "#noteId?.toString()")
     @DeleteMapping("/{noteId}")
     public Result<Void> deleteNote(Authentication authentication,
                                     @PathVariable Long noteId) {
