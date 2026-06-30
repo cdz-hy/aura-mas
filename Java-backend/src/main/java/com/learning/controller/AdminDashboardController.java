@@ -185,4 +185,72 @@ public class AdminDashboardController {
 
         return Result.success(stats);
     }
+
+    @Operation(summary = "获取近7天日志趋势")
+    @GetMapping("/logs/trend")
+    public Result<List<Map<String, Object>>> getLogTrend() {
+        String sql = """
+                SELECT DATE(created_at) AS date,
+                       SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS success_count,
+                       SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END) AS fail_count,
+                       COUNT(*) AS total
+                FROM system_log
+                WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
+                GROUP BY DATE(created_at)
+                ORDER BY date
+                """;
+        List<Map<String, Object>> trend = jdbcTemplate.queryForList(sql);
+
+        // 补全没有数据的日期
+        List<Map<String, Object>> result = new ArrayList<>();
+        LocalDate today = LocalDate.now();
+        for (int i = 6; i >= 0; i--) {
+            LocalDate date = today.minusDays(i);
+            String dateStr = date.toString();
+            Map<String, Object> dayData = trend.stream()
+                    .filter(d -> dateStr.equals(String.valueOf(d.get("date"))))
+                    .findFirst()
+                    .orElse(null);
+            Map<String, Object> item = new HashMap<>();
+            item.put("date", dateStr);
+            item.put("successCount", dayData != null ? ((Number) dayData.get("success_count")).longValue() : 0);
+            item.put("failCount", dayData != null ? ((Number) dayData.get("fail_count")).longValue() : 0);
+            item.put("total", dayData != null ? ((Number) dayData.get("total")).longValue() : 0);
+            result.add(item);
+        }
+
+        return Result.success(result);
+    }
+
+    @Operation(summary = "获取日志小时分布")
+    @GetMapping("/logs/hourly")
+    public Result<List<Map<String, Object>>> getLogHourly() {
+        String sql = """
+                SELECT HOUR(created_at) AS hour,
+                       SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS success_count,
+                       SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END) AS fail_count
+                FROM system_log
+                WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+                GROUP BY HOUR(created_at)
+                ORDER BY hour
+                """;
+        List<Map<String, Object>> raw = jdbcTemplate.queryForList(sql);
+
+        // 补全 24 小时
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (int h = 0; h < 24; h++) {
+            final int hour = h;
+            Map<String, Object> hourData = raw.stream()
+                    .filter(d -> hour == ((Number) d.get("hour")).intValue())
+                    .findFirst()
+                    .orElse(null);
+            Map<String, Object> item = new HashMap<>();
+            item.put("hour", h);
+            item.put("successCount", hourData != null ? ((Number) hourData.get("success_count")).longValue() : 0);
+            item.put("failCount", hourData != null ? ((Number) hourData.get("fail_count")).longValue() : 0);
+            result.add(item);
+        }
+
+        return Result.success(result);
+    }
 }

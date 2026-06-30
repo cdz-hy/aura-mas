@@ -200,3 +200,24 @@ export function getLogPage(params: AdminLogQuery) {
 export function getLogStats() {
   return request.get<any, AdminLogStats>('/admin/dashboard/logs/stats')
 }
+
+export interface AdminLogTrendItem {
+  date: string
+  successCount: number
+  failCount: number
+  total: number
+}
+
+export function getLogTrend() {
+  return request.get<any, AdminLogTrendItem[]>('/admin/dashboard/logs/trend')
+}
+
+export interface AdminLogHourlyItem {
+  hour: number
+  successCount: number
+  failCount: number
+}
+
+export function getLogHourly() {
+  return request.get<any, AdminLogHourlyItem[]>('/admin/dashboard/logs/hourly')
+}
