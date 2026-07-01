@@ -1,0 +1,74 @@
+package com.aura.mas.util
+
+import com.google.gson.Gson
+import com.google.gson.JsonObject
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import okhttp3.*
+import okhttp3.sse.EventSource
+import okhttp3.sse.EventSourceListener
+import okhttp3.sse.EventSources
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import javax.inject.Singleton
+
+data class SseEvent(
+    val type: String,
+    val data: String
+)
+
+@Singleton
+class SseClient @Inject constructor(
+    private val gson: Gson
+) {
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.MINUTES)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val factory = EventSources.createFactory(client)
+
+    fun connect(url: String): Flow<SseEvent> = callbackFlow {
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+            .build()
+
+        val listener = object : EventSourceListener() {
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                val eventType = type ?: "message"
+                trySend(SseEvent(eventType, data))
+            }
+
+            override fun onClosed(eventSource: EventSource) {
+                close()
+            }
+
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                close(t ?: IOException("SSE connection failed: ${response?.code}"))
+            }
+
+            override fun onOpen(eventSource: EventSource, response: Response) {
+                // Connection opened
+            }
+        }
+
+        val eventSource = factory.newEventSource(request, listener)
+
+        awaitClose {
+            eventSource.cancel()
+        }
+    }
+
+    fun parseEventData(data: String): JsonObject? {
+        return try {
+            gson.fromJson(data, JsonObject::class.java)
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
