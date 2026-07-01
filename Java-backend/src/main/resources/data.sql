@@ -18,10 +18,11 @@ INSERT IGNORE INTO menu (code, name, path, icon, type, sort_order) VALUES
 ('kb-management',  '知识库管理','/admin/kb',     'book',      'menu', 102),
 ('user-management','用户管理',  '/admin/users',  'users',     'menu', 103),
 ('token-analysis', '大模型调用分析','/admin/token','token',    'menu', 104),
+('resource-management', '资源库管理', '/admin/resources', 'resource', 'menu', 105),
 ('knowledge-graph', '知识图谱', '/knowledge-graph', 'knowledge-graph', 'menu', 6);
 
 -- 确保管理菜单没有父级（避免残留的 parent_id 导致路由异常）
-UPDATE menu SET parent_id = NULL WHERE code IN ('admin-dashboard', 'kb-management', 'user-management', 'token-analysis');
+UPDATE menu SET parent_id = NULL WHERE code IN ('admin-dashboard', 'kb-management', 'user-management', 'token-analysis', 'resource-management');
 UPDATE menu SET sort_order = 3, icon = 'tree' WHERE code = 'knowledge-tree';
 UPDATE menu SET sort_order = 4 WHERE code = 'note-list';
 UPDATE menu SET sort_order = 5 WHERE code = 'analytics';
@@ -35,4 +36,4 @@ SELECT 'student', id FROM `menu` WHERE code IN ('dashboard', 'plan-list', 'knowl
 
 INSERT IGNORE INTO role_menu (role, menu_id)
 SELECT 'admin', id FROM `menu`
-WHERE code IN ('admin-dashboard', 'kb-management', 'user-management', 'token-analysis');
+WHERE code IN ('admin-dashboard', 'kb-management', 'user-management', 'token-analysis', 'resource-management');

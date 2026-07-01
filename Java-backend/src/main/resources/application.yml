@@ -49,6 +49,10 @@ jwt:
 internal:
   secret: ${INTERNAL_SECRET:change-this-internal-secret}
 
+python:
+  backend:
+    url: ${PYTHON_BACKEND_URL:http://localhost:8002}
+
 file:
   upload-dir: ${FILE_UPLOAD_DIR:./uploads}
 
