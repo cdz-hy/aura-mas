@@ -18,6 +18,25 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Named
 import javax.inject.Singleton
 
+import com.aura.mas.data.model.ProfileDimensions
+import com.google.gson.JsonDeserializationContext
+import com.google.gson.JsonDeserializer
+import com.google.gson.JsonElement
+import java.lang.reflect.Type
+
+class ProfileDimensionsDeserializer : JsonDeserializer<ProfileDimensions> {
+    private val delegateGson = Gson()
+
+    override fun deserialize(json: JsonElement, typeOfT: Type, context: JsonDeserializationContext): ProfileDimensions {
+        return if (json.isJsonPrimitive && json.asJsonPrimitive.isString) {
+            val str = json.asString
+            delegateGson.fromJson(str, ProfileDimensions::class.java)
+        } else {
+            delegateGson.fromJson(json, ProfileDimensions::class.java)
+        }
+    }
+}
+
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
@@ -26,6 +45,7 @@ object NetworkModule {
     @Singleton
     fun provideGson(): Gson = GsonBuilder()
         .setLenient()
+        .registerTypeAdapter(ProfileDimensions::class.java, ProfileDimensionsDeserializer())
         .create()
 
     @Provides

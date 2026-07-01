@@ -69,6 +69,7 @@ class ProfileViewModel @Inject constructor(
 
 @Composable
 fun ProfileScreen(
+    onLearningProfileClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onAnalyticsClick: () -> Unit,
     onAdminClick: () -> Unit,
@@ -126,7 +127,7 @@ fun ProfileScreen(
             if (profile?.learningBehavior != null) {
                 Spacer(Modifier.height(16.dp))
                 Card(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).clickable(onClick = onLearningProfileClick),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp)
@@ -137,20 +138,13 @@ fun ProfileScreen(
                         val dims = profile.learningBehavior!!
                         com.aura.mas.ui.components.charts.RadarChart(
                             data = listOf(
-                                com.aura.mas.ui.components.charts.RadarData("主动型", dims.activeReflective.toFloat()),
-                                com.aura.mas.ui.components.charts.RadarData("感觉型", dims.sensingIntuitive.toFloat()),
-                                com.aura.mas.ui.components.charts.RadarData("视觉型", dims.visualVerbal.toFloat()),
-                                com.aura.mas.ui.components.charts.RadarData("序列型", dims.sequentialGlobal.toFloat()),
+                                com.aura.mas.ui.components.charts.RadarData("感知 ↔ 直觉", ((dims.sensingIntuitive + 1) / 2).toFloat()),
+                                com.aura.mas.ui.components.charts.RadarData("视觉 ↔ 言语", ((dims.visualVerbal + 1) / 2).toFloat()),
+                                com.aura.mas.ui.components.charts.RadarData("活跃 ↔ 沉思", ((dims.activeReflective + 1) / 2).toFloat()),
+                                com.aura.mas.ui.components.charts.RadarData("循序 ↔ 全局", ((dims.sequentialGlobal + 1) / 2).toFloat())
                             ),
                             modifier = Modifier.fillMaxWidth().height(200.dp)
                         )
-                        Spacer(Modifier.height(8.dp))
-                        // Dimension labels
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            listOf("主动↔反思", "感觉↔直觉", "视觉↔言语", "序列↔整体").forEach {
-                                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
                     }
                 }
             }
@@ -159,6 +153,7 @@ fun ProfileScreen(
         // Menu items
         item {
             Spacer(Modifier.height(16.dp))
+            ProfileMenuItem(Icons.Default.PersonSearch, "详细学习画像", onLearningProfileClick)
             ProfileMenuItem(Icons.Default.BarChart, "学习分析", onAnalyticsClick)
             ProfileMenuItem(Icons.Default.Settings, "设置", onSettingsClick)
             if (user?.role == "admin") {

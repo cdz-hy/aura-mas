@@ -63,7 +63,7 @@ fun LoginScreen(
 
             // Brand
             Text(
-                "AURA MAS",
+                "智学",
                 style = MaterialTheme.typography.displayMedium.copy(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 4.sp

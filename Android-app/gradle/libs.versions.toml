@@ -81,6 +81,8 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 
 # Image loading
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+coil-svg = { group = "io.coil-kt", name = "coil-svg", version.ref = "coil" }
+coil-gif = { group = "io.coil-kt", name = "coil-gif", version.ref = "coil" }
 
 # Charts
 vico-compose-m3 = { group = "com.patrykandpatrick.vico", name = "compose-m3", version.ref = "vico" }
@@ -90,6 +92,9 @@ markwon-core = { group = "io.noties.markwon", name = "core", version.ref = "mark
 markwon-ext-tables = { group = "io.noties.markwon", name = "ext-tables", version.ref = "markwon" }
 markwon-syntax-highlight = { group = "io.noties.markwon", name = "syntax-highlight", version.ref = "markwon" }
 markwon-html = { group = "io.noties.markwon", name = "html", version.ref = "markwon" }
+markwon-ext-latex = { group = "io.noties.markwon", name = "ext-latex", version.ref = "markwon" }
+markwon-inline-parser = { group = "io.noties.markwon", name = "inline-parser", version.ref = "markwon" }
+markwon-image-coil = { group = "io.noties.markwon", name = "image-coil", version.ref = "markwon" }
 
 # WebKit
 webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webKit" }

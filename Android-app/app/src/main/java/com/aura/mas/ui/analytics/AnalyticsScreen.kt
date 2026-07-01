@@ -60,7 +60,10 @@ class AnalyticsViewModel @Inject constructor(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AnalyticsScreen(viewModel: AnalyticsViewModel = hiltViewModel()) {
+fun AnalyticsScreen(
+    onBack: () -> Unit,
+    viewModel: AnalyticsViewModel = hiltViewModel()
+) {
     val uiState by viewModel.uiState.collectAsState()
 
     if (uiState.isLoading) {
@@ -91,17 +94,25 @@ fun AnalyticsScreen(viewModel: AnalyticsViewModel = hiltViewModel()) {
         return
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item {
-            Text("学习分析", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("学习分析", fontWeight = FontWeight.SemiBold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, "返回")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+            )
         }
-
-        // Quiz accuracy
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Quiz accuracy
         data.quizAnalysis?.let { quiz ->
             item {
                 AnalyticsCard("测验表现") {
@@ -198,6 +209,7 @@ fun AnalyticsScreen(viewModel: AnalyticsViewModel = hiltViewModel()) {
                 EmptyState(Icons.Default.BarChart, "暂无分析数据", "完成更多学习活动后将生成分析报告")
             }
         }
+    }
     }
 }
 

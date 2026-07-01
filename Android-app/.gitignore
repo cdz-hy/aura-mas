@@ -1,3 +1,6 @@
+# JVM crash logs
+hs_err_pid*.log
+
 # Built application files
 *.apk
 *.aab

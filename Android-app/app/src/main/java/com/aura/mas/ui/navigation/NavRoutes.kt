@@ -21,6 +21,7 @@ object NavRoutes {
     const val ADMIN_USERS = "admin_users"
     const val ADMIN_LOGS = "admin_logs"
     const val CHAT = "chat"
+    const val LEARNING_PROFILE = "learning_profile"
     const val NOT_FOUND = "not_found"
 
     fun planDetail(planId: Long) = "plan_detail/$planId"

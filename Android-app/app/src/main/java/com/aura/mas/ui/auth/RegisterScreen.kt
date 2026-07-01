@@ -61,7 +61,7 @@ fun RegisterScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(Modifier.height(80.dp))
-            Text("AURA MAS", style = MaterialTheme.typography.displaySmall.copy(
+            Text("智学", style = MaterialTheme.typography.displaySmall.copy(
                 fontWeight = FontWeight.Bold, letterSpacing = 3.sp
             ), color = MaterialTheme.colorScheme.onPrimary)
             Spacer(Modifier.height(48.dp))

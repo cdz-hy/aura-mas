@@ -43,6 +43,16 @@ android {
         }
     }
 
+    // APK output naming: 智学-v1.0.0-release.apk / 智学-v1.0.0-debug.apk
+    applicationVariants.all {
+        val variant = this
+        outputs.all {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val buildType = variant.buildType.name
+            output.outputFileName = "智学-v${variant.versionName}-${buildType}.apk"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -116,6 +126,8 @@ dependencies {
 
     // Image
     implementation(libs.coil.compose)
+    implementation(libs.coil.svg)
+    implementation(libs.coil.gif)
 
     // Charts
     implementation(libs.vico.compose.m3)
@@ -125,6 +137,9 @@ dependencies {
     implementation(libs.markwon.ext.tables)
     implementation(libs.markwon.syntax.highlight)
     implementation(libs.markwon.html)
+    implementation(libs.markwon.image.coil)
+    implementation(libs.markwon.inline.parser)
+    implementation(libs.markwon.ext.latex)
 
     // WebKit
     implementation(libs.webkit)

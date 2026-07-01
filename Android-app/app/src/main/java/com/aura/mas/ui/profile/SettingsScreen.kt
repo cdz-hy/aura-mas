@@ -55,7 +55,7 @@ fun SettingsScreen(
 
             Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column {
-                    SettingsItem(Icons.Default.Info, "关于", "AURA MAS v1.0.0") { showAboutDialog = true }
+                    SettingsItem(Icons.Default.Info, "关于", "智学 v1.0.0") { showAboutDialog = true }
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp))
                     SettingsItem(Icons.Default.PrivacyTip, "隐私政策", "") { }
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp))
@@ -99,10 +99,10 @@ fun SettingsScreen(
     if (showAboutDialog) {
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
-            title = { Text("关于 AURA MAS") },
+            title = { Text("关于智学") },
             text = {
                 Column {
-                    Text("AURA MAS - 智能自适应学习平台", fontWeight = FontWeight.SemiBold)
+                    Text("智学 - 智能自适应学习平台 (AURA MAS)", fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
                     Text("版本: 1.0.0", style = MaterialTheme.typography.bodySmall)
                     Text("基于 AI 的个性化学习系统", style = MaterialTheme.typography.bodySmall)

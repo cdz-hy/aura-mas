@@ -112,20 +112,28 @@ data class WeekComparison(
 data class StudentProfile(
     @SerializedName("userId") val userId: Long = 0,
     val gender: String = "",
-    val age: Int = 0,
+    val age: String = "",
     val domain: String = "",
     @SerializedName("learningBehavior") val learningBehavior: ProfileDimensions? = null
 )
 
+data class QuizPreference(
+    val types: List<String> = emptyList(),
+    val count: Int? = null,
+    val difficulty: String = ""
+)
+
 data class ProfileDimensions(
-    @SerializedName("active_reflective") val activeReflective: Double = 0.5,
-    @SerializedName("sensing_intuitive") val sensingIntuitive: Double = 0.5,
-    @SerializedName("visual_verbal") val visualVerbal: Double = 0.5,
-    @SerializedName("sequential_global") val sequentialGlobal: Double = 0.5,
+    @SerializedName("active_vs_reflective") val activeReflective: Double = 0.0,
+    @SerializedName("sensing_vs_intuitive") val sensingIntuitive: Double = 0.0,
+    @SerializedName("visual_vs_verbal") val visualVerbal: Double = 0.0,
+    @SerializedName("sequential_vs_global") val sequentialGlobal: Double = 0.0,
     @SerializedName("knowledge_base") val knowledgeBase: List<String> = emptyList(),
     @SerializedName("interest_tags") val interestTags: List<String> = emptyList(),
     @SerializedName("goal_orientation") val goalOrientation: String = "",
-    @SerializedName("weak_areas") val weakAreas: List<String> = emptyList()
+    @SerializedName("weak_areas") val weakAreas: List<String> = emptyList(),
+    @SerializedName("preferred_resource_types") val preferredResourceTypes: List<String> = emptyList(),
+    @SerializedName("preferred_quiz_preference") val preferredQuizPreference: QuizPreference? = null
 )
 
 data class PaginatedResponse<T>(

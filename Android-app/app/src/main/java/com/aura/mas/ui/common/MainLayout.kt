@@ -108,11 +108,9 @@ fun MainLayout(navController: NavController) {
                     onNoteClick = { navController.navigate(NavRoutes.noteDetail(it)) }
                 )
             }
-            composable(NavRoutes.ANALYTICS) {
-                AnalyticsScreen()
-            }
             composable(NavRoutes.PROFILE) {
                 ProfileScreen(
+                    onLearningProfileClick = { navController.navigate(NavRoutes.LEARNING_PROFILE) },
                     onSettingsClick = { navController.navigate(NavRoutes.SETTINGS) },
                     onAnalyticsClick = { navController.navigate(NavRoutes.ANALYTICS) },
                     onAdminClick = { navController.navigate(NavRoutes.ADMIN_DASHBOARD) }

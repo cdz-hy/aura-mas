@@ -90,9 +90,11 @@ fun NoteListScreen(
         topBar = {
             TopAppBar(
                 title = { Text("笔记", fontWeight = FontWeight.SemiBold) },
+                windowInsets = WindowInsets(0.dp),
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
         },
+        contentWindowInsets = WindowInsets(0.dp),
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showCreateDialog = true },

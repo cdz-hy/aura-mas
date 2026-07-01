@@ -104,9 +104,11 @@ fun PlanListScreen(
         topBar = {
             TopAppBar(
                 title = { Text("学习计划", fontWeight = FontWeight.SemiBold) },
+                windowInsets = WindowInsets(0.dp),
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
         },
+        contentWindowInsets = WindowInsets(0.dp),
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onCreatePlan,
@@ -171,7 +173,7 @@ fun PlanListScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             if (!iconSvg.isNullOrBlank()) {
-                                SvgIcon(svgString = iconSvg, modifier = Modifier.size(36.dp))
+                                SvgIcon(svgString = iconSvg, modifier = Modifier.size(40.dp))
                             } else {
                                 Icon(
                                     when (plan.getEffectiveStatus()) {

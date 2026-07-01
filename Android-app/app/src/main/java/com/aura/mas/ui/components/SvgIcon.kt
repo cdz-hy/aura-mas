@@ -6,7 +6,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
- * Renders an SVG string from planConfig.iconSvg using WebView.
+ * Renders an SVG string from planConfig.iconSvg.
+ * Uses a large internal viewport (300px) and lets the WebView scale down.
  */
 @Composable
 fun SvgIcon(
@@ -24,13 +25,15 @@ fun SvgIcon(
         },
         update = { webView ->
             val sanitized = svgString.trim()
+            // Render SVG at 300x300 internal resolution
+            // The WebView will be constrained by the Compose modifier size
             val html = """
                 <html>
                 <head>
                 <style>
-                * { margin:0; padding:0; }
-                body { background:transparent; display:flex; align-items:center; justify-content:center; width:100%; height:100%; }
-                svg { width:100%; height:100%; }
+                *{margin:0;padding:0}
+                html,body{width:300px;height:300px;background:transparent;overflow:hidden}
+                svg{width:300px;height:300px;display:block}
                 </style>
                 </head>
                 <body>$sanitized</body>

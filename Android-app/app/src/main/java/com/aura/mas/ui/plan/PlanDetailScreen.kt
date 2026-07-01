@@ -353,7 +353,7 @@ fun PlanDetailScreen(
                 Column(
                     modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
                 ) {
-                    ResourceContentView(selected)
+                    com.aura.mas.ui.components.resource.ResourceViewer(resource = selected)
                 }
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -472,11 +472,7 @@ private fun ResourceItem(
         modifier = Modifier.fillMaxWidth().clickable(enabled = isReady) { onClick() },
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = when {
-                isSelected -> MaterialTheme.colorScheme.primaryContainer
-                isGenerating -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
-                else -> MaterialTheme.colorScheme.surface
-            }
+            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 2.dp else 0.5.dp)
     ) {
@@ -489,21 +485,16 @@ private fun ResourceItem(
                 modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))
                     .background(
                         if (isCompleted) Sage100
-                        else if (isGenerating) MaterialTheme.colorScheme.tertiaryContainer
                         else MaterialTheme.colorScheme.surfaceVariant
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                if (isGenerating) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.tertiary)
-                } else {
-                    Icon(
-                        if (isCompleted) Icons.Default.CheckCircle else getResourceIcon(resource.moduleType),
-                        null,
-                        tint = if (isCompleted) Sage500 else MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                Icon(
+                    if (isCompleted) Icons.Default.CheckCircle else getResourceIcon(resource.moduleType),
+                    null,
+                    tint = if (isCompleted) Sage500 else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
             }
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -544,245 +535,7 @@ private fun ResourceItem(
     }
 }
 
-@Composable
-private fun ResourceContentView(resource: LearningResource) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            // Type badge
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.primaryContainer
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        getResourceIcon(resource.moduleType),
-                        null,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        getResourceTypeName(resource.moduleType),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // Title
-            Text(
-                resource.getResourceTitle().ifEmpty { resource.getModuleName() },
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold
-            )
-
-            Spacer(Modifier.height(16.dp))
-
-            // Content based on type
-            when (resource.moduleType) {
-                "quiz" -> {
-                    QuizContentView(resource)
-                }
-                "mindmap" -> {
-                    MindmapContentView(resource)
-                }
-                "video" -> {
-                    VideoContentView(resource)
-                }
-                "podcast" -> {
-                    PodcastContentView(resource)
-                }
-                "pptx" -> {
-                    PptxContentView(resource)
-                }
-                "animation" -> {
-                    AnimationContentView(resource)
-                }
-                else -> {
-                    // Document, reading, summary, code, etc. - render as markdown
-                    DocumentContentView(resource)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DocumentContentView(resource: LearningResource) {
-    val content = resource.getContent()
-    if (content.isBlank()) {
-        if (resource.status == LearningResource.STATUS_GENERATING) {
-            GeneratingPlaceholder()
-        } else {
-            Text("暂无内容", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        return
-    }
-
-    // Strip citation/references section
-    val cleanContent = stripCitationSection(content)
-
-    MarkdownRenderer(
-        content = cleanContent,
-        modifier = Modifier.fillMaxWidth()
-    )
-}
-
-@Composable
-private fun QuizContentView(resource: LearningResource) {
-    val questions = resource.getQuizQuestions()
-    if (questions.isEmpty()) {
-        if (resource.status == LearningResource.STATUS_GENERATING) {
-            GeneratingPlaceholder()
-        } else {
-            Text("暂无测验题目", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        return
-    }
-
-    Column {
-        Text("共 ${questions.size} 题", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(8.dp))
-        questions.forEachIndexed { index, question ->
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            ) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("${index + 1}. ${question.questionText}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                    question.options?.forEach { option ->
-                        Text("  • $option", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MindmapContentView(resource: LearningResource) {
-    val mindmapData = resource.getMindmapData()
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(32.dp))
-            Spacer(Modifier.height(8.dp))
-            Text("思维导图", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
-            if (mindmapData != null) {
-                Text(mindmapData.toString().take(200), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer)
-            } else {
-                Text("思维导图数据加载中", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun VideoContentView(resource: LearningResource) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(Icons.Default.PlayCircle, null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(12.dp))
-            Text("视频资源", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(4.dp))
-            Text("点击播放视频内容", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun PodcastContentView(resource: LearningResource) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(Icons.Default.Headphones, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(12.dp))
-            Text("播客音频", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { }) { Icon(Icons.Default.SkipPrevious, null) }
-                FilledIconButton(onClick = { }, modifier = Modifier.size(56.dp)) {
-                    Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(32.dp))
-                }
-                IconButton(onClick = { }) { Icon(Icons.Default.SkipNext, null) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PptxContentView(resource: LearningResource) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(Icons.Default.Slideshow, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(12.dp))
-            Text("演示文稿", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(4.dp))
-            Text("点击查看 PPT 内容", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun AnimationContentView(resource: LearningResource) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(Icons.Default.Animation, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.height(12.dp))
-            Text("动画资源", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        }
-    }
-}
-
-@Composable
-private fun GeneratingPlaceholder() {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
-        Spacer(Modifier.height(12.dp))
-        Text("内容生成中...", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(4.dp))
-        Text("AI 正在为你生成学习资源，请稍候", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
-    }
-}
+// Old inline resource views removed - now using ResourceViewer component
 
 @Composable
 private fun ChatPanel(

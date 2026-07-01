@@ -171,8 +171,8 @@ data class LearningResource(
         return videos?.mapNotNull { it?.toString() } ?: emptyList()
     }
 
-    private fun getParsedModuleData(): Map<String, Any> {
-        return when (moduleData) {
+    fun getParsedModuleData(): Map<String, Any> {
+        val raw = when (moduleData) {
             is Map<*, *> -> {
                 @Suppress("UNCHECKED_CAST")
                 moduleData as Map<String, Any>
@@ -194,6 +194,56 @@ data class LearningResource(
             }
             else -> emptyMap()
         }
+        // Vue's normalizeResourceModuleData: unwrap generated_content / data nested objects
+        return normalizeModuleData(raw)
+    }
+
+    /**
+     * Matches Vue's normalizeResourceModuleData():
+     * - Unwraps generated_content or data nested objects
+     * - Type-specific field mapping
+     */
+    private fun normalizeModuleData(raw: Map<String, Any>): Map<String, Any> {
+        val result = raw.toMutableMap()
+
+        // Unwrap nested generated_content or data
+        val nested = (result["generated_content"] as? Map<*, *>)
+            ?: (result["data"] as? Map<*, *>)
+        if (nested != null) {
+            // Merge nested fields under, top-level wins
+            nested.forEach { (key, value) ->
+                if (key is String && value != null && !result.containsKey(key)) {
+                    result[key] = value
+                }
+            }
+        }
+
+        // Type-specific normalization
+        when (moduleType) {
+            "animation" -> {
+                val html = result["html"]?.toString() ?: result["content"]?.toString() ?: ""
+                result["html"] = html
+                if (!result.containsKey("content") || result["content"].toString().isBlank()) {
+                    result["content"] = html
+                }
+            }
+            "mindmap" -> {
+                val nodeData = result["nodeData"] ?: result["node_data"]
+                if (!result.containsKey("content") || result["content"].toString().isBlank()) {
+                    if (nodeData != null) {
+                        result["content"] = if (nodeData is String) nodeData
+                        else com.google.gson.Gson().toJson(nodeData)
+                    }
+                }
+            }
+            else -> {
+                if (!result.containsKey("content") || result["content"].toString().isBlank()) {
+                    result["content"] = result["html"]?.toString() ?: ""
+                }
+            }
+        }
+
+        return result
     }
 
     private fun jsonToMap(json: com.google.gson.JsonObject?): Map<String, Any> {

@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Aura"
+rootProject.name = "ZhiXue"
 include(":app")

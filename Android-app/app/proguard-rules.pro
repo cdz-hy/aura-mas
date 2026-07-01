@@ -42,6 +42,7 @@
 
 # Markwon
 -keep class io.noties.markwon.** { *; }
+-dontwarn org.commonmark.ext.gfm.strikethrough.**
 
 # Coil
 -keep class coil.** { *; }

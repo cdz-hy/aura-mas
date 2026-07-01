@@ -7,7 +7,7 @@
     </style>
 
     <style name="Theme.Aura.Starting" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">#2E4376</item>
+        <item name="windowSplashScreenBackground">#0F172A</item>
         <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
         <item name="postSplashScreenTheme">@style/Theme.Aura</item>
     </style>

@@ -24,6 +24,8 @@ import com.aura.mas.ui.flashcard.FlashcardPlayerScreen
 import com.aura.mas.ui.tree.KnowledgeTreeScreen
 import com.aura.mas.ui.graph.KnowledgeGraphScreen
 import com.aura.mas.ui.profile.SettingsScreen
+import com.aura.mas.ui.profile.LearningProfileScreen
+import com.aura.mas.ui.analytics.AnalyticsScreen
 import com.aura.mas.ui.admin.EnhancedAdminUsersScreen
 import com.aura.mas.ui.admin.EnhancedAdminLogsScreen
 import com.aura.mas.ui.chat.StandaloneChatScreen
@@ -76,6 +78,19 @@ fun AuraNavHost() {
                         popUpTo(NavRoutes.REGISTER) { inclusive = true }
                     }
                 }
+            )
+        }
+        composable(NavRoutes.PROFILE) {
+            // Profile is handled in MainLayout inner nav
+        }
+        composable(NavRoutes.LEARNING_PROFILE) {
+            LearningProfileScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+        composable(NavRoutes.ANALYTICS) {
+            AnalyticsScreen(
+                onBack = { navController.popBackStack() }
             )
         }
         composable(NavRoutes.MAIN) {

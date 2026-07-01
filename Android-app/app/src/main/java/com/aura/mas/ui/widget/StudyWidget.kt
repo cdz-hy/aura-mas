@@ -36,7 +36,7 @@ private fun StudyWidgetContent() {
             .clickable(actionStartActivity<MainActivity>())
     ) {
         Text(
-            "AURA MAS",
+            "智学",
             style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold, color = primaryColor)
         )
         Spacer(GlanceModifier.height(8.dp))
