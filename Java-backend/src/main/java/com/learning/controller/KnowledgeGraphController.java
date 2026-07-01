@@ -3,6 +3,8 @@ package com.learning.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.Result;
 import com.learning.dto.KnowledgeGraphNodePatchReq;
 import com.learning.dto.KnowledgeGraphUpdateReq;
@@ -50,6 +52,9 @@ public class KnowledgeGraphController {
     /**
      * 新建领域图谱初始化数据
      */
+    @OperationLog(type = OperationType.KG_CREATE_DOMAIN, module = "KG",
+            desc = "'创建知识域: ' + #domainReq.getDomainName()",
+            resourceId = "#result?.data?.id?.toString()")
     @PostMapping("/domain")
     public Result<UserKnowledgeDomain> createDomain(@RequestBody UserKnowledgeDomain domainReq) {
         if (domainReq.getUserId() == null || domainReq.getDomainName() == null) {
@@ -62,6 +67,9 @@ public class KnowledgeGraphController {
     /**
      * 保存/更新指定的领域图谱
      */
+    @OperationLog(type = OperationType.KG_UPDATE_DOMAIN, module = "KG",
+            desc = "'更新知识域ID: ' + #domainId",
+            resourceId = "#domainId?.toString()")
     @PutMapping("/domain/{domainId}")
     public Result<Boolean> updateDomainGraph(@PathVariable Long domainId, @RequestBody KnowledgeGraphUpdateReq req) {
         UserKnowledgeDomain domain = domainService.getById(domainId);
@@ -82,6 +90,9 @@ public class KnowledgeGraphController {
     /**
      * 供前端单独更新某个节点的属性
      */
+    @OperationLog(type = OperationType.KG_PATCH_NODE, module = "KG",
+            desc = "'修改知识节点: domain=' + #domainId + ' node=' + #nodeId",
+            resourceId = "#domainId?.toString()")
     @PatchMapping("/domain/{domainId}/node/{nodeId}")
     public Result<Boolean> patchNode(@PathVariable Long domainId, @PathVariable String nodeId, @RequestBody KnowledgeGraphNodePatchReq req) {
         UserKnowledgeDomain domain = domainService.getById(domainId);
@@ -132,6 +143,9 @@ public class KnowledgeGraphController {
     /**
      * 删除整个领域知识图谱
      */
+    @OperationLog(type = OperationType.KG_DELETE_DOMAIN, module = "KG",
+            desc = "'删除知识域ID: ' + #domainId",
+            resourceId = "#domainId?.toString()")
     @DeleteMapping("/domain/{domainId}")
     public Result<Boolean> deleteDomain(@PathVariable Long domainId) {
         boolean success = domainService.removeById(domainId);
@@ -141,6 +155,9 @@ public class KnowledgeGraphController {
     /**
      * 删除指定节点及其相连的关系边
      */
+    @OperationLog(type = OperationType.KG_DELETE_NODE, module = "KG",
+            desc = "'删除知识节点: domain=' + #domainId + ' node=' + #nodeId",
+            resourceId = "#domainId?.toString()")
     @DeleteMapping("/domain/{domainId}/node/{nodeId}")
     public Result<Boolean> deleteNode(@PathVariable Long domainId, @PathVariable String nodeId) {
         UserKnowledgeDomain domain = domainService.getById(domainId);

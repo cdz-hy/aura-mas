@@ -1,5 +1,7 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.PageResult;
 import com.learning.common.Result;
 import com.learning.entity.KnowledgeBase;
@@ -21,6 +23,9 @@ public class KnowledgeBaseController {
     private final KnowledgeBaseService kbService;
 
     @Operation(summary = "创建知识库记录（仅元数据，文件由 Python 端处理）")
+    @OperationLog(type = OperationType.KB_CREATE, module = "KB",
+            desc = "'创建知识库文档: ' + #body.get('docName')",
+            resourceId = "#result?.data?.id?.toString()")
     @PostMapping("/create")
     public Result<KnowledgeBase> create(Authentication authentication,
                                         @RequestBody Map<String, Object> body) {
@@ -53,6 +58,9 @@ public class KnowledgeBaseController {
     }
 
     @Operation(summary = "删除知识库文档")
+    @OperationLog(type = OperationType.KB_DELETE, module = "KB",
+            desc = "'删除知识库文档ID: ' + #id",
+            resourceId = "#id?.toString()")
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
         kbService.deleteById(id);

@@ -2,7 +2,9 @@ package com.learning.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.learning.annotation.OperationLog;
 import com.learning.common.ErrorCode;
+import com.learning.common.OperationType;
 import com.learning.common.PageResult;
 import com.learning.common.Result;
 import com.learning.entity.User;
@@ -70,6 +72,9 @@ public class AdminUserController {
     }
 
     @Operation(summary = "新增用户")
+    @OperationLog(type = OperationType.ADMIN_CREATE_USER, module = "UserAdmin",
+            desc = "'管理员创建用户: ' + #body.get('loginName')",
+            resourceId = "#result?.data?.id?.toString()")
     @PostMapping
     public Result<User> create(@RequestBody Map<String, Object> body) {
         String loginName = (String) body.get("loginName");
@@ -102,6 +107,9 @@ public class AdminUserController {
     }
 
     @Operation(summary = "更新用户信息")
+    @OperationLog(type = OperationType.ADMIN_UPDATE_USER, module = "UserAdmin",
+            desc = "'管理员更新用户ID: ' + #id",
+            resourceId = "#id?.toString()")
     @PutMapping("/{id}")
     public Result<User> update(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         User user = userMapper.selectById(id);
@@ -131,6 +139,9 @@ public class AdminUserController {
     }
 
     @Operation(summary = "删除用户")
+    @OperationLog(type = OperationType.ADMIN_DELETE_USER, module = "UserAdmin",
+            desc = "'管理员删除用户ID: ' + #id",
+            resourceId = "#id?.toString()")
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
         userService.deleteAccount(id);
@@ -138,6 +149,9 @@ public class AdminUserController {
     }
 
     @Operation(summary = "切换用户状态（启用/禁用）")
+    @OperationLog(type = OperationType.ADMIN_TOGGLE_STATUS, module = "UserAdmin",
+            desc = "'管理员切换用户状态ID: ' + #id",
+            resourceId = "#id?.toString()")
     @PutMapping("/{id}/status")
     public Result<Void> toggleStatus(@PathVariable Long id) {
         User user = userMapper.selectById(id);
@@ -150,6 +164,9 @@ public class AdminUserController {
     }
 
     @Operation(summary = "修改用户角色")
+    @OperationLog(type = OperationType.ADMIN_CHANGE_ROLE, module = "UserAdmin",
+            desc = "'管理员修改用户角色ID: ' + #id + ' -> ' + #body.get('role')",
+            resourceId = "#id?.toString()")
     @PutMapping("/{id}/role")
     public Result<Void> changeRole(@PathVariable Long id, @RequestBody Map<String, String> body) {
         User user = userMapper.selectById(id);
@@ -166,6 +183,8 @@ public class AdminUserController {
     }
 
     @Operation(summary = "批量切换状态")
+    @OperationLog(type = OperationType.ADMIN_BATCH_TOGGLE_STATUS, module = "UserAdmin",
+            desc = "'管理员批量切换状态: ' + #body.get('ids')")
     @PutMapping("/batch/status")
     public Result<Void> batchToggleStatus(@RequestBody Map<String, Object> body) {
         @SuppressWarnings("unchecked")
@@ -187,6 +206,8 @@ public class AdminUserController {
     }
 
     @Operation(summary = "批量删除")
+    @OperationLog(type = OperationType.ADMIN_BATCH_DELETE_USER, module = "UserAdmin",
+            desc = "'管理员批量删除用户: ' + #body.get('ids')")
     @DeleteMapping("/batch")
     public Result<Void> batchDelete(@RequestBody Map<String, Object> body) {
         @SuppressWarnings("unchecked")
