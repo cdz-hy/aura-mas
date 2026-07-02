@@ -6,10 +6,10 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface PlanDao {
-    @Query("SELECT * FROM cached_plans ORDER BY cachedAt DESC")
+    @Query("SELECT * FROM cached_plans ORDER BY id DESC")
     fun getAllPlans(): Flow<List<CachedPlan>>
 
-    @Query("SELECT * FROM cached_plans ORDER BY cachedAt DESC")
+    @Query("SELECT * FROM cached_plans ORDER BY id DESC")
     suspend fun getAllPlansSync(): List<CachedPlan>
 
     @Query("SELECT * FROM cached_plans WHERE id = :id")
@@ -54,10 +54,10 @@ interface ResourceDao {
 
 @Dao
 interface NoteDao {
-    @Query("SELECT * FROM cached_notes ORDER BY cachedAt DESC")
+    @Query("SELECT * FROM cached_notes ORDER BY id DESC")
     fun getAllNotes(): Flow<List<CachedNote>>
 
-    @Query("SELECT * FROM cached_notes ORDER BY cachedAt DESC")
+    @Query("SELECT * FROM cached_notes ORDER BY id DESC")
     suspend fun getAllNotesSync(): List<CachedNote>
 
     @Query("SELECT * FROM cached_notes WHERE id = :id")

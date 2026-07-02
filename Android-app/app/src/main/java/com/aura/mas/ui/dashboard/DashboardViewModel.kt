@@ -8,6 +8,7 @@ import com.aura.mas.data.repository.StatsRepository
 import com.aura.mas.data.repository.PlanRepository
 import com.aura.mas.data.api.PythonApiService
 import com.aura.mas.data.api.ApiService
+import com.aura.mas.data.offline.OfflineCacheManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,6 +18,7 @@ import javax.inject.Inject
 
 data class DashboardUiState(
     val isLoading: Boolean = true,
+    val isRefreshing: Boolean = false,
     val greeting: String = "",
     val aiGreeting: String = "",
     val totalPlans: Int = 0,
@@ -36,28 +38,53 @@ class DashboardViewModel @Inject constructor(
     private val planRepo: PlanRepository,
     private val authStore: AuthStore,
     private val api: ApiService,
-    private val pythonApi: PythonApiService
+    private val pythonApi: PythonApiService,
+    private val offlineCache: OfflineCacheManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DashboardUiState())
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
     val currentUser = authStore.currentUser
 
+    private var retryJob: kotlinx.coroutines.Job? = null
+
     init { loadDashboard() }
 
     fun loadDashboard() {
+        retryJob?.cancel()
+        loadDashboardInternal()
+    }
+
+    private fun loadDashboardInternal() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            // Step 1: Show cached data immediately
+            val cachedPlans = offlineCache.getCachedPlans().sortedByDescending { it.id }
+            if (cachedPlans.isNotEmpty()) {
+                _uiState.value = DashboardUiState(
+                    isLoading = false,
+                    isRefreshing = true,
+                    greeting = buildGreeting(),
+                    recentPlans = cachedPlans.take(10),
+                    totalPlans = cachedPlans.size,
+                    completedPlans = cachedPlans.count { it.status == LearningPlan.STATUS_COMPLETED }
+                )
+            } else {
+                _uiState.value = DashboardUiState(isLoading = true)
+            }
+
+            // Step 2: Fetch fresh data in background
             try {
-                // 1. Fetch dashboard stats from Java backend
-                val statsResult = statsRepo.getDashboardStats()
+                val statsResult = kotlinx.coroutines.withTimeout(15_000L) {
+                    statsRepo.getDashboardStats()
+                }
                 val stats = statsResult.data
 
-                // 2. Fetch plans list for progress calculation
                 val plansResult = api.getPlans(size = 50)
                 val plans = plansResult.data?.records ?: emptyList()
 
-                // 3. Calculate progress for each plan
+                // Cache plans
+                offlineCache.cachePlans(plans)
+
                 val plansWithProgress = plans.map { plan ->
                     try {
                         val resResult = api.getResourcesByPlan(plan.id)
@@ -72,11 +99,21 @@ class DashboardViewModel @Inject constructor(
                     } catch (_: Exception) { plan }
                 }
 
-                // 4. Fetch heatmap
+                // Cache resources for each plan
+                plans.forEach { plan ->
+                    try {
+                        val res = api.getResourcesByPlan(plan.id)
+                        if (res.isSuccess && res.data != null) {
+                            offlineCache.cacheResources(res.data)
+                        }
+                    } catch (_: Exception) {}
+                }
+
                 val heatmapResult = statsRepo.getStudyHeatmap()
 
                 _uiState.value = DashboardUiState(
                     isLoading = false,
+                    isRefreshing = false,
                     greeting = buildGreeting(),
                     totalPlans = stats?.totalPlans?.toInt() ?: plans.size,
                     completedPlans = stats?.completedPlans?.toInt() ?: plans.count { it.status == LearningPlan.STATUS_COMPLETED },
@@ -88,15 +125,17 @@ class DashboardViewModel @Inject constructor(
                     recentActivity = stats?.recentActivity ?: emptyList()
                 )
 
-                // 5. Fetch AI greeting (async, non-blocking)
                 loadAiGreeting()
-
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    greeting = buildGreeting(),
-                    error = e.message
-                )
+                // Silent fail - cached data is already shown
+                _uiState.value = _uiState.value.copy(isRefreshing = false)
+                // Schedule retry if we have cached data (user is seeing stale data)
+                if (cachedPlans.isNotEmpty()) {
+                    retryJob = viewModelScope.launch {
+                        kotlinx.coroutines.delay(30_000L) // Retry after 30 seconds
+                        loadDashboardInternal()
+                    }
+                }
             }
         }
     }

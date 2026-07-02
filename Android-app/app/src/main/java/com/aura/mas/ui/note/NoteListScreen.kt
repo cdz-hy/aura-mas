@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
@@ -35,6 +36,7 @@ import javax.inject.Inject
 
 data class NoteListUiState(
     val isLoading: Boolean = true,
+    val isRefreshing: Boolean = false,
     val notes: List<Note> = emptyList(),
     val error: String? = null
 )
@@ -42,7 +44,9 @@ data class NoteListUiState(
 @HiltViewModel
 class NoteListViewModel @Inject constructor(
     private val noteRepo: NoteRepository,
-    private val api: com.aura.mas.data.api.ApiService
+    private val api: com.aura.mas.data.api.ApiService,
+    private val offlineCache: com.aura.mas.data.offline.OfflineCacheManager,
+    private val networkUtil: com.aura.mas.util.NetworkUtil
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(NoteListUiState())
     val uiState: StateFlow<NoteListUiState> = _uiState.asStateFlow()
@@ -51,27 +55,43 @@ class NoteListViewModel @Inject constructor(
 
     fun loadNotes() {
         viewModelScope.launch {
-            _uiState.value = NoteListUiState(isLoading = true)
+            // Step 1: Show cached data immediately (sorted by id desc = newest first)
+            val cached = offlineCache.getCachedNotes().sortedByDescending { it.id }
+            if (cached.isNotEmpty()) {
+                _uiState.value = NoteListUiState(notes = cached, isLoading = false, isRefreshing = true)
+            } else {
+                _uiState.value = NoteListUiState(isLoading = true)
+            }
+
+            // Step 2: Fetch fresh data in background
             try {
-                val result = api.getNotes(size = 50)
+                val result = kotlinx.coroutines.withTimeout(15_000L) { api.getNotes(size = 50) }
                 if (result.isSuccess && result.data != null) {
-                    _uiState.value = NoteListUiState(
-                        isLoading = false,
-                        notes = result.data.records
-                    )
+                    val notes = result.data.records.sortedByDescending { it.id }
+                    offlineCache.cacheNotes(notes)
+                    // Only update if data changed
+                    val currentIds = _uiState.value.notes.map { it.id }.toSet()
+                    val newIds = notes.map { it.id }.toSet()
+                    if (currentIds != newIds || _uiState.value.notes.size != notes.size) {
+                        _uiState.value = _uiState.value.copy(notes = notes, isRefreshing = false, isLoading = false)
+                    } else {
+                        _uiState.value = _uiState.value.copy(isRefreshing = false, isLoading = false)
+                    }
                 } else {
-                    _uiState.value = NoteListUiState(
-                        isLoading = false,
-                        error = result.message.ifEmpty { "获取数据失败" }
-                    )
+                    _uiState.value = _uiState.value.copy(isRefreshing = false)
                 }
             } catch (e: Exception) {
-                _uiState.value = NoteListUiState(isLoading = false, error = e.message ?: "网络错误")
+                // Silent fail - cached data is already shown
+                _uiState.value = _uiState.value.copy(isRefreshing = false, isLoading = false)
             }
         }
     }
 
     fun createNote(title: String) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法创建")
+            return
+        }
         viewModelScope.launch {
             try {
                 val result = noteRepo.createNote(NoteCreateRequest(title))
@@ -87,6 +107,10 @@ class NoteListViewModel @Inject constructor(
     }
 
     fun deleteNote(noteId: Long) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法删除")
+            return
+        }
         viewModelScope.launch {
             val result = noteRepo.deleteNote(noteId)
             if (result.isSuccess) {
@@ -147,28 +171,34 @@ fun NoteListScreen(
             )
         }
     ) { padding ->
-        when {
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            if (uiState.isRefreshing) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(2.dp),
+                    trackColor = Color.Transparent
+                )
+            }
+            Box(Modifier.fillMaxSize()) {
+                when {
             uiState.isLoading -> {
-                LoadingIndicator(Modifier.padding(padding))
+                LoadingIndicator()
             }
             uiState.error != null -> {
                 ErrorState(
                     message = uiState.error ?: "加载失败",
-                    onRetry = { viewModel.loadNotes() },
-                    modifier = Modifier.padding(padding)
+                    onRetry = { viewModel.loadNotes() }
                 )
             }
             uiState.notes.isEmpty() -> {
                 EmptyState(
                     Icons.Outlined.Description,
                     "暂无笔记",
-                    "点击右下角按钮创建你的第一篇笔记",
-                    Modifier.padding(padding)
+                    "点击右下角按钮创建你的第一篇笔记"
                 )
             }
             else -> {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(padding),
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -184,8 +214,8 @@ fun NoteListScreen(
             }
         }
     }
-
-    // Create note dialog removed to match Vue flow
+}
+}
 }
 
 @Composable

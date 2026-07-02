@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -39,6 +40,7 @@ import javax.inject.Inject
 
 data class PlanListUiState(
     val isLoading: Boolean = true,
+    val isRefreshing: Boolean = false,
     val isCreating: Boolean = false,
     val plans: List<LearningPlan> = emptyList(),
     val error: String? = null
@@ -47,7 +49,9 @@ data class PlanListUiState(
 @HiltViewModel
 class PlanListViewModel @Inject constructor(
     private val planRepo: PlanRepository,
-    private val api: ApiService
+    private val api: ApiService,
+    private val offlineCache: com.aura.mas.data.offline.OfflineCacheManager,
+    private val networkUtil: com.aura.mas.util.NetworkUtil
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(PlanListUiState())
     val uiState: StateFlow<PlanListUiState> = _uiState.asStateFlow()
@@ -56,39 +60,61 @@ class PlanListViewModel @Inject constructor(
 
     fun loadPlans() {
         viewModelScope.launch {
-            _uiState.value = PlanListUiState(isLoading = true)
+            // Step 1: Show cached data immediately
+            val cached = offlineCache.getCachedPlans().sortedByDescending { it.id }
+            if (cached.isNotEmpty()) {
+                _uiState.value = PlanListUiState(plans = cached, isLoading = false, isRefreshing = true)
+            } else {
+                _uiState.value = PlanListUiState(isLoading = true)
+            }
+
+            // Step 2: Fetch plan list only (1 API call, no per-plan calls)
             try {
-                api.getPlans(size = 50).let { result ->
-                    if (result.isSuccess && result.data != null) {
-                        val plans = result.data.records
-                        // Calculate progress for each plan
-                        val plansWithProgress = plans.map { plan ->
-                            try {
-                                val resourcesResult = api.getResourcesByPlan(plan.id)
-                                val progressResult = planRepo.getProgress(plan.id)
-                                val resources = resourcesResult.data ?: emptyList()
-                                val progress = progressResult.data ?: emptyList()
-                                val validResourceIds = resources.filter { it.status >= LearningResource.STATUS_READY }.map { it.id }.toSet()
-                                val completed = progress.count { it.completed && it.resourceId in validResourceIds }
-                                val total = validResourceIds.size
-                                val progressPercent = if (total > 0) (completed * 100 / total).coerceIn(0, 100) else 0
-                                plan.copy(progress = progressPercent.toDouble())
-                            } catch (e: Exception) {
-                                plan
-                            }
-                        }
-                        _uiState.value = PlanListUiState(plans = plansWithProgress, isLoading = false)
-                    } else {
-                        _uiState.value = PlanListUiState(error = result.message, isLoading = false)
-                    }
+                val result = kotlinx.coroutines.withTimeout(15_000L) { api.getPlans(size = 50) }
+                if (result.isSuccess && result.data != null) {
+                    val plans = result.data.records.sortedByDescending { it.id }
+                    offlineCache.cachePlans(plans)
+                    // Show plans immediately without progress
+                    _uiState.value = _uiState.value.copy(plans = plans, isRefreshing = true, isLoading = false)
+
+                    // Step 3: Load progress asynchronously per plan (background)
+                    loadProgressForPlans(plans)
+                } else {
+                    _uiState.value = _uiState.value.copy(isRefreshing = false)
                 }
             } catch (e: Exception) {
-                _uiState.value = PlanListUiState(error = e.message, isLoading = false)
+                _uiState.value = _uiState.value.copy(isRefreshing = false, isLoading = false)
             }
         }
     }
 
+    private fun loadProgressForPlans(plans: List<LearningPlan>) {
+        viewModelScope.launch {
+            val updatedPlans = plans.toMutableList()
+            plans.forEachIndexed { index, plan ->
+                try {
+                    val resResult = api.getResourcesByPlan(plan.id)
+                    val progResult = planRepo.getProgress(plan.id)
+                    val resources = resResult.data ?: emptyList()
+                    val progress = progResult.data ?: emptyList()
+                    val validIds = resources.filter { it.status >= LearningResource.STATUS_READY }.map { it.id }.toSet()
+                    val completed = progress.count { it.completed && it.resourceId in validIds }
+                    val total = validIds.size
+                    val pct = if (total > 0) (completed * 100 / total).coerceIn(0, 100) else 0
+                    updatedPlans[index] = plan.copy(progress = pct.toDouble())
+                    // Update UI incrementally
+                    _uiState.value = _uiState.value.copy(plans = updatedPlans.toList())
+                } catch (_: Exception) {}
+            }
+            _uiState.value = _uiState.value.copy(isRefreshing = false)
+        }
+    }
+
     fun deletePlan(planId: Long) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法删除")
+            return
+        }
         viewModelScope.launch {
             val result = api.deletePlan(planId)
             if (result.isSuccess) {
@@ -102,6 +128,10 @@ class PlanListViewModel @Inject constructor(
     }
 
     fun updatePlanTitle(plan: LearningPlan, title: String) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法修改")
+            return
+        }
         val newTitle = title.trim().ifBlank { "未命名计划" }
         viewModelScope.launch {
             try {
@@ -121,6 +151,10 @@ class PlanListViewModel @Inject constructor(
     }
 
     fun createNewPlan(onSuccess: (Long) -> Unit) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法创建")
+            return
+        }
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isCreating = true)
             try {
@@ -183,32 +217,34 @@ fun PlanListScreen(
             )
         }
     ) { padding ->
-        if (uiState.isLoading) {
-            LoadingIndicator(Modifier.padding(padding))
-            return@Scaffold
-        }
-
-        if (uiState.error != null) {
-            ErrorState(
-                message = uiState.error ?: "未知错误",
-                onRetry = { viewModel.loadPlans() },
-                modifier = Modifier.padding(padding)
-            )
-            return@Scaffold
-        }
-
-        if (uiState.plans.isEmpty()) {
-            EmptyState(
-                Icons.Outlined.MenuBook,
-                "暂无学习计划",
-                "点击右下角按钮创建你的第一个学习计划",
-                Modifier.padding(padding)
-            )
-            return@Scaffold
-        }
-
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            if (uiState.isRefreshing) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(2.dp),
+                    trackColor = Color.Transparent
+                )
+            }
+            Box(Modifier.fillMaxSize()) {
+                when {
+                    uiState.isLoading -> {
+                        LoadingIndicator()
+                    }
+                    uiState.error != null -> {
+                        ErrorState(
+                            message = uiState.error ?: "未知错误",
+                            onRetry = { viewModel.loadPlans() }
+                        )
+                    }
+                    uiState.plans.isEmpty() -> {
+                        EmptyState(
+                            Icons.Outlined.MenuBook,
+                            "暂无学习计划",
+                            "点击右下角按钮创建你的第一个学习计划"
+                        )
+                    }
+                    else -> {
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -404,5 +440,9 @@ fun PlanListScreen(
                 }
             }
         }
+            }
+        }
+    }
+}
     }
 }

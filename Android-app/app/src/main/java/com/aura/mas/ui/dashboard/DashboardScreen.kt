@@ -48,6 +48,16 @@ fun DashboardScreen(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
+        // Refresh indicator
+        if (uiState.isRefreshing) {
+            item {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(2.dp),
+                    trackColor = Color.Transparent
+                )
+            }
+        }
+
         // Greeting
         item {
             GreetingHeader(

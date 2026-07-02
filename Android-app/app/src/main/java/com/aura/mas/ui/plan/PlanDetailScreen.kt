@@ -62,6 +62,7 @@ data class PlanDetailUiState(
     val chatMode: String = "assistant", // "assistant" or "tutor"
     val chatMessages: List<ChatMessage> = emptyList(),
     val chatSessions: List<ChatSession> = emptyList(),
+    val activeSessionId: String? = null,
     val isStreaming: Boolean = false,
     val streamContent: String = "",
     val showChat: Boolean = false,
@@ -88,7 +89,7 @@ class PlanDetailViewModel @Inject constructor(
             _uiState.value = PlanDetailUiState(isLoading = true)
             try {
                 val planResult = planRepo.getPlan(id)
-                val resourcesResult = api.getResourcesByPlan(id)
+                val resourcesResult = planRepo.getResources(id).first()
                 val progressResult = planRepo.getProgress(id)
 
                 val resources = resourcesResult.data ?: emptyList()
@@ -135,7 +136,8 @@ class PlanDetailViewModel @Inject constructor(
                         try {
                             val messagesResult = chatRepo.getMessages(latest.sessionId)
                             _uiState.value = _uiState.value.copy(
-                                chatMessages = messagesResult.data ?: emptyList()
+                                chatMessages = messagesResult.data?.map { it.normalize() } ?: emptyList(),
+                                activeSessionId = latest.sessionId
                             )
                         } catch (_: Exception) {}
                     }
@@ -162,6 +164,7 @@ class PlanDetailViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(
             chatMode = newMode,
             chatMessages = emptyList(), // Clear messages on mode switch
+            activeSessionId = null,
             showSessionList = false
         )
         loadSessions()
@@ -169,11 +172,11 @@ class PlanDetailViewModel @Inject constructor(
 
     fun selectSession(session: ChatSession) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(showSessionList = false, isStreaming = true)
+            _uiState.value = _uiState.value.copy(showSessionList = false, isStreaming = true, activeSessionId = session.sessionId)
             try {
                 val messagesResult = chatRepo.getMessages(session.sessionId)
                 _uiState.value = _uiState.value.copy(
-                    chatMessages = messagesResult.data ?: emptyList(),
+                    chatMessages = messagesResult.data?.map { it.normalize() } ?: emptyList(),
                     isStreaming = false
                 )
             } catch (e: Exception) {
@@ -194,21 +197,42 @@ class PlanDetailViewModel @Inject constructor(
         }
         _uiState.value = _uiState.value.copy(
             chatMessages = emptyList(),
+            activeSessionId = sessionId,
             showSessionList = false
         )
     }
 
-    fun sendMessage(message: String) {
+    fun confirmBreakdown() {
+        val lastMsg = _uiState.value.chatMessages.lastOrNull()
+        if (lastMsg != null && lastMsg.type == "confirm" && lastMsg.breakdown != null) {
+            val breakdownJson = com.google.gson.Gson().toJson(lastMsg.breakdown)
+            sendMessage("确认，开始生成学习资源", mapOf("task_breakdown" to breakdownJson))
+        }
+    }
+
+    fun modifyBreakdown(feedback: String) {
+        if (feedback.isBlank()) return
+        val lastMsg = _uiState.value.chatMessages.lastOrNull()
+        if (lastMsg != null && lastMsg.type == "confirm" && lastMsg.breakdown != null) {
+            val breakdownJson = com.google.gson.Gson().toJson(lastMsg.breakdown)
+            sendMessage(feedback, mapOf("task_breakdown" to breakdownJson))
+        }
+    }
+
+    fun sendMessage(message: String, extraParams: Map<String, String>? = null) {
         if (message.isBlank()) return
         val currentMode = _uiState.value.chatMode
 
         viewModelScope.launch {
-            val sessionId = if (currentMode == "tutor") {
+            val sessionId = _uiState.value.activeSessionId ?: if (currentMode == "tutor") {
                 chatRepo.generateTutorSessionId(planId)
             } else {
                 chatRepo.generateChatSessionId()
             }
-            val userMsg = ChatMessage(role = ChatMessage.ROLE_USER, content = message)
+            if (_uiState.value.activeSessionId == null) {
+                _uiState.value = _uiState.value.copy(activeSessionId = sessionId)
+            }
+            val userMsg = ChatMessage(role = ChatMessage.ROLE_USER, content = message, sessionId = sessionId)
             _uiState.value = _uiState.value.copy(
                 chatMessages = _uiState.value.chatMessages + userMsg,
                 isStreaming = true,
@@ -219,7 +243,7 @@ class PlanDetailViewModel @Inject constructor(
                     val resourceId = _uiState.value.selectedResource?.id
                     chatRepo.tutorChat(sessionId, message, planId, resourceId)
                 } else {
-                    chatRepo.chat(sessionId, message, planId)
+                    chatRepo.chat(sessionId, message, planId, extraParams)
                 }
                 flow.collect { event ->
                     when (event.type) {
@@ -234,17 +258,17 @@ class PlanDetailViewModel @Inject constructor(
                             loadPlan(planId)
                         }
                         "done" -> {
-                            val content = _uiState.value.streamContent
-                            if (content.isNotBlank()) {
-                                val assistantMsg = ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = content)
+                            try {
+                                val messagesResult = chatRepo.getMessages(sessionId)
                                 _uiState.value = _uiState.value.copy(
-                                    chatMessages = _uiState.value.chatMessages + assistantMsg,
-                                    streamContent = "",
-                                    isStreaming = false
+                                    chatMessages = messagesResult.data?.map { it.normalize() } ?: emptyList()
                                 )
-                            } else {
-                                _uiState.value = _uiState.value.copy(isStreaming = false)
-                            }
+                            } catch (_: Exception) {}
+                            _uiState.value = _uiState.value.copy(
+                                streamContent = "",
+                                isStreaming = false
+                            )
+                            loadSessions()
                         }
                         "error" -> {
                             _uiState.value = _uiState.value.copy(isStreaming = false)
@@ -378,6 +402,8 @@ fun PlanDetailScreen(
                         onNewSession = { viewModel.newSession() },
                         onSelectSession = { viewModel.selectSession(it) },
                         onGenerateResource = { viewModel.generateResource(it) },
+                        onConfirmBreakdown = { viewModel.confirmBreakdown() },
+                        onSelectResource = { viewModel.selectResource(it) },
                         modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f)
                     )
                 }
@@ -547,6 +573,8 @@ private fun ChatPanel(
     onNewSession: () -> Unit,
     onSelectSession: (ChatSession) -> Unit,
     onGenerateResource: (String) -> Unit,
+    onConfirmBreakdown: () -> Unit,
+    onSelectResource: (LearningResource) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var input by remember { mutableStateOf("") }
@@ -568,11 +596,6 @@ private fun ChatPanel(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Drag handle
-            Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.size(width = 36.dp, height = 4.dp).clip(CircleShape).background(MaterialTheme.colorScheme.outlineVariant))
-            }
-
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -632,9 +655,6 @@ private fun ChatPanel(
                     }
                     IconButton(onClick = onNewSession, modifier = Modifier.size(36.dp)) {
                         Icon(Icons.Default.AddComment, "新建", modifier = Modifier.size(20.dp))
-                    }
-                    IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Close, "关闭", modifier = Modifier.size(20.dp))
                     }
                 }
             }
@@ -699,12 +719,52 @@ private fun ChatPanel(
                 }
                 
                 items(uiState.chatMessages) { msg -> 
-                    ChatBubble(msg, isAssistant) 
+                    ChatBubble(
+                        message = msg, 
+                        isAssistant = isAssistant,
+                        onOpenResource = { resourceId ->
+                            val res = uiState.resources.find { it.id == resourceId }
+                            if (res != null) {
+                                onSelectResource(res)
+                            }
+                        }
+                    ) 
+                }
+
+                // Confirm action buttons
+                val lastMsg = uiState.chatMessages.lastOrNull()
+                if (lastMsg != null && lastMsg.type == "confirm" && !uiState.isStreaming) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(start = 40.dp, top = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { onConfirmBreakdown() },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("确认并生成", style = MaterialTheme.typography.labelMedium)
+                            }
+                            OutlinedButton(
+                                onClick = { 
+                                    input = "补充说明："
+                                },
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("反馈修改", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
                 }
                 
                 if (uiState.isStreaming && uiState.streamContent.isNotBlank()) {
                     item {
-                        ChatBubble(ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = uiState.streamContent), isAssistant)
+                        ChatBubble(
+                            message = ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = uiState.streamContent),
+                            isAssistant = isAssistant,
+                            onOpenResource = {}
+                        )
                     }
                 } else if (uiState.isStreaming) {
                     item {
@@ -862,9 +922,14 @@ private fun TutorWelcome(resourceTitle: String?) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ChatBubble(message: ChatMessage, isAssistant: Boolean) {
-    val isUser = message.role == ChatMessage.ROLE_USER
+private fun ChatBubble(
+    message: ChatMessage,
+    isAssistant: Boolean,
+    onOpenResource: (Long) -> Unit
+) {
+    val isUser = message.role.equals(ChatMessage.ROLE_USER, ignoreCase = true) || message.role.equals("USER", ignoreCase = true)
     val displayContent = remember(message.content) { parseMessageContent(message.content) }
 
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
@@ -883,9 +948,111 @@ private fun ChatBubble(message: ChatMessage, isAssistant: Boolean) {
                 Text(displayContent, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimary)
             } else {
                 Column(Modifier.padding(12.dp)) {
-                    // Strip citation sections before rendering
-                    val cleanContent = remember(displayContent) { stripCitationSection(displayContent) }
-                    MarkdownRenderer(content = cleanContent)
+                    when (message.type) {
+                        "confirm" -> {
+                            Text(displayContent, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            message.breakdown?.modules?.let { modules ->
+                                Spacer(Modifier.height(8.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    modules.forEachIndexed { idx, mod ->
+                                        Card(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                                        ) {
+                                            Column(Modifier.padding(10.dp)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Box(
+                                                        modifier = Modifier.size(20.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Text(
+                                                            text = mod.moduleId ?: (idx + 1).toString(),
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onPrimary
+                                                        )
+                                                    }
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Text(mod.title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                                                    mod.estimatedHours?.let {
+                                                        Spacer(Modifier.weight(1f))
+                                                        Text("${it}h", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                                    }
+                                                }
+                                                mod.description?.let {
+                                                    Spacer(Modifier.height(4.dp))
+                                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                                if (mod.resources.isNotEmpty()) {
+                                                    Spacer(Modifier.height(6.dp))
+                                                    FlowRow(
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                                    ) {
+                                                        mod.resources.forEach { r ->
+                                                            val label = when (r.resourceType) {
+                                                                "quiz" -> "测验"
+                                                                "mindmap" -> "思维导图"
+                                                                "code" -> "代码示例"
+                                                                "summary" -> "总结"
+                                                                "pptx" -> "PPT"
+                                                                else -> r.resourceType
+                                                            }
+                                                            Surface(
+                                                                shape = RoundedCornerShape(4.dp),
+                                                                color = MaterialTheme.colorScheme.primaryContainer,
+                                                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                                            ) {
+                                                                Text(label, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = androidx.compose.ui.text.TextStyle(fontSize = 10.sp))
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        "resource_generated" -> {
+                            Text(displayContent, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            if (message.resources.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    message.resources.forEach { r ->
+                                        val label = when (r.type) {
+                                            "quiz" -> "测验"
+                                            "mindmap" -> "思维导图"
+                                            "code" -> "代码示例"
+                                            "summary" -> "总结"
+                                            "pptx" -> "PPT"
+                                            else -> r.type
+                                        }
+                                        Button(
+                                            onClick = { onOpenResource(r.id) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                            ),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Icon(Icons.Default.Book, null, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("${r.title} ($label)", style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        else -> {
+                            val cleanContent = remember(displayContent) { stripCitationSection(displayContent) }
+                            MarkdownRenderer(content = cleanContent)
+                        }
+                    }
                 }
             }
         }

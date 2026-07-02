@@ -45,7 +45,9 @@ data class NoteDetailUiState(
 @HiltViewModel
 class NoteDetailViewModel @Inject constructor(
     private val noteRepo: NoteRepository,
-    private val api: com.aura.mas.data.api.ApiService
+    private val api: com.aura.mas.data.api.ApiService,
+    private val offlineCache: com.aura.mas.data.offline.OfflineCacheManager,
+    private val networkUtil: com.aura.mas.util.NetworkUtil
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(NoteDetailUiState())
     val uiState: StateFlow<NoteDetailUiState> = _uiState.asStateFlow()
@@ -85,7 +87,19 @@ class NoteDetailViewModel @Inject constructor(
                     _uiState.value = NoteDetailUiState(isLoading = false, error = result.message)
                 }
             } catch (e: Exception) {
-                _uiState.value = NoteDetailUiState(isLoading = false, error = e.message)
+                // Offline fallback
+                val cached = offlineCache.getCachedNote(noteId)
+                if (cached != null) {
+                    _uiState.value = NoteDetailUiState(
+                        isLoading = false,
+                        note = cached,
+                        editTitle = cached.noteName,
+                        editContent = cached.content,
+                        error = "离线模式"
+                    )
+                } else {
+                    _uiState.value = NoteDetailUiState(isLoading = false, error = e.message)
+                }
             }
         }
     }
@@ -107,7 +121,7 @@ class NoteDetailViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(editContent = content)
     }
 
-    fun save() {
+    fun save(noteId: Long) {
         val state = _uiState.value
         val note = state.note ?: return
         viewModelScope.launch {
@@ -130,7 +144,7 @@ class NoteDetailViewModel @Inject constructor(
                         _uiState.value = state.copy(isSaving = false, error = result.message)
                     }
                 } else {
-                    noteRepo.updateNote(note.id, NoteCreateRequest(noteName = title, content = content))
+                    noteRepo.updateNote(noteId, NoteCreateRequest(noteName = title, content = content))
                     _uiState.value = state.copy(
                         note = note.copy(noteName = title, content = content),
                         editContent = content,
@@ -165,7 +179,7 @@ fun NoteDetailScreen(
                 actions = {
                     if (uiState.isEditing) {
                         TextButton(
-                            onClick = { viewModel.save() },
+                            onClick = { viewModel.save(noteId) },
                             enabled = !uiState.isSaving
                         ) {
                             if (uiState.isSaving) {
@@ -211,7 +225,7 @@ fun NoteDetailScreen(
                         note = note,
                         resources = uiState.resources,
                         onNavigateToPlan = onNavigateToPlan,
-                        onNavigateToFlashcards = { onNavigateToFlashcards(note.id) },
+                        onNavigateToFlashcards = { onNavigateToFlashcards(noteId) },
                         modifier = Modifier.fillMaxSize()
                     )
                 }

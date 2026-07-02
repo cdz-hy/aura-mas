@@ -73,8 +73,54 @@ private fun MarkdownSegment(
 ) {
     val markwon = remember(context, isDark) { buildMarkwon(context, isDark) }
     val spanned = remember(content) {
-        try { markwon.toMarkdown(content) }
-        catch (_: Exception) { android.text.SpannableString(content) }
+        try {
+            val originalSpanned = markwon.toMarkdown(content)
+            val spannable = if (originalSpanned is android.text.Spannable) originalSpanned else android.text.SpannableStringBuilder(originalSpanned)
+            // Center-align all drawable / math / image spans (subclasses of ReplacementSpan) vertically
+            val replacementSpans = spannable.getSpans(0, spannable.length, android.text.style.ReplacementSpan::class.java)
+            for (span in replacementSpans) {
+                try {
+                    var clazz: Class<*>? = span.javaClass
+                    while (clazz != null) {
+                        for (fieldName in listOf("mVerticalAlignment", "alignment")) {
+                            try {
+                                val field = clazz.getDeclaredField(fieldName)
+                                field.isAccessible = true
+                                field.setInt(span, 2) // 2 = ALIGN_CENTER
+                            } catch (_: NoSuchFieldException) {}
+                        }
+                        clazz = clazz.superclass
+                    }
+                } catch (_: Exception) {}
+
+                // Horizontally center block-level images/equations (if on a line by itself)
+                try {
+                    val start = spannable.getSpanStart(span)
+                    val end = spannable.getSpanEnd(span)
+                    if (start >= 0 && end >= 0) {
+                        var lineStart = start
+                        while (lineStart > 0 && spannable[lineStart - 1] != '\n') {
+                            lineStart--
+                        }
+                        var lineEnd = end
+                        while (lineEnd < spannable.length && spannable[lineEnd] != '\n') {
+                            lineEnd++
+                        }
+                        val lineText = spannable.subSequence(lineStart, lineEnd).toString()
+                        val isOnlyImageAndWhitespace = lineText.all { it.isWhitespace() || it == '\uFFFC' }
+                        if (isOnlyImageAndWhitespace) {
+                            spannable.setSpan(
+                                android.text.style.AlignmentSpan.Standard(android.text.Layout.Alignment.ALIGN_CENTER),
+                                lineStart,
+                                lineEnd,
+                                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                            )
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            spannable
+        } catch (_: Exception) { android.text.SpannableString(content) }
     }
     AndroidView(
         modifier = Modifier.fillMaxWidth(),
@@ -193,23 +239,10 @@ internal fun parseAndNormalizeContent(content: String): List<Segment> {
     return segments
 }
 
-@dagger.hilt.EntryPoint
-@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
-private interface NetworkEntryPoint {
-    fun okHttpClient(): okhttp3.OkHttpClient
-}
-
 // ── Markwon builder ────────────────────────────────────────────
 
 private fun buildMarkwon(context: Context, isDark: Boolean): Markwon {
-    val entryPoint = dagger.hilt.android.EntryPointAccessors.fromApplication(
-        context.applicationContext,
-        NetworkEntryPoint::class.java
-    )
-    val okHttpClient = entryPoint.okHttpClient()
-
     val imageLoader = ImageLoader.Builder(context)
-        .okHttpClient(okHttpClient)
         .components {
             add(SvgDecoder.Factory())
             add(GifDecoder.Factory())
@@ -235,26 +268,10 @@ private fun buildMarkwon(context: Context, isDark: Boolean): Markwon {
                     .codeTextSize((textSizePx * 0.85f).toInt())
                     .codeBackgroundColor(if (isDark) 0xFF334155.toInt() else 0xFFE2E8F0.toInt())
             }
-
-            override fun configureConfiguration(builder: io.noties.markwon.MarkwonConfiguration.Builder) {
-                builder.imageDestinationProcessor(object : io.noties.markwon.image.destination.ImageDestinationProcessor() {
-                    override fun process(destination: String): String {
-                        if (destination.startsWith("http://") || destination.startsWith("https://") || destination.startsWith("data:")) {
-                            return destination
-                        }
-                        val baseUrl = com.aura.mas.util.Constants.JAVA_BASE_URL.removeSuffix("/")
-                        val path = if (destination.startsWith("/")) destination else "/$destination"
-                        return "$baseUrl$path"
-                    }
-                })
-            }
         })
         .usePlugin(JLatexMathPlugin.create(textSizePx) { builder ->
             builder.inlinesEnabled(true)
-            val sidePad = (textSizePx * 0.2f).toInt()
-            val bottomPad = (textSizePx * 0.15f).toInt()
-            builder.theme().inlinePadding(io.noties.markwon.ext.latex.JLatexMathTheme.Padding.of(sidePad, 0, sidePad, bottomPad))
+            builder.theme().blockHorizontalAlignment(ru.noties.jlatexmath.JLatexMathDrawable.ALIGN_CENTER)
         })
         .build()
 }
-

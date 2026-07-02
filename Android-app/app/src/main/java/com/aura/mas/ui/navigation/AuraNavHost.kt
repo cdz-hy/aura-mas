@@ -164,7 +164,13 @@ fun AuraNavHost() {
                         popUpTo(0) { inclusive = true }
                     }
                 },
-                onPersonalInfoClick = { navController.navigate(NavRoutes.PERSONAL_INFO_EDIT) }
+                onPersonalInfoClick = { navController.navigate(NavRoutes.PERSONAL_INFO_EDIT) },
+                onCacheClick = { navController.navigate(NavRoutes.CACHE_MANAGEMENT) }
+            )
+        }
+        composable(NavRoutes.CACHE_MANAGEMENT) {
+            com.aura.mas.ui.profile.CacheManagementScreen(
+                onBack = { navController.popBackStack() }
             )
         }
         composable(NavRoutes.PERSONAL_INFO_EDIT) {

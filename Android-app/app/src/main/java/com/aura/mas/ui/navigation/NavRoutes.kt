@@ -17,6 +17,7 @@ object NavRoutes {
     const val KNOWLEDGE_GRAPH = "knowledge_graph/{userId}"
     const val PROFILE = "profile"
     const val SETTINGS = "settings"
+    const val CACHE_MANAGEMENT = "cache_management"
     const val ADMIN_DASHBOARD = "admin_dashboard"
     const val ADMIN_USERS = "admin_users"
     const val ADMIN_LOGS = "admin_logs"

@@ -1,10 +1,19 @@
 package com.aura.mas.ui.components.resource
 
+import androidx.compose.foundation.BorderStroke
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -15,12 +24,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.aura.mas.data.model.LearningResource
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.platform.LocalContext
 import com.aura.mas.ui.theme.*
+import com.aura.mas.util.Constants
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
@@ -147,114 +158,43 @@ private fun CodeContent(moduleData: Map<String, Any>) {
 @Composable
 private fun MindmapContent(moduleData: Map<String, Any>) {
     val nodeData = remember(moduleData) { extractMindmapData(moduleData) }
-    val isDark = androidx.compose.foundation.isSystemInDarkTheme()
 
     if (nodeData == null) {
         EmptyContentCard("思维导图", Icons.Filled.Folder, "思维导图数据加载中")
         return
     }
 
-    val json = remember(nodeData) { Gson().toJson(nodeData) }
+    val root = remember(nodeData) { normalizeMindmapRoot(nodeData, moduleData) }
+    var useFallback by remember(nodeData) { mutableStateOf(false) }
 
-    AndroidView(
-        modifier = Modifier.fillMaxWidth().height(450.dp),
-        factory = { ctx ->
-            android.webkit.WebView(ctx).apply {
-                setBackgroundColor(android.graphics.Color.WHITE)
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.allowFileAccess = false
-                settings.setSupportZoom(true)
-                settings.builtInZoomControls = true
-                settings.displayZoomControls = false
-                setOnTouchListener { v, _ ->
-                    v.parent?.requestDisallowInterceptTouchEvent(true)
-                    false
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("思维导图", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                if (!useFallback) {
+                    TextButton(onClick = { useFallback = true }) { Text("兼容视图") }
                 }
             }
-        },
-        update = { webView ->
-            val html = """
-                <!DOCTYPE html>
-                <html><head>
-                <meta name="viewport" content="width=device-width,initial-scale=1.0">
-                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mind-elixir/dist/style.css">
-                <style>
-                *{margin:0;padding:0;box-sizing:border-box}
-                body, html{width:100%;height:100%;background:#ffffff;overflow:hidden}
-                #map{width:100%;height:100%}
-                /* Custom styles to match App theme */
-                .topic {
-                    border-radius: 8px !important;
-                    padding: 6px 12px !important;
-                    font-family: system-ui, -apple-system, sans-serif !important;
-                    font-size: 14px !important;
-                }
-                .root > .topic {
-                    background: linear-gradient(135deg, #34508e, #4164b2) !important;
-                    color: #ffffff !important;
-                    font-weight: 600 !important;
-                    font-size: 15px !important;
-                    border-radius: 10px !important;
-                    padding: 8px 16px !important;
-                    box-shadow: 0 2px 8px rgba(52, 80, 142, 0.3) !important;
-                }
-                .lines path {
-                    stroke: #b3c1e0 !important;
-                    stroke-width: 2 !important;
-                }
-                </style>
-                <script src="https://cdn.jsdelivr.net/npm/mind-elixir"></script>
-                </head><body>
-                <div id="map"></div>
-                <script>
-                try {
-                    var rawNode = $json;
-                    // Ensure all nodes are expanded by default
-                    function expandAll(node) {
-                        node.expanded = true;
-                        if (node.children && node.children.length > 0) {
-                            node.children.forEach(expandAll);
-                        }
-                    }
-                    expandAll(rawNode);
-
-                    var mind = new MindElixir({
-                        el: document.getElementById('map'),
-                        direction: 2, // SIDE
-                        editable: false,
-                        contextMenu: false,
-                        toolBar: false,
-                        keypress: false,
-                        overflowHidden: false,
-                        theme: {
-                            name: 'navy',
-                            type: 'light',
-                            palette: [
-                                '#34508e', '#4164b2', '#6783c1', '#8da2d1',
-                                '#649b64', '#c9873b', '#83af83', '#507c50'
-                            ]
-                        }
-                    });
-
-                    mind.init({
-                        nodeData: rawNode,
-                        direction: 2
-                    });
-
-                    setTimeout(function() {
-                        mind.scaleFit();
-                        mind.toCenter();
-                    }, 200);
-                } catch(e) {
-                    document.body.innerHTML = "<div style='padding:20px;color:red'>加载思维导图出错: " + e.message + "</div>";
-                }
-                </script>
-                </body></html>
-            """.trimIndent()
-            webView.loadDataWithBaseURL("http://localhost/", html, "text/html", "UTF-8", null)
+            Spacer(Modifier.height(12.dp))
+            if (useFallback) {
+                MindmapFallback(root)
+            } else {
+                MindElixirWebView(
+                    nodeData = nodeData,
+                    onFallback = { useFallback = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(520.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .border(1.dp, Navy100, RoundedCornerShape(14.dp))
+                )
+            }
         }
-    )
+    }
 }
 
 // ── Video ─────────────────────────────────────────────────────
@@ -313,15 +253,8 @@ private fun VideoContent(moduleData: Map<String, Any>) {
                         AndroidView(
                             factory = { ctx ->
                                 WebView(ctx).apply {
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.databaseEnabled = true
-                                    settings.mediaPlaybackRequiresUserGesture = false
-                                    // Force a Mobile User-Agent to render HTML5 player controls correctly
-                                    settings.userAgentString = "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36"
-                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                    }
+                                    applyResourceWebSettings()
+                                    webChromeClient = android.webkit.WebChromeClient()
                                     webViewClient = object : android.webkit.WebViewClient() {
                                         override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
                                             val reqUrl = request?.url?.toString() ?: ""
@@ -349,13 +282,27 @@ private fun VideoContent(moduleData: Map<String, Any>) {
                                 }
                             },
                             update = { webView ->
-                                val headers = mutableMapOf<String, String>()
-                                if (embedUrl.contains("bilibili")) {
-                                    headers["Referer"] = "https://www.bilibili.com"
-                                } else if (embedUrl.contains("youtube")) {
-                                    headers["Referer"] = "https://www.youtube.com"
+                                val html = """
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                    <style>
+                                    body, html { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#000; }
+                                    iframe { width:100%; height:100%; border:none; }
+                                    </style>
+                                    </head>
+                                    <body>
+                                    <iframe src="$embedUrl" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+                                    </body>
+                                    </html>
+                                """.trimIndent()
+                                val baseUrl = if (embedUrl.contains("bilibili")) {
+                                    "https://www.bilibili.com"
+                                } else {
+                                    "https://www.youtube.com"
                                 }
-                                webView.loadUrl(embedUrl, headers)
+                                webView.loadDataWithBaseURL(baseUrl, html, "text/html", "UTF-8", null)
                             },
                             modifier = Modifier.fillMaxWidth().height(220.dp)
                         )
@@ -393,6 +340,8 @@ private fun AnimationContent(moduleData: Map<String, Any>) {
     // Vue: moduleData.html || moduleData.content, rendered in iframe with sandbox="allow-scripts"
     val html = moduleData["html"]?.toString()
         ?: moduleData["content"]?.toString()
+        ?: moduleData["animation_html"]?.toString()
+        ?: moduleData["animationHtml"]?.toString()
         ?: ""
 
     if (html.isBlank()) {
@@ -400,15 +349,8 @@ private fun AnimationContent(moduleData: Map<String, Any>) {
         return
     }
 
-    // Wrap in proper HTML if not already wrapped
-    val fullHtml = if (html.contains("<html") || html.contains("<!DOCTYPE")) html
-    else """
-        <!DOCTYPE html>
-        <html><head>
-        <meta name="viewport" content="width=device-width,initial-scale=1.0">
-        <style>*{margin:0;padding:0}body{background:#fff;overflow:hidden}</style>
-        </head><body>$html</body></html>
-    """.trimIndent()
+    val fullHtml = remember(html) { normalizeAnimationHtmlForAndroid(html) }
+    var debugInfo by remember(html) { mutableStateOf("") }
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -428,35 +370,45 @@ private fun AnimationContent(moduleData: Map<String, Any>) {
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
-                        setBackgroundColor(android.graphics.Color.WHITE)
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.allowFileAccess = true
-                        settings.mediaPlaybackRequiresUserGesture = false
-                        settings.setSupportZoom(true)
-                        settings.builtInZoomControls = true
-                        settings.displayZoomControls = false
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        setBackgroundColor(android.graphics.Color.argb(255, 5, 5, 5))
+                        applyResourceWebSettings(allowFileAccess = true)
+                        webChromeClient = DiagnosticWebChromeClient { message ->
+                            if (message.contains("ERROR", ignoreCase = true)) debugInfo = message
+                        }
+                        webViewClient = object : WebViewClient() {
+                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                if (request?.isForMainFrame == true) {
+                                    debugInfo = "页面加载失败: ${error?.description}"
+                                }
+                            }
                         }
                         setOnTouchListener { v, event ->
                             when (event.action) {
-                                android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> {
-                                    v.parent?.requestDisallowInterceptTouchEvent(true)
-                                }
-                                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
-                                    v.parent?.requestDisallowInterceptTouchEvent(false)
-                                }
+                                android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> v.parent?.requestDisallowInterceptTouchEvent(true)
+                                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> v.parent?.requestDisallowInterceptTouchEvent(false)
                             }
                             false
                         }
                     }
                 },
                 update = { webView ->
-                    webView.loadDataWithBaseURL("http://localhost/", fullHtml, "text/html", "UTF-8", null)
+                    webView.loadHtml(fullHtml, Constants.PYTHON_BASE_URL)
                 },
-                modifier = Modifier.fillMaxWidth().height(480.dp).clip(RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
+                modifier = Modifier.fillMaxWidth().height(520.dp).clip(RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
             )
+            if (debugInfo.isNotBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = debugInfo,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -502,13 +454,8 @@ private fun PodcastContent(moduleData: Map<String, Any>) {
                 AndroidView(
                     factory = { ctx ->
                         WebView(ctx).apply {
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.mediaPlaybackRequiresUserGesture = false
+                            applyResourceWebSettings()
                             setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            }
                             setOnTouchListener { v, event ->
                                 when (event.action) {
                                     android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> {
@@ -531,7 +478,7 @@ private fun PodcastContent(moduleData: Map<String, Any>) {
                             <style>*{margin:0;padding:8px}body{background:transparent;font-family:system-ui;display:flex;align-items:center;justify-content:center}audio{width:100%;max-width:400px;border-radius:8px}</style>
                             </head><body>$content</body></html>
                         """.trimIndent()
-                        webView.loadDataWithBaseURL("http://localhost/", fullHtml, "text/html", "UTF-8", null)
+                        webView.loadHtml(fullHtml, Constants.PYTHON_BASE_URL)
                     },
                     modifier = Modifier.fillMaxWidth().height(450.dp)
                 )
@@ -557,12 +504,7 @@ private fun PodcastContent(moduleData: Map<String, Any>) {
                 AndroidView(
                     factory = { ctx ->
                         WebView(ctx).apply {
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.mediaPlaybackRequiresUserGesture = false
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            }
+                            applyResourceWebSettings()
                             setOnTouchListener { v, event ->
                                 when (event.action) {
                                     android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> {
@@ -577,7 +519,7 @@ private fun PodcastContent(moduleData: Map<String, Any>) {
                         }
                     },
                     update = { webView ->
-                        webView.loadDataWithBaseURL("http://localhost/", audioHtml, "text/html", "UTF-8", null)
+                        webView.loadHtml(audioHtml, Constants.PYTHON_BASE_URL)
                     },
                     modifier = Modifier.fillMaxWidth().height(220.dp)
                 )
@@ -629,15 +571,21 @@ private fun PodcastContent(moduleData: Map<String, Any>) {
 
 @Composable
 private fun PptxContent(moduleData: Map<String, Any>) {
-    val pptxUrl = moduleData["pptx_url"]?.toString()
+    val rawPptxUrl = moduleData["pptx_url"]?.toString()
         ?: moduleData["pptxUrl"]?.toString()
         ?: moduleData["url"]?.toString()
+        ?: moduleData["file_url"]?.toString()
+        ?: moduleData["fileUrl"]?.toString()
     val html = moduleData["html"]?.toString()
     val content = moduleData["content"]?.toString()
     val slideCount = (moduleData["slide_count"] as? Number)?.toInt()
         ?: (moduleData["slideCount"] as? Number)?.toInt()
     val filename = moduleData["pptx_filename"]?.toString()
         ?: moduleData["pptxFilename"]?.toString()
+        ?: moduleData["filename"]?.toString()
+    val pptxUrl = remember(rawPptxUrl, filename) {
+        resolvePptxUrl(rawPptxUrl, filename)
+    }
 
     val hasOfficeUrl = !pptxUrl.isNullOrBlank()
     val hasHtml = !html.isNullOrBlank() && html.contains("<")
@@ -680,7 +628,7 @@ private fun PptxContent(moduleData: Map<String, Any>) {
                 }
             }
 
-            var viewMode by remember { mutableStateOf(if (hasHtml || hasContent) "html" else "office") }
+            var viewMode by remember(moduleData) { mutableStateOf(if (hasOfficeUrl) "office" else "html") }
 
             if (hasOfficeUrl && (hasHtml || hasContent)) {
                 Row(
@@ -711,14 +659,9 @@ private fun PptxContent(moduleData: Map<String, Any>) {
                     AndroidView(
                         factory = { ctx ->
                             WebView(ctx).apply {
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.setSupportZoom(true)
-                                settings.builtInZoomControls = true
-                                settings.displayZoomControls = false
-                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                    settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                }
+                                applyResourceWebSettings()
+                                webChromeClient = WebChromeClient()
+                                webViewClient = ResourceWebViewClient(ctx)
                                 setOnTouchListener { v, event ->
                                     when (event.action) {
                                         android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> {
@@ -743,14 +686,9 @@ private fun PptxContent(moduleData: Map<String, Any>) {
                         AndroidView(
                             factory = { ctx ->
                                 WebView(ctx).apply {
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.setSupportZoom(true)
-                                    settings.builtInZoomControls = true
-                                    settings.displayZoomControls = false
-                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                    }
+                                    applyResourceWebSettings()
+                                    webChromeClient = WebChromeClient()
+                                    webViewClient = ResourceWebViewClient(ctx)
                                     setOnTouchListener { v, event ->
                                         when (event.action) {
                                             android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> {
@@ -773,7 +711,7 @@ private fun PptxContent(moduleData: Map<String, Any>) {
                                     <style>*{margin:0;padding:0}body{background:#fff;overflow-x:hidden}</style>
                                     </head><body>$slidesHtml</body></html>
                                 """.trimIndent()
-                                webView.loadDataWithBaseURL("http://localhost/", fullHtml, "text/html", "UTF-8", null)
+                                webView.loadHtml(fullHtml, Constants.PYTHON_BASE_URL)
                             },
                             modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
                         )
@@ -820,6 +758,284 @@ private fun PptxContent(moduleData: Map<String, Any>) {
 
 // ── Helpers ───────────────────────────────────────────────────
 
+private data class MindmapNode(
+    val topic: String,
+    val children: List<MindmapNode> = emptyList()
+)
+
+@Composable
+private fun MindElixirWebView(
+    nodeData: Map<String, Any>,
+    onFallback: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val mindmapHtml = remember(nodeData) { buildMindElixirHtml(nodeData) }
+    var errorMsg by remember(nodeData) { mutableStateOf("") }
+    Column(modifier = modifier) {
+        AndroidView(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    setBackgroundColor(android.graphics.Color.WHITE)
+                    applyResourceWebSettings(allowFileAccess = false)
+                    webChromeClient = DiagnosticWebChromeClient { message ->
+                        if (message.contains("ERROR", ignoreCase = true)) errorMsg = message
+                    }
+                    webViewClient = object : WebViewClient() {
+                        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                            if (request?.isForMainFrame == true) {
+                                errorMsg = "加载失败: ${error?.description}"
+                                onFallback()
+                            }
+                        }
+                    }
+                    setOnTouchListener { v, event ->
+                        when (event.action) {
+                            android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE -> v.parent?.requestDisallowInterceptTouchEvent(true)
+                            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> v.parent?.requestDisallowInterceptTouchEvent(false)
+                        }
+                        false
+                    }
+                }
+            },
+            update = { webView -> webView.loadHtml(mindmapHtml, "https://cdn.jsdelivr.net/") }
+        )
+        if (errorMsg.isNotBlank()) {
+            Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+                Text(errorMsg, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MindmapFallback(root: MindmapNode) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 420.dp, max = 620.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Navy50)
+            .border(1.dp, Navy100, RoundedCornerShape(14.dp))
+            .horizontalScroll(rememberScrollState())
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp)
+    ) {
+        MindmapNodeView(root, depth = 0)
+    }
+}
+
+@Composable
+private fun MindmapNodeView(node: MindmapNode, depth: Int) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            shape = RoundedCornerShape(if (depth == 0) 12.dp else 10.dp),
+            color = when (depth) {
+                0 -> Navy600
+                1 -> MaterialTheme.colorScheme.surface
+                else -> Navy50
+            },
+            border = if (depth == 0) null else BorderStroke(1.dp, if (depth == 1) Navy200 else Navy100),
+            tonalElevation = if (depth <= 1) 1.dp else 0.dp,
+            shadowElevation = if (depth == 0) 3.dp else 0.dp,
+            modifier = Modifier.widthIn(min = if (depth == 0) 150.dp else 132.dp, max = 260.dp)
+        ) {
+            Text(
+                node.topic.ifBlank { "未命名节点" },
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                style = if (depth == 0) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodySmall,
+                fontWeight = if (depth <= 1) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (depth == 0) androidx.compose.ui.graphics.Color.White else MaterialTheme.colorScheme.onSurface,
+                maxLines = 5,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        if (node.children.isNotEmpty()) {
+            Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Navy200))
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                node.children.forEachIndexed { index, child ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MindmapNodeView(child, depth + 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun buildMindElixirHtml(data: Map<String, Any>): String {
+    val rawJson = Gson().toJson(data)
+    return """
+        <!doctype html>
+        <html lang="zh-CN">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=4.0,user-scalable=yes">
+          <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mind-elixir/dist/style.css">
+          <style>
+            html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#fff;font-family:system-ui,-apple-system,sans-serif}
+            #map{width:100vw;height:100vh;background:#fff}
+            .topic{border-radius:8px!important;padding:6px 12px!important;font-size:14px!important}
+            .root>.topic{background:linear-gradient(135deg,#34508e,#4164b2)!important;color:#fff!important;font-weight:600!important;border-radius:10px!important;padding:8px 16px!important;box-shadow:0 2px 8px rgba(52,80,142,.3)!important}
+            .lines path{stroke:#b3c1e0!important;stroke-width:2!important}
+          </style>
+        </head>
+        <body>
+          <div id="map"></div>
+          <script src="https://cdn.jsdelivr.net/npm/mind-elixir/dist/MindElixirLite.iife.js"></script>
+          <script>
+            (function(){
+              try {
+                var rawData = $rawJson;
+                var mindData = rawData && rawData.nodeData ? rawData : { nodeData: rawData, direction: 2 };
+                if (!mindData.nodeData) throw new Error('missing nodeData');
+                function expandAll(node){ if(!node)return; node.expanded=true; (node.children||[]).forEach(expandAll); }
+                expandAll(mindData.nodeData);
+                var Mind = window.MindElixirLite;
+                if (!Mind) throw new Error('MindElixirLite not loaded');
+                var MindConstructor = Mind.default || Mind;
+                if (typeof MindConstructor !== 'function') throw new Error('MindElixirLite constructor not found');
+                var direction = Mind.SIDE || 2;
+                var mind = new MindConstructor({
+                  el: document.getElementById('map'),
+                  direction: direction,
+                  editable: false,
+                  contextMenu: false,
+                  toolBar: false,
+                  keypress: false,
+                  overflowHidden: false,
+                  theme: {
+                    name: 'navy', type: 'light',
+                    palette: ['#34508e','#4164b2','#6783c1','#8da2d1','#649b64','#c9873b','#83af83','#507c50'],
+                    cssVar: {
+                      '--node-gap-x': '80px', '--node-gap-y': '12px', '--main-gap-x': '100px', '--main-gap-y': '20px',
+                      '--main-color': '#273c6b', '--main-bgcolor': '#f0f3f9', '--color': '#1a2847', '--bgcolor': '#ffffff',
+                      '--root-color': '#ffffff', '--root-bgcolor': '#34508e', '--root-border-color': '#273c6b'
+                    }
+                  }
+                });
+                mindData.direction = direction;
+                mind.init(mindData);
+                setTimeout(function(){ try { mind.scaleFit(); mind.toCenter(); } catch(e){} }, 180);
+              } catch(e) {
+                console.error('MindElixir init error: ' + e.message + ' stack: ' + (e.stack||''));
+                document.body.innerHTML = '<div style="padding:20px;color:#b91c1c;font:14px system-ui">MindElixir 加载失败：' + e.message + '</div>';
+              }
+            })();
+          </script>
+        </body>
+        </html>
+    """.trimIndent()
+}
+
+private fun normalizeMindmapRoot(data: Map<String, Any>, moduleData: Map<String, Any>): MindmapNode {
+    val root = (data["nodeData"] as? Map<*, *>) ?: data
+    return mapToMindmapNode(root, moduleData["module_title"]?.toString() ?: moduleData["title"]?.toString() ?: "思维导图")
+}
+
+private fun mapToMindmapNode(raw: Map<*, *>, fallbackTopic: String): MindmapNode {
+    val topic = raw["topic"]?.toString()
+        ?: raw["title"]?.toString()
+        ?: raw["name"]?.toString()
+        ?: fallbackTopic
+    val children = (raw["children"] as? List<*>)
+        ?.mapNotNull { child ->
+            when (child) {
+                is Map<*, *> -> mapToMindmapNode(child, "子节点")
+                is String -> MindmapNode(child)
+                else -> null
+            }
+        }
+        ?: emptyList()
+    return MindmapNode(topic, children)
+}
+
+private fun normalizeAnimationHtmlForAndroid(raw: String): String {
+    val baseTag = "<base href=\"${Constants.PYTHON_BASE_URL.trimEnd('/')}/\">"
+    val inner = if (raw.contains("<html", ignoreCase = true) || raw.contains("<!DOCTYPE", ignoreCase = true)) {
+        raw
+    } else {
+        """
+        <!DOCTYPE html>
+        <html><head><meta charset="UTF-8"></head><body>$raw</body></html>
+        """.trimIndent()
+    }
+
+    return if (inner.contains("<head", ignoreCase = true)) {
+        inner.replace(Regex("<head[^>]*>", RegexOption.IGNORE_CASE)) {
+            it.value + baseTag + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no\">"
+        }
+    } else {
+        inner.replace("<html>", "<html><head>$baseTag<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no\"></head>", ignoreCase = true)
+    }
+}
+
+private class DiagnosticWebChromeClient(
+    private val onMessage: (String) -> Unit
+) : WebChromeClient() {
+    override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+        val message = consoleMessage ?: return false
+        val text = "WebView ${message.messageLevel()}: ${message.message()} (${message.sourceId()}:${message.lineNumber()})"
+        if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR || message.message().contains("animation", ignoreCase = true)) {
+            onMessage(text)
+        }
+        return false
+    }
+}
+
+private fun WebView.applyResourceWebSettings(allowFileAccess: Boolean = false) {
+    settings.javaScriptEnabled = true
+    settings.domStorageEnabled = true
+    settings.databaseEnabled = true
+    settings.allowFileAccess = allowFileAccess
+    settings.allowContentAccess = true
+    settings.mediaPlaybackRequiresUserGesture = false
+    settings.setSupportZoom(true)
+    settings.builtInZoomControls = true
+    settings.displayZoomControls = false
+    settings.loadWithOverviewMode = true
+    settings.useWideViewPort = true
+    settings.cacheMode = WebSettings.LOAD_DEFAULT
+    settings.userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+        settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+    }
+}
+
+private fun WebView.loadHtml(html: String, baseUrl: String = Constants.PYTHON_BASE_URL) {
+    loadDataWithBaseURL(baseUrl, html, "text/html", "UTF-8", null)
+}
+
+private class ResourceWebViewClient(
+    private val context: android.content.Context
+) : WebViewClient() {
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        val url = request?.url?.toString().orEmpty()
+        if (url.startsWith("http://") || url.startsWith("https://")) return false
+        return try {
+            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, request?.url))
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+}
+
+private fun resolvePptxUrl(rawUrl: String?, filename: String?): String? {
+    rawUrl?.takeIf { it.isNotBlank() }?.let { return resolveResourceUrl(it) }
+    return filename?.takeIf { it.isNotBlank() }?.let {
+        Constants.PYTHON_BASE_URL.trimEnd('/') + "/api/ai/resource/pptx/download/" + it
+    }
+}
+
+private fun resolveResourceUrl(url: String): String {
+    if (url.startsWith("http://") || url.startsWith("https://")) return url
+    return Constants.PYTHON_BASE_URL.trimEnd('/') + "/" + url.trimStart('/')
+}
+
 @Composable
 private fun EmptyContentCard(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, message: String) {
     Card(
@@ -860,7 +1076,7 @@ private fun extractTextContent(moduleData: Map<String, Any>): String {
 
 private fun extractMindmapData(moduleData: Map<String, Any>): Map<String, Any>? {
     // Vue: md.nodeData || md.node_data || md.content
-    val raw = moduleData["nodeData"] ?: moduleData["node_data"] ?: moduleData["content"]
+    val raw = moduleData["nodeData"] ?: moduleData["node_data"] ?: moduleData["mindmap"] ?: moduleData["content"]
     return when (raw) {
         is Map<*, *> -> {
             @Suppress("UNCHECKED_CAST")
@@ -1087,4 +1303,3 @@ private fun launchVideoApp(context: android.content.Context, url: String) {
         android.widget.Toast.makeText(context, "无法打开视频链接", android.widget.Toast.LENGTH_SHORT).show()
     }
 }
-

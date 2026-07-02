@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -18,15 +19,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aura.mas.data.model.*
 import com.aura.mas.data.repository.ChatRepository
 import com.aura.mas.ui.common.*
+import com.aura.mas.ui.components.resource.MarkdownRenderer
+import com.aura.mas.ui.theme.*
 import com.aura.mas.util.SseClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +51,9 @@ data class StandaloneChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val isStreaming: Boolean = false,
     val streamContent: String = "",
+    val thinkingSteps: List<ThinkingStep> = emptyList(),
+    val searchSources: List<SearchSource> = emptyList(),
+    val isSearching: Boolean = false,
     val error: String? = null
 )
 
@@ -70,7 +78,7 @@ class StandaloneChatViewModel @Inject constructor(
                     assistantSessions = assistantSessions,
                     tutorSessions = tutorSessions
                 )
-                // Auto-select the latest session for current mode
+                // Auto-select the latest session
                 val currentSessions = if (_uiState.value.mode == ChatMode.ASSISTANT) assistantSessions else tutorSessions
                 if (currentSessions.isNotEmpty() && _uiState.value.activeSessionId == null) {
                     selectSession(currentSessions.first().sessionId)
@@ -83,6 +91,10 @@ class StandaloneChatViewModel @Inject constructor(
 
     fun switchMode(mode: ChatMode) {
         _uiState.value = _uiState.value.copy(mode = mode, activeSessionId = null, messages = emptyList())
+        val sessions = if (mode == ChatMode.ASSISTANT) _uiState.value.assistantSessions else _uiState.value.tutorSessions
+        if (sessions.isNotEmpty()) {
+            selectSession(sessions.first().sessionId)
+        }
     }
 
     fun newSession() {
@@ -106,7 +118,7 @@ class StandaloneChatViewModel @Inject constructor(
             try {
                 val result = chatRepo.getMessages(sessionId)
                 if (result.isSuccess && result.data != null) {
-                    _uiState.value = _uiState.value.copy(messages = result.data)
+                    _uiState.value = _uiState.value.copy(messages = result.data.map { it.normalize() })
                 }
             } catch (_: Exception) {}
         }
@@ -119,41 +131,42 @@ class StandaloneChatViewModel @Inject constructor(
         }
     }
 
-    fun sendMessage(message: String) {
+    fun confirmBreakdown() {
+        val lastMsg = _uiState.value.messages.lastOrNull()
+        if (lastMsg != null && lastMsg.type == "confirm" && lastMsg.breakdown != null) {
+            val breakdownJson = com.google.gson.Gson().toJson(lastMsg.breakdown)
+            sendMessage("确认，开始生成学习资源", mapOf("task_breakdown" to breakdownJson))
+        }
+    }
+
+    fun modifyBreakdown(feedback: String) {
+        if (feedback.isBlank()) return
+        val lastMsg = _uiState.value.messages.lastOrNull()
+        if (lastMsg != null && lastMsg.type == "confirm" && lastMsg.breakdown != null) {
+            val breakdownJson = com.google.gson.Gson().toJson(lastMsg.breakdown)
+            sendMessage(feedback, mapOf("task_breakdown" to breakdownJson))
+        }
+    }
+
+    fun sendMessage(message: String, extraParams: Map<String, String>? = null) {
         val sessionId = _uiState.value.activeSessionId ?: return
         val mode = _uiState.value.mode
         viewModelScope.launch {
-            val userMsg = ChatMessage(role = ChatMessage.ROLE_USER, content = message)
+            val userMsg = ChatMessage(role = ChatMessage.ROLE_USER, content = message, sessionId = sessionId)
             _uiState.value = _uiState.value.copy(
                 messages = _uiState.value.messages + userMsg,
                 isStreaming = true,
-                streamContent = ""
+                streamContent = "",
+                thinkingSteps = emptyList(),
+                searchSources = emptyList()
             )
             try {
                 val flow = when (mode) {
-                    ChatMode.ASSISTANT -> chatRepo.chat(sessionId, message)
+                    ChatMode.ASSISTANT -> chatRepo.chat(sessionId, message, extraParams = extraParams)
                     ChatMode.TUTOR -> chatRepo.tutorChat(sessionId, message)
                 }
                 flow.collect { event ->
-                    when (event.type) {
-                        "chunk", "stream_text" -> {
-                            val data = sseClient.parseEventData(event.data)
-                            val text = data?.get("text")?.asString ?: data?.get("content")?.asString ?: ""
-                            _uiState.value = _uiState.value.copy(streamContent = _uiState.value.streamContent + text)
-                        }
-                        "thinking", "thinking_start", "thinking_chunk" -> {
-                            // Could show thinking indicator
-                        }
-                        "search_start", "search_result", "search_done" -> {
-                            // Could show search results
-                        }
-                        "done" -> {
-                            flushStreamBuffer()
-                        }
-                        "error" -> {
-                            flushStreamBuffer()
-                        }
-                    }
+                    handleSseEvent(event)
                 }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(isStreaming = false)
@@ -161,17 +174,89 @@ class StandaloneChatViewModel @Inject constructor(
         }
     }
 
+    private fun handleSseEvent(event: com.aura.mas.util.SseEvent) {
+        val data = sseClient.parseEventData(event.data)
+        when (event.type) {
+            "stream_text", "chunk" -> {
+                val text = data?.get("content")?.asString ?: data?.get("text")?.asString ?: ""
+                _uiState.value = _uiState.value.copy(streamContent = _uiState.value.streamContent + text)
+            }
+            "thinking", "thinking_start" -> {
+                val agent = data?.get("agent")?.asString ?: "AI"
+                val content = data?.get("content")?.asString ?: ""
+                val step = ThinkingStep(agent = agent, content = content)
+                _uiState.value = _uiState.value.copy(
+                    thinkingSteps = _uiState.value.thinkingSteps + step
+                )
+            }
+            "thinking_chunk" -> {
+                val content = data?.get("content")?.asString ?: ""
+                val steps = _uiState.value.thinkingSteps.toMutableList()
+                if (steps.isNotEmpty()) {
+                    val last = steps.last()
+                    steps[steps.size - 1] = last.copy(content = last.content + content)
+                    _uiState.value = _uiState.value.copy(thinkingSteps = steps)
+                }
+            }
+            "search_start" -> {
+                val query = data?.get("query")?.asString ?: ""
+                _uiState.value = _uiState.value.copy(isSearching = true, searchSources = emptyList())
+            }
+            "search_result" -> {
+                val title = data?.get("title")?.asString ?: ""
+                val url = data?.get("url")?.asString ?: ""
+                val snippet = data?.get("snippet")?.asString ?: ""
+                _uiState.value = _uiState.value.copy(
+                    searchSources = _uiState.value.searchSources + SearchSource(title, url, snippet)
+                )
+            }
+            "search_done" -> {
+                _uiState.value = _uiState.value.copy(isSearching = false)
+            }
+            "done" -> {
+                flushStreamBuffer()
+                viewModelScope.launch {
+                    try {
+                        val activeId = _uiState.value.activeSessionId
+                        if (activeId != null) {
+                            val messagesResult = chatRepo.getMessages(activeId)
+                            _uiState.value = _uiState.value.copy(
+                                messages = messagesResult.data?.map { it.normalize() } ?: emptyList()
+                            )
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+            "error" -> {
+                flushStreamBuffer()
+            }
+        }
+    }
+
     private fun flushStreamBuffer() {
         val content = _uiState.value.streamContent
         if (content.isNotBlank()) {
-            val msg = ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = content)
+            val msg = ChatMessage(
+                role = ChatMessage.ROLE_ASSISTANT,
+                content = content,
+                thinkings = _uiState.value.thinkingSteps,
+                searchSources = _uiState.value.searchSources
+            )
             _uiState.value = _uiState.value.copy(
                 messages = _uiState.value.messages + msg,
                 streamContent = "",
+                thinkingSteps = emptyList(),
+                searchSources = emptyList(),
+                isSearching = false,
                 isStreaming = false
             )
         } else {
-            _uiState.value = _uiState.value.copy(isStreaming = false)
+            _uiState.value = _uiState.value.copy(
+                isStreaming = false,
+                thinkingSteps = emptyList(),
+                searchSources = emptyList(),
+                isSearching = false
+            )
         }
     }
 
@@ -198,19 +283,18 @@ fun StandaloneChatScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    // Mode switcher
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         FilterChip(
                             selected = uiState.mode == ChatMode.ASSISTANT,
                             onClick = { viewModel.switchMode(ChatMode.ASSISTANT) },
-                            label = { Text("AI 助手", style = MaterialTheme.typography.labelSmall) },
+                            label = { Text("AI 助手") },
                             modifier = Modifier.height(32.dp)
                         )
                         Spacer(Modifier.width(8.dp))
                         FilterChip(
                             selected = uiState.mode == ChatMode.TUTOR,
                             onClick = { viewModel.switchMode(ChatMode.TUTOR) },
-                            label = { Text("智能辅导", style = MaterialTheme.typography.labelSmall) },
+                            label = { Text("智能辅导") },
                             modifier = Modifier.height(32.dp)
                         )
                     }
@@ -232,76 +316,92 @@ fun StandaloneChatScreen(
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // Messages
-                val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-                val totalItems = uiState.messages.size + (if (uiState.isStreaming && uiState.streamContent.isNotBlank()) 1 else 0)
-                LaunchedEffect(totalItems) {
+                val listState = rememberLazyListState()
+                val messages = uiState.messages
+                val isStreaming = uiState.isStreaming
+                val streamContent = uiState.streamContent
+
+                var input by remember { mutableStateOf("") }
+
+                // Auto-scroll to bottom
+                LaunchedEffect(messages.size, streamContent) {
+                    val totalItems = messages.size + (if (isStreaming && streamContent.isNotBlank()) 1 else 0)
                     if (totalItems > 0) {
-                        listState.animateScrollToItem(totalItems - 1)
+                        listState.scrollToItem(totalItems - 1)
                     }
                 }
 
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(vertical = 8.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(vertical = 16.dp)
                 ) {
-                    if (uiState.messages.isEmpty() && !uiState.isStreaming) {
+                    // Welcome message with quick questions
+                    if (messages.isEmpty() && !isStreaming) {
                         item {
-                            Box(Modifier.fillMaxWidth().padding(top = 100.dp), contentAlignment = Alignment.Center) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(
-                                        if (uiState.mode == ChatMode.ASSISTANT) Icons.Default.AutoAwesome else Icons.Default.School,
-                                        null, modifier = Modifier.size(48.dp),
-                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                                    )
-                                    Spacer(Modifier.height(12.dp))
-                                    Text(
-                                        if (uiState.mode == ChatMode.ASSISTANT) "开始新的对话" else "开始智能辅导",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        if (uiState.mode == ChatMode.ASSISTANT) "输入你的问题，AI助手将为你解答" else "输入你的问题，智能导师将为你辅导",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                    )
+                            WelcomeMessage(uiState.mode, onQuickQuestion = { viewModel.sendMessage(it) })
+                        }
+                    }
+
+                    // Messages
+                    items(messages, key = { "${it.sessionId}_${it.createdAt}_${it.content.take(20)}" }) { msg ->
+                        val context = androidx.compose.ui.platform.LocalContext.current
+                        MessageBubble(
+                            message = msg,
+                            mode = uiState.mode,
+                            onOpenResource = { resourceId ->
+                                android.widget.Toast.makeText(context, "打开资源 ID: $resourceId", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+
+                    // Confirm action buttons
+                    val lastMsg = messages.lastOrNull()
+                    if (lastMsg != null && lastMsg.type == "confirm" && !isStreaming) {
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(start = 40.dp, top = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { viewModel.confirmBreakdown() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("确认并生成", style = MaterialTheme.typography.labelMedium)
+                                }
+                                OutlinedButton(
+                                    onClick = { 
+                                        input = "补充说明："
+                                    },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("反馈修改", style = MaterialTheme.typography.labelMedium)
                                 }
                             }
                         }
                     }
 
-                    items(uiState.messages) { msg -> ChatBubble(msg) }
-
-                    if (uiState.isStreaming) {
+                    // Streaming content with thinking process
+                    if (isStreaming) {
                         item {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
-                                    Text("AI", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary)
-                                }
-                                Spacer(Modifier.width(8.dp))
-                                if (uiState.streamContent.isBlank()) {
-                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                }
-                            }
-                        }
-                        if (uiState.streamContent.isNotBlank()) {
-                            item {
-                                Row {
-                                    Spacer(Modifier.width(36.dp))
-                                    Surface(shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp), color = MaterialTheme.colorScheme.surfaceVariant, tonalElevation = 1.dp) {
-                                        Text(uiState.streamContent, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
-                                    }
-                                }
-                            }
+                            StreamingMessage(
+                                streamContent = streamContent,
+                                thinkingSteps = uiState.thinkingSteps,
+                                searchSources = uiState.searchSources,
+                                isSearching = uiState.isSearching,
+                                mode = uiState.mode
+                            )
                         }
                     }
                 }
 
-                // Input
+                // Input bar
                 ChatInputBar(
-                    isStreaming = uiState.isStreaming,
+                    input = input,
+                    onInputValueChange = { input = it },
+                    isStreaming = isStreaming,
                     onSend = { viewModel.sendMessage(it) },
                     onStop = { viewModel.stopGeneration() }
                 )
@@ -309,45 +409,245 @@ fun StandaloneChatScreen(
 
             // Session drawer
             if (showSessionDrawer) {
-                Surface(
-                    modifier = Modifier.fillMaxHeight().width(280.dp).align(Alignment.CenterStart),
-                    shadowElevation = 8.dp
+                SessionDrawer(
+                    sessions = currentSessions,
+                    activeSessionId = uiState.activeSessionId,
+                    mode = uiState.mode,
+                    onSelect = { viewModel.selectSession(it); showSessionDrawer = false },
+                    onDelete = { viewModel.deleteSession(it) },
+                    onNewSession = { viewModel.newSession(); showSessionDrawer = false },
+                    onClose = { showSessionDrawer = false }
+                )
+            }
+        }
+    }
+}
+
+// ── Welcome Message with Quick Questions ─────────────────────
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WelcomeMessage(mode: ChatMode, onQuickQuestion: (String) -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            Modifier.size(64.dp).clip(CircleShape)
+                .background(if (mode == ChatMode.ASSISTANT) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.tertiaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                if (mode == ChatMode.ASSISTANT) Icons.Default.AutoAwesome else Icons.Default.School,
+                null, modifier = Modifier.size(32.dp),
+                tint = if (mode == ChatMode.ASSISTANT) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        Text(
+            if (mode == ChatMode.ASSISTANT) "AI 学习助手" else "智能辅导",
+            style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            if (mode == ChatMode.ASSISTANT) "我可以帮你解答学习问题、生成学习资源、规划学习路径。" else "我会根据你的学习进度和薄弱点，提供针对性的辅导。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 32.dp)
+        )
+
+        // Quick questions
+        Spacer(Modifier.height(24.dp))
+        val quickQuestions = if (mode == ChatMode.ASSISTANT) {
+            listOf("我想学习 Python 基础", "帮我生成一些练习题", "这个知识点不太理解")
+        } else {
+            listOf("这个知识点我不太理解，能详细解释一下吗？", "给我出几道练习题", "能给我一些代码示例吗？")
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            quickQuestions.forEach { question ->
+                SuggestionChip(
+                    onClick = { onQuickQuestion(question) },
+                    label = { Text(question, style = MaterialTheme.typography.labelMedium) }
+                )
+            }
+        }
+    }
+}
+
+// ── Message Bubble ───────────────────────────────────────────
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MessageBubble(
+    message: ChatMessage,
+    mode: ChatMode,
+    onOpenResource: (Long) -> Unit
+) {
+    val isUser = message.role.equals(ChatMessage.ROLE_USER, ignoreCase = true) || message.role.equals("USER", ignoreCase = true)
+    val displayContent = remember(message.content) { parseMessageContent(message.content) }
+
+    Column {
+        // Thinking process (for assistant messages)
+        if (!isUser && message.thinkings.isNotEmpty()) {
+            ThinkingProcess(thinkings = message.thinkings, isStreaming = false)
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Search sources (for tutor messages)
+        if (!isUser && message.searchSources.isNotEmpty()) {
+            SearchSources(sources = message.searchSources)
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Message bubble
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.Top
+        ) {
+            if (!isUser) {
+                Box(
+                    Modifier.size(32.dp).clip(CircleShape)
+                        .background(if (mode == ChatMode.ASSISTANT) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column {
-                        Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                if (uiState.mode == ChatMode.ASSISTANT) "AI助手会话" else "智能辅导会话",
-                                style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold
-                            )
-                            IconButton(onClick = { showSessionDrawer = false }, modifier = Modifier.size(24.dp)) {
-                                Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
-                            }
-                        }
-                        HorizontalDivider()
-                        LazyColumn(Modifier.weight(1f)) {
-                            items(currentSessions) { session ->
-                                val isActive = session.sessionId == uiState.activeSessionId
-                                Row(
-                                    modifier = Modifier.fillMaxWidth()
-                                        .background(if (isActive) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface)
-                                        .clickable { viewModel.selectSession(session.sessionId); showSessionDrawer = false }
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        if (uiState.mode == ChatMode.ASSISTANT) Icons.Default.ChatBubbleOutline else Icons.Default.School,
-                                        null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(session.title.ifEmpty { "对话" }, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                    IconButton(onClick = { viewModel.deleteSession(session.sessionId) }, modifier = Modifier.size(20.dp)) {
-                                        Icon(Icons.Default.Delete, null, modifier = Modifier.size(14.dp))
+                    Icon(
+                        if (mode == ChatMode.ASSISTANT) Icons.Default.AutoAwesome else Icons.Default.School,
+                        null, modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+            }
+
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = if (isUser) 16.dp else 4.dp,
+                    topEnd = if (isUser) 4.dp else 16.dp,
+                    bottomStart = 16.dp,
+                    bottomEnd = 16.dp
+                ),
+                color = if (isUser) {
+                    if (mode == ChatMode.ASSISTANT) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                tonalElevation = if (isUser) 0.dp else 1.dp
+            ) {
+                if (isUser) {
+                    Text(
+                        displayContent,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                } else {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        when (message.type) {
+                            "confirm" -> {
+                                Text(displayContent, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                message.breakdown?.modules?.let { modules ->
+                                    Spacer(Modifier.height(8.dp))
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        modules.forEachIndexed { idx, mod ->
+                                            Card(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(8.dp),
+                                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                                            ) {
+                                                Column(Modifier.padding(10.dp)) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Box(
+                                                            modifier = Modifier.size(20.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(
+                                                                text = mod.moduleId ?: (idx + 1).toString(),
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = MaterialTheme.colorScheme.onPrimary
+                                                            )
+                                                        }
+                                                        Spacer(Modifier.width(8.dp))
+                                                        Text(mod.title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                                                        mod.estimatedHours?.let {
+                                                            Spacer(Modifier.weight(1f))
+                                                            Text("${it}h", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                                        }
+                                                    }
+                                                    mod.description?.let {
+                                                        Spacer(Modifier.height(4.dp))
+                                                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    }
+                                                    if (mod.resources.isNotEmpty()) {
+                                                        Spacer(Modifier.height(6.dp))
+                                                        FlowRow(
+                                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                                    ) {
+                                                        mod.resources.forEach { r ->
+                                                            val label = when (r.resourceType) {
+                                                                "quiz" -> "测验"
+                                                                "mindmap" -> "思维导图"
+                                                                "code" -> "代码示例"
+                                                                "summary" -> "总结"
+                                                                "pptx" -> "PPT"
+                                                                else -> r.resourceType
+                                                            }
+                                                            Surface(
+                                                                shape = RoundedCornerShape(4.dp),
+                                                                color = MaterialTheme.colorScheme.primaryContainer,
+                                                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                                            ) {
+                                                                Text(label, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = androidx.compose.ui.text.TextStyle(fontSize = 10.sp))
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                        TextButton(onClick = { viewModel.newSession(); showSessionDrawer = false }, modifier = Modifier.fillMaxWidth()) {
-                            Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("新建对话")
+                        "resource_generated" -> {
+                            Text(displayContent, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            if (message.resources.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    message.resources.forEach { r ->
+                                        val label = when (r.type) {
+                                            "quiz" -> "测验"
+                                            "mindmap" -> "思维导图"
+                                            "code" -> "代码示例"
+                                            "summary" -> "总结"
+                                            "pptx" -> "PPT"
+                                            else -> r.type
+                                        }
+                                        Button(
+                                            onClick = { onOpenResource(r.id) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                            ),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Icon(Icons.Default.Book, null, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("${r.title} ($label)", style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        else -> {
+                            MarkdownRenderer(content = displayContent)
                         }
                     }
                 }
@@ -355,32 +655,175 @@ fun StandaloneChatScreen(
         }
     }
 }
+}
+
+// ── Streaming Message ────────────────────────────────────────
 
 @Composable
-private fun ChatBubble(message: ChatMessage) {
-    val isUser = message.role == ChatMessage.ROLE_USER
-    val displayContent = remember(message.content) { parseMessageContent(message.content) }
+private fun StreamingMessage(
+    streamContent: String,
+    thinkingSteps: List<ThinkingStep>,
+    searchSources: List<SearchSource>,
+    isSearching: Boolean,
+    mode: ChatMode
+) {
+    Column {
+        // Thinking process
+        if (thinkingSteps.isNotEmpty()) {
+            ThinkingProcess(thinkings = thinkingSteps, isStreaming = true)
+            Spacer(Modifier.height(8.dp))
+        }
 
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
-        if (!isUser) {
-            Box(Modifier.size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
-                Text("AI", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary)
+        // Search sources
+        if (searchSources.isNotEmpty() || isSearching) {
+            SearchSources(sources = searchSources, isSearching = isSearching)
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Streaming content
+        Row(verticalAlignment = Alignment.Top) {
+            Box(
+                Modifier.size(32.dp).clip(CircleShape)
+                    .background(if (mode == ChatMode.ASSISTANT) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    if (mode == ChatMode.ASSISTANT) Icons.Default.AutoAwesome else Icons.Default.School,
+                    null, modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onPrimary
+                )
             }
             Spacer(Modifier.width(8.dp))
-        }
-        Surface(
-            shape = RoundedCornerShape(topStart = if (isUser) 16.dp else 4.dp, topEnd = if (isUser) 4.dp else 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
-            color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-            tonalElevation = if (isUser) 0.dp else 1.dp
-        ) {
-            if (isUser) {
-                Text(displayContent, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimary)
+            if (streamContent.isBlank()) {
+                // Typing indicator
+                Surface(
+                    shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        repeat(3) {
+                            Box(Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)))
+                        }
+                    }
+                }
             } else {
-                com.aura.mas.ui.components.resource.MarkdownRenderer(content = displayContent, modifier = Modifier.padding(12.dp))
+                Surface(
+                    shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    MarkdownRenderer(
+                        content = streamContent,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
             }
         }
     }
 }
+
+@Composable
+private fun ChatInputBar(
+    input: String,
+    onInputValueChange: (String) -> Unit,
+    isStreaming: Boolean,
+    onSend: (String) -> Unit,
+    onStop: () -> Unit
+) {
+    Surface(shadowElevation = 8.dp) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = onInputValueChange,
+                placeholder = { Text("输入问题...") },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(24.dp),
+                maxLines = 4,
+                enabled = !isStreaming
+            )
+            Spacer(Modifier.width(8.dp))
+            if (isStreaming) {
+                FilledIconButton(onClick = onStop, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Stop, "停止")
+                }
+            } else {
+                FilledIconButton(
+                    onClick = { if (input.isNotBlank()) { onSend(input); onInputValueChange("") } },
+                    enabled = input.isNotBlank(),
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Send, "发送")
+                }
+            }
+        }
+    }
+}
+
+// ── Session Drawer ───────────────────────────────────────────
+
+@Composable
+private fun SessionDrawer(
+    sessions: List<ChatSession>,
+    activeSessionId: String?,
+    mode: ChatMode,
+    onSelect: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onNewSession: () -> Unit,
+    onClose: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxHeight().width(300.dp),
+        shadowElevation = 8.dp
+    ) {
+        Column {
+            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (mode == ChatMode.ASSISTANT) "AI助手会话" else "智能辅导会话",
+                    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold
+                )
+                IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
+                }
+            }
+            HorizontalDivider()
+            LazyColumn(Modifier.weight(1f)) {
+                items(sessions) { session ->
+                    val isActive = session.sessionId == activeSessionId
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .background(if (isActive) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                            .clickable { onSelect(session.sessionId) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (mode == ChatMode.ASSISTANT) Icons.Default.ChatBubbleOutline else Icons.Default.School,
+                            null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(session.title.ifEmpty { "对话" }, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            session.updatedAt.takeIf { it.isNotBlank() }?.let {
+                                Text(it.take(10), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        IconButton(onClick = { onDelete(session.sessionId) }, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Delete, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
+                        }
+                    }
+                }
+            }
+            HorizontalDivider()
+            TextButton(onClick = onNewSession, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("新建对话")
+            }
+        }
+    }
+}
+
+// ── Helpers ──────────────────────────────────────────────────
 
 private fun parseMessageContent(content: String): String {
     if (content.isBlank()) return ""
@@ -395,9 +838,6 @@ private fun parseMessageContent(content: String): String {
                 obj.get("content")?.asString?.let { if (it.isNotBlank()) return it }
                 obj.get("text")?.asString?.let { if (it.isNotBlank()) return it }
                 obj.get("message")?.asString?.let { if (it.isNotBlank()) return it }
-                obj.getAsJsonObject("data")?.let { d ->
-                    d.get("content")?.asString?.let { if (it.isNotBlank()) return it }
-                }
                 trimmed
             }
             json.isJsonArray -> {
@@ -409,28 +849,4 @@ private fun parseMessageContent(content: String): String {
             else -> trimmed
         }
     } catch (_: Exception) { trimmed }
-}
-
-@Composable
-private fun ChatInputBar(isStreaming: Boolean, onSend: (String) -> Unit, onStop: () -> Unit) {
-    var input by remember { mutableStateOf("") }
-    Surface(shadowElevation = 8.dp) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = input, onValueChange = { input = it },
-                placeholder = { Text("输入问题...") },
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(24.dp),
-                singleLine = true
-            )
-            Spacer(Modifier.width(8.dp))
-            if (isStreaming) {
-                FilledIconButton(onClick = onStop) { Icon(Icons.Default.Stop, "停止") }
-            } else {
-                FilledIconButton(onClick = { if (input.isNotBlank()) { onSend(input); input = "" } }, enabled = input.isNotBlank()) {
-                    Icon(Icons.AutoMirrored.Filled.Send, "发送")
-                }
-            }
-        }
-    }
 }

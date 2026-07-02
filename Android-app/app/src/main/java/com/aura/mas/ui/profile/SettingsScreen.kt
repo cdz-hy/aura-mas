@@ -28,6 +28,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit,
     onPersonalInfoClick: () -> Unit = {},
+    onCacheClick: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     var showLogoutDialog by remember { mutableStateOf(false) }
@@ -49,6 +50,8 @@ fun SettingsScreen(
                     SettingsItem(Icons.Default.Palette, "主题设置", "切换界面主题") { showThemeDialog = true }
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp))
                     SettingsItem(Icons.Default.Language, "语言设置", "简体中文") { }
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                    SettingsItem(Icons.Default.Storage, "缓存管理", "清理本地缓存数据") { onCacheClick() }
                 }
             }
 

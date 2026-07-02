@@ -49,7 +49,7 @@ class AnalyticsViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = AnalyticsUiState(isLoading = true)
             try {
-                val result = api.getAnalytics()
+                val result = kotlinx.coroutines.withTimeout(15_000L) { api.getAnalytics() }
                 if (result.isSuccess && result.data != null) {
                     _uiState.value = AnalyticsUiState(isLoading = false, data = result.data)
                 } else {

@@ -79,7 +79,12 @@ class ChatRepository @Inject constructor(
     /**
      * Send a message via AI assistant chat (SSE to /api/ai/chat).
      */
-    suspend fun chat(sessionId: String, message: String, planId: Long? = null): Flow<SseEvent> {
+    suspend fun chat(
+        sessionId: String,
+        message: String,
+        planId: Long? = null,
+        extraParams: Map<String, String>? = null
+    ): Flow<SseEvent> {
         val ticket = api.issueTicket().data ?: throw Exception("Failed to get ticket")
         val baseUrl = com.aura.mas.util.Constants.PYTHON_BASE_URL
         val url = buildString {
@@ -88,6 +93,9 @@ class ChatRepository @Inject constructor(
             append("&message=${java.net.URLEncoder.encode(message, "UTF-8")}")
             planId?.let { append("&plan_id=$it") }
             append("&ticket=$ticket")
+            extraParams?.forEach { (k, v) ->
+                append("&$k=${java.net.URLEncoder.encode(v, "UTF-8")}")
+            }
         }
         return sseClient.connect(url)
     }
