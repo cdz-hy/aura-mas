@@ -179,10 +179,22 @@ data class LearningResource(
             }
             is String -> {
                 try {
-                    val json = com.google.gson.Gson().fromJson(moduleData, com.google.gson.JsonObject::class.java)
+                    var cleanStr = moduleData.trim()
+                    if (cleanStr.startsWith("\"") && cleanStr.endsWith("\"") && cleanStr.length >= 2) {
+                        try {
+                            cleanStr = com.google.gson.Gson().fromJson(cleanStr, String::class.java) ?: cleanStr
+                        } catch (_: Exception) {}
+                    }
+                    val json = com.google.gson.Gson().fromJson(cleanStr, com.google.gson.JsonObject::class.java)
                     jsonToMap(json)
                 } catch (e: Exception) {
-                    mapOf("content" to moduleData)
+                    var cleanStr = moduleData
+                    if (cleanStr.startsWith("\"") && cleanStr.endsWith("\"") && cleanStr.length >= 2) {
+                        try {
+                            cleanStr = com.google.gson.Gson().fromJson(cleanStr, String::class.java) ?: cleanStr
+                        } catch (_: Exception) {}
+                    }
+                    mapOf("content" to cleanStr)
                 }
             }
             is JsonElement -> {

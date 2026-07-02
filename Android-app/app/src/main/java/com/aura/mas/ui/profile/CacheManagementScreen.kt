@@ -59,12 +59,16 @@ class CacheViewModel @Inject constructor(
             try {
                 val plans = planDao.getAllPlansSync()
                 val notes = noteDao.getAllNotesSync()
+                val resources = resourceDao.getAllResourcesSync()
+                val flashcards = flashcardDao.getAllFlashcardsSync()
                 val dbSize = context.getDatabasePath("aura_database").length()
 
                 _uiState.value = CacheUiState(
                     isLoading = false,
                     plans = CacheInfo("学习计划", Icons.Default.MenuBook, plans.size),
+                    resources = CacheInfo("学习资源", Icons.Default.Description, resources.size),
                     notes = CacheInfo("笔记", Icons.Default.StickyNote2, notes.size),
+                    flashcards = CacheInfo("闪卡", Icons.Default.Style, flashcards.size),
                     totalSize = formatSize(dbSize)
                 )
             } catch (e: Exception) {
@@ -82,7 +86,7 @@ class CacheViewModel @Inject constructor(
 
     fun clearResources() {
         viewModelScope.launch {
-            // Resources are tied to plans, clearing plans clears resources
+            resourceDao.deleteAll()
             loadCacheInfo()
         }
     }
@@ -104,6 +108,7 @@ class CacheViewModel @Inject constructor(
     fun clearAll() {
         viewModelScope.launch {
             planDao.deleteAll()
+            resourceDao.deleteAll()
             noteDao.deleteAll()
             flashcardDao.deleteAll()
             loadCacheInfo()
@@ -164,7 +169,9 @@ fun CacheManagementScreen(
             Text("分类缓存", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
 
             CacheItemCard(uiState.plans, "清除", viewModel::clearPlans)
+            CacheItemCard(uiState.resources, "清除", viewModel::clearResources)
             CacheItemCard(uiState.notes, "清除", viewModel::clearNotes)
+            CacheItemCard(uiState.flashcards, "清除", viewModel::clearFlashcards)
 
             Spacer(Modifier.weight(1f))
 

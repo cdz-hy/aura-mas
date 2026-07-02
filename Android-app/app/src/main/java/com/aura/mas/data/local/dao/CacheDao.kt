@@ -50,6 +50,12 @@ interface ResourceDao {
 
     @Query("DELETE FROM cached_resources WHERE planId = :planId")
     suspend fun deleteByPlan(planId: Long)
+
+    @Query("SELECT * FROM cached_resources")
+    suspend fun getAllResourcesSync(): List<CachedResource>
+
+    @Query("DELETE FROM cached_resources")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -95,6 +101,9 @@ interface FlashcardDao {
 
     @Query("DELETE FROM cached_flashcards")
     suspend fun deleteAll()
+
+    @Query("SELECT * FROM cached_flashcards")
+    suspend fun getAllFlashcardsSync(): List<CachedFlashcard>
 }
 
 @Dao

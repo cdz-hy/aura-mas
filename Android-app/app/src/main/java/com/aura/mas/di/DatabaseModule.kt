@@ -23,7 +23,9 @@ object DatabaseModule {
             context,
             AuraDatabase::class.java,
             Constants.DATABASE_NAME
-        ).build()
+        )
+        .fallbackToDestructiveMigration()  // cache-only data, safe to clear on schema change
+        .build()
     }
 
     @Provides

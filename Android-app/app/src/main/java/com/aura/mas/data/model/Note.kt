@@ -7,6 +7,8 @@ data class Note(
     @SerializedName("userId") val userId: Long = 0,
     @SerializedName("noteName") val noteName: String = "",
     val content: String = "",
+    val tags: String? = null,                // mirrors Java Note.tags
+    @SerializedName("isPinned") val isPinned: Int = 0, // mirrors Java Note.isPinned
     @SerializedName("isDeleted") val isDeleted: Int = 0,
     val createdAt: String? = null,
     val updatedAt: String? = null

@@ -44,6 +44,7 @@ import com.google.gson.JsonObject
 @Composable
 fun ResourceViewer(
     resource: LearningResource,
+    onNavigateToQuiz: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val moduleData = remember(resource.moduleData) { resource.getParsedModuleData() }
@@ -70,7 +71,7 @@ fun ResourceViewer(
 
         // Content by type (matching Vue's v-if chain)
         when (resource.moduleType) {
-            "quiz" -> QuizContent(moduleData)
+            "quiz" -> QuizContent(resource.id, moduleData, onNavigateToQuiz)
             "text", "document", "reading" -> MarkdownContent(moduleData)
             "code" -> CodeContent(moduleData)
             "mindmap" -> MindmapContent(moduleData)
@@ -86,7 +87,11 @@ fun ResourceViewer(
 // ── Quiz ──────────────────────────────────────────────────────
 
 @Composable
-private fun QuizContent(moduleData: Map<String, Any>) {
+private fun QuizContent(
+    resourceId: Long,
+    moduleData: Map<String, Any>,
+    onNavigateToQuiz: (Long) -> Unit
+) {
     val questions = remember(moduleData) { parseQuizQuestions(moduleData) }
 
     if (questions.isEmpty()) {
@@ -94,7 +99,69 @@ private fun QuizContent(moduleData: Map<String, Any>) {
         return
     }
 
+    val latestResult = remember(moduleData) { moduleData["latestResult"] as? Map<*, *> }
+
     Column {
+        if (latestResult != null) {
+            val score = (latestResult["score"] as? Number)?.toInt() ?: 0
+            val total = (latestResult["total"] as? Number)?.toInt() ?: 0
+            val correct = (latestResult["correct"] as? Number)?.toInt() ?: 0
+
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("答题结果报告", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Spacer(Modifier.height(4.dp))
+                        Text("得分: $score / $total 分 (答对 $correct 题)", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.9f))
+                    }
+                    Button(
+                        onClick = { onNavigateToQuiz(resourceId) },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                    ) {
+                        Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("重新测试")
+                    }
+                }
+            }
+        } else {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("智能测验题目已就绪", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Spacer(Modifier.height(4.dp))
+                        Text("共 ${questions.size} 题 · 支持 AI 实时判分", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
+                    }
+                    Button(
+                        onClick = { onNavigateToQuiz(resourceId) },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("开始答题")
+                    }
+                }
+            }
+        }
+
+        Text("题目列表回顾:", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 4.dp))
+        Spacer(Modifier.height(4.dp))
         Text("共 ${questions.size} 题", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
         questions.forEachIndexed { index, q ->

@@ -22,8 +22,8 @@ fun QuizQuestionView(
     question: QuizQuestion,
     questionIndex: Int,
     totalQuestions: Int,
-    selectedAnswer: String?,
-    onAnswer: (String) -> Unit,
+    selectedAnswer: Any?,
+    onAnswer: (Any) -> Unit,
     onNext: () -> Unit,
     onPrev: () -> Unit,
     onSubmit: () -> Unit,
@@ -31,7 +31,18 @@ fun QuizQuestionView(
     showResult: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
+    val scrollState = rememberScrollState()
+
+    // Reset scroll position when switching questions
+    LaunchedEffect(questionIndex) {
+        scrollState.scrollTo(0)
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .verticalScroll(scrollState)
+    ) {
         // Progress
         LinearProgressIndicator(
             progress = { (questionIndex + 1).toFloat() / totalQuestions },
@@ -129,7 +140,7 @@ fun QuizQuestionView(
 
         // Navigation
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             OutlinedButton(
@@ -172,18 +183,28 @@ fun QuizQuestionView(
 @Composable
 private fun SingleChoiceOptions(
     question: QuizQuestion,
-    selectedAnswer: String?,
-    onAnswer: (String) -> Unit,
+    selectedAnswer: Any?,
+    onAnswer: (Any) -> Unit,
     showResult: Boolean
 ) {
     val options = question.options ?: listOf("A", "B", "C", "D")
-    options.forEach { option ->
-        val isSelected = selectedAnswer == option
-        val isCorrect = showResult && option == question.correctAnswer
-        val isWrong = showResult && isSelected && option != question.correctAnswer
+    val selectedIndex = when (selectedAnswer) {
+        is Number -> selectedAnswer.toInt()
+        is String -> options.indexOf(selectedAnswer)
+        else -> -1
+    }
+
+    options.forEachIndexed { index, option ->
+        val isSelected = selectedIndex == index
+        val isCorrect = showResult && (
+            question.correctAnswer == option || 
+            question.correctAnswer == index.toString() || 
+            (question.correctAnswer.toIntOrNull() == index)
+        )
+        val isWrong = showResult && isSelected && !isCorrect
 
         Card(
-            onClick = { if (!showResult) onAnswer(option) },
+            onClick = { if (!showResult) onAnswer(index) },
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(
@@ -204,7 +225,7 @@ private fun SingleChoiceOptions(
             ) {
                 RadioButton(
                     selected = isSelected,
-                    onClick = { if (!showResult) onAnswer(option) },
+                    onClick = { if (!showResult) onAnswer(index) },
                     enabled = !showResult
                 )
                 Spacer(Modifier.width(8.dp))
@@ -225,20 +246,30 @@ private fun SingleChoiceOptions(
 @Composable
 private fun MultipleChoiceOptions(
     question: QuizQuestion,
-    selectedAnswer: String?,
-    onAnswer: (String) -> Unit,
+    selectedAnswer: Any?,
+    onAnswer: (Any) -> Unit,
     showResult: Boolean
 ) {
     val options = question.options ?: listOf("A", "B", "C", "D")
-    val selectedSet = selectedAnswer?.split(",")?.toSet() ?: emptySet()
+    val selectedIndices = remember(selectedAnswer) {
+        when (selectedAnswer) {
+            is List<*> -> selectedAnswer.mapNotNull { (it as? Number)?.toInt() }.toSet()
+            is String -> {
+                selectedAnswer.split(",")
+                    .mapNotNull { it.trim().toIntOrNull() ?: options.indexOf(it).takeIf { idx -> idx >= 0 } }
+                    .toSet()
+            }
+            else -> emptySet()
+        }
+    }
 
-    options.forEach { option ->
-        val isSelected = selectedSet.contains(option)
+    options.forEachIndexed { index, option ->
+        val isSelected = selectedIndices.contains(index)
         Card(
             onClick = {
                 if (!showResult) {
-                    val newSet = if (isSelected) selectedSet - option else selectedSet + option
-                    onAnswer(newSet.joinToString(","))
+                    val newSet = if (isSelected) selectedIndices - index else selectedIndices + index
+                    onAnswer(newSet.toList().sorted())
                 }
             },
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -256,8 +287,8 @@ private fun MultipleChoiceOptions(
                     checked = isSelected,
                     onCheckedChange = { checked ->
                         if (!showResult) {
-                            val newSet = if (checked) selectedSet + option else selectedSet - option
-                            onAnswer(newSet.joinToString(","))
+                            val newSet = if (checked) selectedIndices + index else selectedIndices - index
+                            onAnswer(newSet.toList().sorted())
                         }
                     },
                     enabled = !showResult
@@ -272,12 +303,13 @@ private fun MultipleChoiceOptions(
 @Composable
 private fun TextInputAnswer(
     question: QuizQuestion,
-    selectedAnswer: String?,
-    onAnswer: (String) -> Unit,
+    selectedAnswer: Any?,
+    onAnswer: (Any) -> Unit,
     showResult: Boolean
 ) {
+    val text = (selectedAnswer as? String) ?: ""
     OutlinedTextField(
-        value = selectedAnswer ?: "",
+        value = text,
         onValueChange = { if (!showResult) onAnswer(it) },
         label = { Text(when (question.questionType) {
             QuizQuestion.TYPE_FILL_BLANK -> "填入答案"

@@ -6,6 +6,7 @@ import com.aura.mas.data.local.dao.ResourceDao
 import com.aura.mas.data.local.entity.CachedPlan
 import com.aura.mas.data.local.entity.CachedResource
 import com.aura.mas.data.model.*
+import com.google.gson.Gson
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
@@ -77,6 +78,11 @@ class PlanRepository @Inject constructor(
 
     fun getCachedPlans(): Flow<List<CachedPlan>> = planDao.getAllPlans()
 
+    /** Returns cached plan as domain object immediately. */
+    suspend fun getCachedPlanDomain(planId: Long): LearningPlan? =
+        planDao.getPlanById(planId)?.toDomain()
+
+
     fun getResources(planId: Long): Flow<ApiResponse<List<LearningResource>>> = flow {
         try {
             val response = api.getResourcesByPlan(planId)
@@ -99,6 +105,10 @@ class PlanRepository @Inject constructor(
 
     fun getCachedResources(planId: Long): Flow<List<CachedResource>> =
         resourceDao.getResourcesByPlan(planId)
+
+    /** Returns cached resources as domain objects immediately (for Cache-First display). */
+    suspend fun getCachedResourcesDomain(planId: Long): List<LearningResource> =
+        resourceDao.getResourcesByPlanSync(planId).map { it.toDomain() }
 
     suspend fun dispatchTask(planId: Long, moduleOrder: Int, resourceType: String): ApiResponse<ResourceGenerationTask> {
         return api.dispatchTask(
@@ -138,16 +148,15 @@ class PlanRepository @Inject constructor(
         id = id, planId = planId, moduleType = moduleType,
         moduleOrder = moduleOrder, moduleName = getModuleName(),
         resourceTitle = getResourceTitle(), resourceType = getResourceType(),
-        content = getContent(), status = status
+        // Store the complete moduleData JSON so offline restore is lossless
+        moduleDataJson = try { Gson().toJson(moduleData) } catch (_: Exception) { null },
+        status = status
     )
 
     private fun CachedResource.toDomain() = LearningResource(
         id = id, planId = planId, moduleType = moduleType,
         moduleOrder = moduleOrder, status = status,
-        moduleData = mapOf(
-            "title" to resourceTitle,
-            "module_title" to moduleName,
-            "content" to (content ?: "")
-        )
+        // Pass the raw JSON string directly – LearningResource.getParsedModuleData() handles String type
+        moduleData = moduleDataJson ?: ""
     )
 }

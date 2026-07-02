@@ -13,7 +13,7 @@ import com.aura.mas.data.local.entity.*
         CachedFlashcard::class,
         CachedUser::class
     ],
-    version = 1,
+    version = 2,   // bumped: content→moduleDataJson + storagePath/version/tags/isPinned/reviewCount
     exportSchema = false
 )
 abstract class AuraDatabase : RoomDatabase() {

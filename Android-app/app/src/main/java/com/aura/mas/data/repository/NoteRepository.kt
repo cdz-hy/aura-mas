@@ -94,11 +94,13 @@ class NoteRepository @Inject constructor(
 
     private fun Note.toCached() = CachedNote(
         id = id, userId = userId, noteName = noteName,
-        content = content, createdAt = createdAt, updatedAt = updatedAt
+        content = content, tags = tags, isPinned = isPinned,
+        createdAt = createdAt, updatedAt = updatedAt
     )
 
     private fun CachedNote.toDomain() = Note(
         id = id, userId = userId, noteName = noteName,
-        content = content, createdAt = createdAt, updatedAt = updatedAt
+        content = content, tags = tags, isPinned = isPinned,
+        createdAt = createdAt, updatedAt = updatedAt
     )
 }

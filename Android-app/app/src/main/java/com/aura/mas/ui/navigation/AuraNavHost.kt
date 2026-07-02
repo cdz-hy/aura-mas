@@ -106,7 +106,8 @@ fun AuraNavHost() {
         ) {
             PlanDetailScreen(
                 planId = it.arguments?.getLong("planId") ?: 0L,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onNavigateToQuiz = { resourceId -> navController.navigate(NavRoutes.quizPlayer(resourceId)) }
             )
         }
         composable(

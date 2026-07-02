@@ -153,6 +153,10 @@ fun NoteListScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
+    LaunchedEffect(Unit) {
+        viewModel.loadNotes()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(

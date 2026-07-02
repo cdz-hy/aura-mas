@@ -127,14 +127,18 @@ class DashboardViewModel @Inject constructor(
 
                 loadAiGreeting()
             } catch (e: Exception) {
-                // Silent fail - cached data is already shown
-                _uiState.value = _uiState.value.copy(isRefreshing = false)
-                // Schedule retry if we have cached data (user is seeing stale data)
                 if (cachedPlans.isNotEmpty()) {
+                    _uiState.value = _uiState.value.copy(isRefreshing = false)
                     retryJob = viewModelScope.launch {
                         kotlinx.coroutines.delay(30_000L) // Retry after 30 seconds
                         loadDashboardInternal()
                     }
+                } else {
+                    _uiState.value = DashboardUiState(
+                        isLoading = false,
+                        isRefreshing = false,
+                        error = e.message ?: "网络连接失败，请检查网络设置"
+                    )
                 }
             }
         }

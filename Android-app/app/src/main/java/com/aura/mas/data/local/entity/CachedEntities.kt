@@ -15,7 +15,10 @@ data class CachedPlan(
     val cachedAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "cached_resources")
+@Entity(
+    tableName = "cached_resources",
+    indices = [androidx.room.Index(value = ["planId"])]
+)
 data class CachedResource(
     @PrimaryKey val id: Long,
     val planId: Long,
@@ -24,8 +27,11 @@ data class CachedResource(
     val moduleName: String,
     val resourceTitle: String,
     val resourceType: String,
-    val content: String?,
+    /** Full JSON string of the resource's moduleData – stored intact for lossless offline display */
+    val moduleDataJson: String?,
     val status: Int,
+    val storagePath: String? = null,  // mirrors Java entity
+    val version: Int = 0,             // mirrors Java entity
     val cachedAt: Long = System.currentTimeMillis()
 )
 
@@ -35,6 +41,8 @@ data class CachedNote(
     val userId: Long,
     val noteName: String,
     val content: String,
+    val tags: String? = null,         // mirrors Java Note.tags
+    val isPinned: Int = 0,            // mirrors Java Note.isPinned
     val createdAt: String?,
     val updatedAt: String?,
     val cachedAt: Long = System.currentTimeMillis()
@@ -51,6 +59,7 @@ data class CachedFlashcard(
     val nextReviewAt: String?,
     val easeFactor: Double,
     val interval: Int,
+    val reviewCount: Int = 0,         // mirrors Java Flashcard.reviewCount
     val cachedAt: Long = System.currentTimeMillis()
 )
 

@@ -86,39 +86,78 @@ class PlanDetailViewModel @Inject constructor(
     fun loadPlan(id: Long) {
         planId = id
         viewModelScope.launch {
-            _uiState.value = PlanDetailUiState(isLoading = true)
-            try {
-                val planResult = planRepo.getPlan(id)
-                val resourcesResult = planRepo.getResources(id).first()
-                val progressResult = planRepo.getProgress(id)
-
-                val resources = resourcesResult.data ?: emptyList()
-                val defaultSelected = _uiState.value.selectedResource 
-                    ?: resources.firstOrNull { it.status >= LearningResource.STATUS_READY } 
-                    ?: resources.firstOrNull()
-
+            // ── Step 1: Immediately show cached data (zero-wait) ──────────────────
+            val cachedResources = planRepo.getCachedResourcesDomain(id)
+            val cachedPlan = planRepo.getCachedPlanDomain(id)
+            if (cachedResources.isNotEmpty() || cachedPlan != null) {
+                val defaultSelected = cachedResources
+                    .firstOrNull { it.status >= LearningResource.STATUS_READY }
+                    ?: cachedResources.firstOrNull()
                 _uiState.value = PlanDetailUiState(
-                    plan = planResult.data,
-                    resources = resources,
+                    plan = cachedPlan,
+                    resources = cachedResources,
                     selectedResource = defaultSelected,
-                    progress = progressResult.data ?: emptyList(),
-                    isLoading = false
+                    isLoading = false  // ← immediately visible, no spinner
                 )
+            } else {
+                _uiState.value = PlanDetailUiState(isLoading = true)
+            }
+
+            // ── Step 2: Refresh from network in background ─────────────────────────
+            try {
+                val resourcesResult = planRepo.getResources(id).first()
+                val freshResources = resourcesResult.data ?: cachedResources
+                
+                // Stop loading spinner regardless of whether resource list is empty or not
+                _uiState.value = _uiState.value.copy(isLoading = false)
+
+                if (freshResources.isNotEmpty()) {
+                    // Keep currently selected resource if it still exists
+                    val currentSelectedId = _uiState.value.selectedResource?.id
+                    val freshSelected = freshResources.firstOrNull { it.id == currentSelectedId }
+                        ?: freshResources.firstOrNull { it.status >= LearningResource.STATUS_READY }
+                        ?: freshResources.firstOrNull()
+                    _uiState.value = _uiState.value.copy(
+                        resources = freshResources,
+                        selectedResource = freshSelected
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        resources = emptyList(),
+                        selectedResource = null
+                    )
+                }
+
+                val progressResult = planRepo.getProgress(id)
+                _uiState.value = _uiState.value.copy(
+                    progress = progressResult.data ?: emptyList()
+                )
+
+                // Reload plan metadata in case title/status changed
+                val freshPlanResult = planRepo.getPlan(id)
+                if (freshPlanResult.isSuccess) {
+                    _uiState.value = _uiState.value.copy(plan = freshPlanResult.data)
+                }
 
                 loadSessions()
 
                 // Check for stuck resources (status=1 generating)
+                val resources = _uiState.value.resources
                 resources.filter { it.status == LearningResource.STATUS_GENERATING }.forEach { res ->
                     try {
-                        val taskResult = api.getTaskByResource(res.id)
-                        // Task exists and is running - will be updated via SSE
+                        api.getTaskByResource(res.id)
                     } catch (_: Exception) {}
                 }
             } catch (e: Exception) {
-                _uiState.value = PlanDetailUiState(error = e.message, isLoading = false)
+                // Network failed – cached content is already shown, just surface the error lightly
+                if (cachedResources.isEmpty()) {
+                    _uiState.value = PlanDetailUiState(error = e.message, isLoading = false)
+                }
+                // else: silently keep the cached content on screen
             }
         }
     }
+
 
     private fun loadSessions() {
         viewModelScope.launch {
@@ -311,6 +350,7 @@ class PlanDetailViewModel @Inject constructor(
 fun PlanDetailScreen(
     planId: Long,
     onBack: () -> Unit,
+    onNavigateToQuiz: (Long) -> Unit,
     viewModel: PlanDetailViewModel = hiltViewModel()
 ) {
     LaunchedEffect(planId) { viewModel.loadPlan(planId) }
@@ -377,7 +417,10 @@ fun PlanDetailScreen(
                 Column(
                     modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
                 ) {
-                    com.aura.mas.ui.components.resource.ResourceViewer(resource = selected)
+                    com.aura.mas.ui.components.resource.ResourceViewer(
+                        resource = selected,
+                        onNavigateToQuiz = onNavigateToQuiz
+                    )
                 }
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

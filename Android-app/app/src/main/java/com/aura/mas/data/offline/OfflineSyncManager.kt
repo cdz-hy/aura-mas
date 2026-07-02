@@ -37,7 +37,9 @@ class OfflineSyncWorker @AssistedInject constructor(
             if (notes.isSuccess && notes.data != null) {
                 noteDao.deleteAll()
                 noteDao.insertAll(notes.data.records.map {
-                    CachedNote(it.id, it.userId, it.noteName, it.content, it.createdAt, it.updatedAt)
+                    CachedNote(it.id, it.userId, it.noteName, it.content,
+                        tags = it.tags, isPinned = it.isPinned,
+                        createdAt = it.createdAt, updatedAt = it.updatedAt)
                 })
             }
 
@@ -47,7 +49,13 @@ class OfflineSyncWorker @AssistedInject constructor(
                 if (resources.isSuccess && resources.data != null) {
                     resourceDao.deleteByPlan(plan.id)
                     resourceDao.insertAll(resources.data.map {
-                        CachedResource(it.id, it.planId, it.moduleType, it.moduleOrder, it.getModuleName(), it.getResourceTitle(), it.getResourceType(), it.getContent(), it.status)
+                        CachedResource(
+                            it.id, it.planId, it.moduleType, it.moduleOrder,
+                            it.getModuleName(), it.getResourceTitle(), it.getResourceType(),
+                            moduleDataJson = try { com.google.gson.Gson().toJson(it.moduleData) } catch (_: Exception) { null },
+                            status = it.status,
+                            storagePath = it.storagePath, version = it.version
+                        )
                     })
                 }
             }

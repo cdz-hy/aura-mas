@@ -102,24 +102,29 @@ class OfflineCacheManager @Inject constructor(
 
     private fun CachedResource.toDomain() = LearningResource(
         id = id, planId = planId, moduleType = moduleType,
-        moduleOrder = moduleOrder, status = status
+        moduleOrder = moduleOrder, status = status,
+        storagePath = storagePath, version = version,
+        moduleData = moduleDataJson ?: ""
     )
 
     private fun LearningResource.toCached() = CachedResource(
         id = id, planId = planId, moduleType = moduleType,
         moduleOrder = moduleOrder, moduleName = getModuleName(),
         resourceTitle = getResourceTitle(), resourceType = getResourceType(),
-        content = getContent(), status = status
+        moduleDataJson = try { com.google.gson.Gson().toJson(moduleData) } catch (_: Exception) { null },
+        status = status, storagePath = storagePath, version = version
     )
 
     private fun CachedNote.toDomain() = Note(
         id = id, userId = userId, noteName = noteName,
-        content = content, createdAt = createdAt, updatedAt = updatedAt
+        content = content, tags = tags, isPinned = isPinned,
+        createdAt = createdAt, updatedAt = updatedAt
     )
 
     private fun Note.toCached() = CachedNote(
         id = id, userId = userId, noteName = noteName,
-        content = content, createdAt = createdAt, updatedAt = updatedAt
+        content = content, tags = tags, isPinned = isPinned,
+        createdAt = createdAt, updatedAt = updatedAt
     )
 
     private fun CachedFlashcard.toDomain() = Flashcard(
@@ -131,7 +136,8 @@ class OfflineCacheManager @Inject constructor(
     private fun Flashcard.toCached() = CachedFlashcard(
         id = id, userId = userId, noteId = noteId,
         question = question, answer = answer, difficulty = difficulty,
-        nextReviewAt = nextReviewAt, easeFactor = easeFactor, interval = interval
+        nextReviewAt = nextReviewAt, easeFactor = easeFactor, interval = interval,
+        reviewCount = 0  // not exposed in Android model, default 0
     )
 
     private fun CachedUser.toDomain() = User(
