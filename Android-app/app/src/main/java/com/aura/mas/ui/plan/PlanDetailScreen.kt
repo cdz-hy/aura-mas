@@ -274,7 +274,7 @@ class PlanDetailViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val task = api.getTaskByResource(resourceId)
-                if (task.code == 0 && task.data != null) {
+                if (task.isSuccess && task.data != null) {
                     api.retryTask(task.data.id)
                 }
             } catch (_: Exception) {}

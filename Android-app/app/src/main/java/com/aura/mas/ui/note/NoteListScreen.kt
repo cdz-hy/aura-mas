@@ -12,7 +12,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -37,7 +41,8 @@ data class NoteListUiState(
 
 @HiltViewModel
 class NoteListViewModel @Inject constructor(
-    private val noteRepo: NoteRepository
+    private val noteRepo: NoteRepository,
+    private val api: com.aura.mas.data.api.ApiService
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(NoteListUiState())
     val uiState: StateFlow<NoteListUiState> = _uiState.asStateFlow()
@@ -48,30 +53,70 @@ class NoteListViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = NoteListUiState(isLoading = true)
             try {
-                noteRepo.getNotes().collect { result ->
-                    if (result.code == 0) {
-                        _uiState.value = NoteListUiState(isLoading = false, notes = result.data?.records ?: emptyList())
-                    } else {
-                        _uiState.value = NoteListUiState(isLoading = false, error = result.message.ifEmpty { "获取数据失败" })
-                    }
+                val result = api.getNotes(size = 50)
+                if (result.isSuccess && result.data != null) {
+                    _uiState.value = NoteListUiState(
+                        isLoading = false,
+                        notes = result.data.records
+                    )
+                } else {
+                    _uiState.value = NoteListUiState(
+                        isLoading = false,
+                        error = result.message.ifEmpty { "获取数据失败" }
+                    )
                 }
             } catch (e: Exception) {
-                _uiState.value = NoteListUiState(isLoading = false, error = e.message)
+                _uiState.value = NoteListUiState(isLoading = false, error = e.message ?: "网络错误")
             }
         }
     }
 
     fun createNote(title: String) {
         viewModelScope.launch {
-            noteRepo.createNote(NoteCreateRequest(title))
-            loadNotes()
+            try {
+                val result = noteRepo.createNote(NoteCreateRequest(title))
+                if (result.isSuccess) {
+                    loadNotes()
+                } else {
+                    _uiState.value = _uiState.value.copy(error = result.message.ifEmpty { "创建失败" })
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = e.message ?: "创建失败")
+            }
         }
     }
 
     fun deleteNote(noteId: Long) {
         viewModelScope.launch {
-            noteRepo.deleteNote(noteId)
-            loadNotes()
+            val result = noteRepo.deleteNote(noteId)
+            if (result.isSuccess) {
+                _uiState.value = _uiState.value.copy(
+                    notes = _uiState.value.notes.filterNot { it.id == noteId }
+                )
+            } else {
+                _uiState.value = _uiState.value.copy(error = result.message.ifEmpty { "删除失败" })
+            }
+        }
+    }
+
+    fun updateNoteTitle(note: Note, title: String) {
+        val newTitle = title.trim().ifBlank { "无标题笔记" }
+        viewModelScope.launch {
+            try {
+                val result = noteRepo.updateNote(
+                    note.id,
+                    NoteCreateRequest(noteName = newTitle, content = note.content.ifBlank { " " })
+                )
+                if (result.isSuccess) {
+                    _uiState.value = _uiState.value.copy(
+                        notes = _uiState.value.notes.map { if (it.id == note.id) it.copy(noteName = newTitle) else it }
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(error = result.message.ifEmpty { "更新失败" })
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = e.message ?: "更新失败")
+            }
         }
     }
 }
@@ -83,107 +128,207 @@ fun NoteListScreen(
     viewModel: NoteListViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    var showCreateDialog by remember { mutableStateOf(false) }
-    var newNoteTitle by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("笔记", fontWeight = FontWeight.SemiBold) },
-                windowInsets = WindowInsets(0.dp),
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+                windowInsets = WindowInsets(0.dp)
             )
         },
         contentWindowInsets = WindowInsets(0.dp),
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = { showCreateDialog = true },
+                onClick = { onNoteClick(-1L) },
                 icon = { Icon(Icons.Default.Add, null) },
                 text = { Text("新建笔记") },
                 shape = RoundedCornerShape(16.dp)
             )
         }
     ) { padding ->
-        if (uiState.isLoading) {
-            LoadingIndicator(Modifier.padding(padding))
-            return@Scaffold
-        }
-
-        if (uiState.notes.isEmpty()) {
-            EmptyState(Icons.Outlined.Description, "暂无笔记", "点击右下角按钮创建你的第一篇笔记", Modifier.padding(padding))
-            return@Scaffold
-        }
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(uiState.notes, key = { it.id }) { note ->
-                var showMenu by remember { mutableStateOf(false) }
-                Card(
-                    modifier = Modifier.fillMaxWidth().clickable { onNoteClick(note.id) },
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp)
+        when {
+            uiState.isLoading -> {
+                LoadingIndicator(Modifier.padding(padding))
+            }
+            uiState.error != null -> {
+                ErrorState(
+                    message = uiState.error ?: "加载失败",
+                    onRetry = { viewModel.loadNotes() },
+                    modifier = Modifier.padding(padding)
+                )
+            }
+            uiState.notes.isEmpty() -> {
+                EmptyState(
+                    Icons.Outlined.Description,
+                    "暂无笔记",
+                    "点击右下角按钮创建你的第一篇笔记",
+                    Modifier.padding(padding)
+                )
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(note.noteName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                            Box {
-                                IconButton(onClick = { showMenu = true }, modifier = Modifier.size(24.dp)) {
-                                    Icon(Icons.Default.MoreVert, null, modifier = Modifier.size(16.dp))
-                                }
-                                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                                    DropdownMenuItem(text = { Text("删除") }, onClick = { showMenu = false; viewModel.deleteNote(note.id) })
-                                }
-                            }
-                        }
-                        if (note.content.isNotBlank()) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                note.content.take(100),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        note.updatedAt?.let {
-                            Spacer(Modifier.height(4.dp))
-                            Text(it.take(16), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-                        }
+                    items(uiState.notes, key = { it.id }) { note ->
+                        NoteCard(
+                            note = note,
+                            onClick = { onNoteClick(note.id) },
+                            onDelete = { viewModel.deleteNote(note.id) },
+                            onRename = { title -> viewModel.updateNoteTitle(note, title) }
+                        )
                     }
                 }
             }
         }
     }
 
-    if (showCreateDialog) {
+    // Create note dialog removed to match Vue flow
+}
+
+@Composable
+private fun NoteCard(note: Note, onClick: () -> Unit, onDelete: () -> Unit, onRename: (String) -> Unit) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var isEditingTitle by remember { mutableStateOf(false) }
+    var editingTitle by remember(note.id, note.noteName) { mutableStateOf(note.noteName) }
+    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+
+    if (showDeleteConfirm) {
         AlertDialog(
-            onDismissRequest = { showCreateDialog = false },
-            title = { Text("新建笔记") },
-            text = {
-                OutlinedTextField(
-                    value = newNoteTitle, onValueChange = { newNoteTitle = it },
-                    label = { Text("笔记标题") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                )
-            },
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("删除笔记") },
+            text = { Text("确定要删除笔记「${note.noteName.ifBlank { "无标题笔记" }}」吗？此操作不可恢复。") },
             confirmButton = {
-                TextButton(onClick = {
-                    if (newNoteTitle.isNotBlank()) {
-                        viewModel.createNote(newNoteTitle)
-                        newNoteTitle = ""
-                        showCreateDialog = false
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
                     }
-                }) { Text("创建") }
+                ) { Text("确认删除", color = MaterialTheme.colorScheme.error) }
             },
-            dismissButton = { TextButton(onClick = { showCreateDialog = false }) { Text("取消") } }
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
+            }
         )
+    }
+
+    LaunchedEffect(isEditingTitle) {
+        if (isEditingTitle) focusRequester.requestFocus()
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(enabled = !isEditingTitle, onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp)
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            // Header row
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Description,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                if (isEditingTitle) {
+                    OutlinedTextField(
+                        value = editingTitle,
+                        onValueChange = { editingTitle = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onDone = {
+                                focusManager.clearFocus()
+                                isEditingTitle = false
+                                onRename(editingTitle)
+                            }
+                        ),
+                        trailingIcon = {
+                            Row {
+                                IconButton(
+                                    onClick = {
+                                        focusManager.clearFocus()
+                                        isEditingTitle = false
+                                        onRename(editingTitle)
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) { Icon(Icons.Default.Check, null, modifier = Modifier.size(18.dp)) }
+                                IconButton(
+                                    onClick = {
+                                        focusManager.clearFocus()
+                                        editingTitle = note.noteName
+                                        isEditingTitle = false
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) { Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp)) }
+                            }
+                        }
+                    )
+                } else {
+                    Text(
+                        note.noteName.ifBlank { "无标题笔记" },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Box {
+                    IconButton(onClick = { showMenu = true }, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.MoreVert, null, modifier = Modifier.size(16.dp))
+                    }
+                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("编辑") },
+                            onClick = {
+                                showMenu = false
+                                editingTitle = note.noteName
+                                isEditingTitle = true
+                            },
+                            leadingIcon = { Icon(Icons.Default.Edit, null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("删除") },
+                            onClick = {
+                                showMenu = false
+                                showDeleteConfirm = true
+                            },
+                            leadingIcon = { Icon(Icons.Default.Delete, null) }
+                        )
+                    }
+                }
+            }
+
+            // Content preview
+            if (note.content.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    note.content.take(150).replace(Regex("[#*`>\\[\\]()!]"), ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            // Timestamp
+            note.updatedAt?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    it.take(16).replace("T", " "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        }
     }
 }

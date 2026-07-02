@@ -135,7 +135,6 @@ dependencies {
     // Markdown
     implementation(libs.markwon.core)
     implementation(libs.markwon.ext.tables)
-    implementation(libs.markwon.syntax.highlight)
     implementation(libs.markwon.html)
     implementation(libs.markwon.image.coil)
     implementation(libs.markwon.inline.parser)

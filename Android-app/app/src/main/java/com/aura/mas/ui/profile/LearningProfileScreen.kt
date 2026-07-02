@@ -61,9 +61,11 @@ fun LearningProfileScreen(
                 CircularProgressIndicator()
             }
         } else if (uiState.error != null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(text = "加载失败: ${uiState.error}", color = MaterialTheme.colorScheme.error)
-            }
+            com.aura.mas.ui.common.ErrorState(
+                message = uiState.error ?: "加载失败",
+                onRetry = { viewModel.loadProfile() },
+                modifier = Modifier.padding(paddingValues)
+            )
         } else {
             val dimensions = uiState.profile?.learningBehavior
             if (dimensions != null) {

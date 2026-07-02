@@ -124,7 +124,7 @@ interface ApiService {
     suspend fun createNote(@Body request: NoteCreateRequest): ApiResponse<Note>
 
     @PUT("/api/note/{noteId}")
-    suspend fun updateNote(@Path("noteId") noteId: Long, @Body note: Note): ApiResponse<Unit>
+    suspend fun updateNote(@Path("noteId") noteId: Long, @Body note: NoteCreateRequest): ApiResponse<Unit>
 
     @DELETE("/api/note/{noteId}")
     suspend fun deleteNote(@Path("noteId") noteId: Long): ApiResponse<Unit>
@@ -190,13 +190,13 @@ interface ApiService {
     suspend fun getAiInteractionStats(): ApiResponse<AiInteractionStats>
 
     @GET("/api/stats/knowledge-mastery")
-    suspend fun getKnowledgeMastery(): ApiResponse<List<MasteryItem>>
+    suspend fun getKnowledgeMastery(): ApiResponse<KnowledgeMastery>
 
     @GET("/api/stats/analytics")
     suspend fun getAnalytics(): ApiResponse<AnalyticsData>
 
     @GET("/api/stats/study-efficiency")
-    suspend fun getStudyEfficiency(): ApiResponse<List<EfficiencyItem>>
+    suspend fun getStudyEfficiency(): ApiResponse<StudyEfficiency>
 
     @GET("/api/stats/week-comparison")
     suspend fun getWeekComparison(): ApiResponse<WeekComparison>

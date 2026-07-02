@@ -22,6 +22,14 @@ class FlashcardRepository @Inject constructor(
         }
     }
 
+    suspend fun getFlashcardsByNote(noteId: Long): ApiResponse<List<Flashcard>> {
+        return try {
+            api.getFlashcardsByNote(noteId)
+        } catch (e: Exception) {
+            ApiResponse(message = e.message ?: "Network error")
+        }
+    }
+
     suspend fun getDueCount(): ApiResponse<Int> {
         return try {
             api.getDueFlashcardCount()
@@ -39,7 +47,7 @@ class FlashcardRepository @Inject constructor(
 
     suspend fun saveFlashcards(noteId: Long, cards: List<Flashcard>): ApiResponse<List<Flashcard>> {
         val result = api.saveFlashcards(FlashcardSaveRequest(noteId, cards))
-        if (result.code == 0 && result.data != null) {
+        if (result.isSuccess && result.data != null) {
             flashcardDao.insertAll(result.data.map { it.toCached() })
         }
         return result

@@ -58,7 +58,7 @@ class AdminUsersViewModel @Inject constructor(
             _uiState.value = AdminUsersUiState(isLoading = true)
             try {
                 val result = adminRepo.getUsers(page)
-                if (result.code == 0) {
+                if (result.isSuccess) {
                     _uiState.value = AdminUsersUiState(
                         isLoading = false,
                         users = result.data?.records ?: emptyList(),
@@ -96,7 +96,7 @@ class AdminLogsViewModel @Inject constructor(
             _uiState.value = AdminLogsUiState(isLoading = true)
             try {
                 val result = adminRepo.getLogs(page)
-                if (result.code == 0) {
+                if (result.isSuccess) {
                     _uiState.value = AdminLogsUiState(
                         isLoading = false,
                         logs = result.data?.records ?: emptyList(),

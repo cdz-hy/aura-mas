@@ -65,9 +65,9 @@ class KnowledgeTreeViewModel @Inject constructor(
             _uiState.value = TreeUiState(isLoading = true)
             try {
                 val result = api.ensureKnowledgeTree(planId)
-                if (result.code == 0 && result.data != null) {
+                if (result.isSuccess && result.data != null) {
                     val treeResult = api.getKnowledgeTree(result.data.id)
-                    if (treeResult.code == 0 && treeResult.data != null) {
+                    if (treeResult.isSuccess && treeResult.data != null) {
                         _uiState.value = TreeUiState(tree = treeResult.data, isLoading = false)
                     } else {
                         _uiState.value = TreeUiState(error = treeResult.message, isLoading = false)
@@ -86,7 +86,7 @@ class KnowledgeTreeViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(selectedNode = node, showChat = true)
             try {
                 val result = api.getTreeNodeMessages(node.id)
-                if (result.code == 0 && result.data != null) {
+                if (result.isSuccess && result.data != null) {
                     _uiState.value = _uiState.value.copy(messages = result.data)
                 }
             } catch (_: Exception) {}

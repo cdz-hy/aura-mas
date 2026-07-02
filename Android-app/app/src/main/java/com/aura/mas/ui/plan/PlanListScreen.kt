@@ -15,7 +15,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -35,6 +39,7 @@ import javax.inject.Inject
 
 data class PlanListUiState(
     val isLoading: Boolean = true,
+    val isCreating: Boolean = false,
     val plans: List<LearningPlan> = emptyList(),
     val error: String? = null
 )
@@ -54,7 +59,7 @@ class PlanListViewModel @Inject constructor(
             _uiState.value = PlanListUiState(isLoading = true)
             try {
                 api.getPlans(size = 50).let { result ->
-                    if (result.code == 0 && result.data != null) {
+                    if (result.isSuccess && result.data != null) {
                         val plans = result.data.records
                         // Calculate progress for each plan
                         val plansWithProgress = plans.map { plan ->
@@ -85,8 +90,54 @@ class PlanListViewModel @Inject constructor(
 
     fun deletePlan(planId: Long) {
         viewModelScope.launch {
-            api.deletePlan(planId)
-            loadPlans()
+            val result = api.deletePlan(planId)
+            if (result.isSuccess) {
+                _uiState.value = _uiState.value.copy(
+                    plans = _uiState.value.plans.filterNot { it.id == planId }
+                )
+            } else {
+                _uiState.value = _uiState.value.copy(error = result.message.ifEmpty { "删除失败" })
+            }
+        }
+    }
+
+    fun updatePlanTitle(plan: LearningPlan, title: String) {
+        val newTitle = title.trim().ifBlank { "未命名计划" }
+        viewModelScope.launch {
+            try {
+                val updated = plan.copy(title = newTitle)
+                val result = api.updatePlan(plan.id, updated)
+                if (result.isSuccess) {
+                    _uiState.value = _uiState.value.copy(
+                        plans = _uiState.value.plans.map { if (it.id == plan.id) updated else it }
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(error = result.message.ifEmpty { "更新失败" })
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = e.message ?: "更新失败")
+            }
+        }
+    }
+
+    fun createNewPlan(onSuccess: (Long) -> Unit) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isCreating = true)
+            try {
+                val learningGoalJson = com.google.gson.Gson().toJson(mapOf("raw" to ""))
+                val result = planRepo.createPlan(PlanCreateRequest(
+                    title = "新学习计划",
+                    learningGoal = learningGoalJson,
+                    planConfig = "{}"
+                ))
+                if (result.isSuccess && result.data != null) {
+                    onSuccess(result.data.id)
+                } else {
+                    _uiState.value = _uiState.value.copy(error = result.message.ifEmpty { "创建失败" }, isCreating = false)
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = e.message ?: "网络错误", isCreating = false)
+            }
         }
     }
 }
@@ -95,10 +146,14 @@ class PlanListViewModel @Inject constructor(
 @Composable
 fun PlanListScreen(
     onPlanClick: (Long) -> Unit,
-    onCreatePlan: () -> Unit,
+    onCreatePlan: () -> Unit, // keeping signature but we won't use it directly
     viewModel: PlanListViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.loadPlans()
+    }
 
     Scaffold(
         topBar = {
@@ -111,9 +166,19 @@ fun PlanListScreen(
         contentWindowInsets = WindowInsets(0.dp),
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = onCreatePlan,
-                icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("创建计划") },
+                onClick = { 
+                    if (!uiState.isCreating) {
+                        viewModel.createNewPlan(onSuccess = onPlanClick)
+                    }
+                },
+                icon = { 
+                    if (uiState.isCreating) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.Add, null) 
+                    }
+                },
+                text = { Text(if (uiState.isCreating) "创建中..." else "创建计划") },
                 shape = RoundedCornerShape(16.dp)
             )
         }
@@ -149,8 +214,39 @@ fun PlanListScreen(
         ) {
             items(uiState.plans, key = { it.id }) { plan ->
                 var showMenu by remember { mutableStateOf(false) }
+                var showDeleteConfirm by remember { mutableStateOf(false) }
+                var isEditingTitle by remember { mutableStateOf(false) }
+                var editingTitle by remember(plan.id, plan.title) { mutableStateOf(plan.title) }
+                val focusRequester = remember { FocusRequester() }
+                val focusManager = LocalFocusManager.current
+
+                if (showDeleteConfirm) {
+                    AlertDialog(
+                        onDismissRequest = { showDeleteConfirm = false },
+                        title = { Text("删除学习计划") },
+                        text = { Text("确定要删除学习计划「${plan.title.ifBlank { "未命名计划" }}」吗？该计划下的所有对话、资源和测验记录将一并删除，此操作不可恢复。") },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    showDeleteConfirm = false
+                                    viewModel.deletePlan(plan.id)
+                                }
+                            ) { Text("确认删除", color = MaterialTheme.colorScheme.error) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
+                        }
+                    )
+                }
+
+                LaunchedEffect(isEditingTitle) {
+                    if (isEditingTitle) focusRequester.requestFocus()
+                }
+
                 Card(
-                    modifier = Modifier.fillMaxWidth().clickable { onPlanClick(plan.id) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !isEditingTitle) { onPlanClick(plan.id) },
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
@@ -173,7 +269,7 @@ fun PlanListScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             if (!iconSvg.isNullOrBlank()) {
-                                SvgIcon(svgString = iconSvg, modifier = Modifier.size(40.dp))
+                                SvgIcon(svgString = iconSvg, modifier = Modifier.size(24.dp))
                             } else {
                                 Icon(
                                     when (plan.getEffectiveStatus()) {
@@ -193,7 +289,53 @@ fun PlanListScreen(
                         }
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(plan.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            if (isEditingTitle) {
+                                OutlinedTextField(
+                                    value = editingTitle,
+                                    onValueChange = { editingTitle = it },
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .focusRequester(focusRequester),
+                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Done),
+                                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                                        onDone = {
+                                            focusManager.clearFocus()
+                                            isEditingTitle = false
+                                            viewModel.updatePlanTitle(plan, editingTitle)
+                                        }
+                                    ),
+                                    trailingIcon = {
+                                        Row {
+                                            IconButton(
+                                                onClick = {
+                                                    focusManager.clearFocus()
+                                                    isEditingTitle = false
+                                                    viewModel.updatePlanTitle(plan, editingTitle)
+                                                },
+                                                modifier = Modifier.size(32.dp)
+                                            ) { Icon(Icons.Default.Check, null, modifier = Modifier.size(18.dp)) }
+                                            IconButton(
+                                                onClick = {
+                                                    focusManager.clearFocus()
+                                                    editingTitle = plan.title
+                                                    isEditingTitle = false
+                                                },
+                                                modifier = Modifier.size(32.dp)
+                                            ) { Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp)) }
+                                        }
+                                    }
+                                )
+                            } else {
+                                Text(
+                                    plan.title.ifBlank { "未命名计划" },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             Spacer(Modifier.height(4.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 // Status chip
@@ -240,8 +382,20 @@ fun PlanListScreen(
                             }
                             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                                 DropdownMenuItem(
+                                    text = { Text("编辑") },
+                                    onClick = {
+                                        showMenu = false
+                                        editingTitle = plan.title
+                                        isEditingTitle = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Edit, null) }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("删除") },
-                                    onClick = { showMenu = false; viewModel.deletePlan(plan.id) },
+                                    onClick = {
+                                        showMenu = false
+                                        showDeleteConfirm = true
+                                    },
                                     leadingIcon = { Icon(Icons.Default.Delete, null) }
                                 )
                             }

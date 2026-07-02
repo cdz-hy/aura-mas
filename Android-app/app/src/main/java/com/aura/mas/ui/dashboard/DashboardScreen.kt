@@ -273,7 +273,7 @@ private fun PlanCard(plan: LearningPlan, onClick: () -> Unit, modifier: Modifier
                 contentAlignment = Alignment.Center
             ) {
                 if (!iconSvg.isNullOrBlank()) {
-                    SvgIcon(svgString = iconSvg, modifier = Modifier.size(40.dp))
+                    SvgIcon(svgString = iconSvg, modifier = Modifier.size(24.dp))
                 } else {
                     Icon(
                         when (plan.getEffectiveStatus()) {

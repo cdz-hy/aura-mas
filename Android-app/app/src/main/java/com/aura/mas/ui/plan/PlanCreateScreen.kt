@@ -44,14 +44,20 @@ class PlanCreateViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = PlanCreateUiState(isLoading = true)
             try {
-                val result = planRepo.createPlan(PlanCreateRequest(title, goal))
-                if (result.code == 0 && result.data != null) {
+                // Match Vue: learningGoal as object { raw: goal }, planConfig as object
+                val learningGoalJson = com.google.gson.Gson().toJson(mapOf("raw" to goal))
+                val result = planRepo.createPlan(PlanCreateRequest(
+                    title = title.ifBlank { goal.take(50) },
+                    learningGoal = learningGoalJson,
+                    planConfig = "{}"
+                ))
+                if (result.isSuccess && result.data != null) {
                     _uiState.value = PlanCreateUiState(plan = result.data, isLoading = false)
                 } else {
-                    _uiState.value = PlanCreateUiState(error = result.message, isLoading = false)
+                    _uiState.value = PlanCreateUiState(error = result.message.ifEmpty { "创建失败" }, isLoading = false)
                 }
             } catch (e: Exception) {
-                _uiState.value = PlanCreateUiState(error = e.message, isLoading = false)
+                _uiState.value = PlanCreateUiState(error = e.message ?: "网络错误", isLoading = false)
             }
         }
     }
@@ -113,7 +119,7 @@ fun PlanCreateScreen(
             Button(
                 onClick = { viewModel.createPlan(title, goal) },
                 modifier = Modifier.fillMaxWidth().height(48.dp),
-                enabled = !uiState.isLoading && title.isNotBlank(),
+                enabled = !uiState.isLoading && (title.isNotBlank() || goal.isNotBlank()),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 if (uiState.isLoading) {

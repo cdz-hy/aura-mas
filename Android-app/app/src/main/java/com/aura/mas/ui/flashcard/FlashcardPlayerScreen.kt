@@ -44,13 +44,32 @@ class FlashcardViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(FlashcardUiState())
     val uiState: StateFlow<FlashcardUiState> = _uiState.asStateFlow()
 
-    fun loadDueCards() {
+    fun loadCards(noteId: Long) {
         viewModelScope.launch {
             _uiState.value = FlashcardUiState(isLoading = true)
             try {
-                val result = flashcardRepo.getDueFlashcards()
-                if (result.code == 0 && result.data != null) {
-                    _uiState.value = FlashcardUiState(cards = result.data, isLoading = false)
+                val result = if (noteId > 0) {
+                    flashcardRepo.getFlashcardsByNote(noteId)
+                } else {
+                    flashcardRepo.getDueFlashcards()
+                }
+                
+                if (result.isSuccess && result.data != null) {
+                    val cards = result.data
+                    val reviewList = if (noteId > 0) {
+                        val now = java.time.Instant.now()
+                        val dueCards = cards.filter { card ->
+                            card.nextReviewAt == null || try {
+                                java.time.Instant.parse(card.nextReviewAt).isBefore(now)
+                            } catch (_: Exception) {
+                                true
+                            }
+                        }
+                        if (dueCards.isNotEmpty()) dueCards else cards
+                    } else {
+                        cards
+                    }
+                    _uiState.value = FlashcardUiState(cards = reviewList, isLoading = false)
                 } else {
                     _uiState.value = FlashcardUiState(error = result.message, isLoading = false)
                 }
@@ -85,7 +104,7 @@ fun FlashcardPlayerScreen(
     onBack: () -> Unit,
     viewModel: FlashcardViewModel = hiltViewModel()
 ) {
-    LaunchedEffect(Unit) { viewModel.loadDueCards() }
+    LaunchedEffect(noteId) { viewModel.loadCards(noteId) }
     val uiState by viewModel.uiState.collectAsState()
 
     Scaffold(
@@ -138,7 +157,8 @@ fun FlashcardPlayerScreen(
                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
             ) {
                 Box(
-                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                    modifier = Modifier.fillMaxSize().padding(32.dp)
+                        .graphicsLayer { rotationY = if (rotation > 90f) 180f else 0f },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(

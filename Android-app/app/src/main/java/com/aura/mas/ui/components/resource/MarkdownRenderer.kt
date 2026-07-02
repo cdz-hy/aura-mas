@@ -15,7 +15,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import coil.ImageLoader
 import coil.decode.GifDecoder
 import coil.decode.SvgDecoder
+import android.graphics.Typeface
+import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
+import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.ext.latex.JLatexMathPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.html.HtmlPlugin
@@ -23,10 +26,16 @@ import io.noties.markwon.image.coil.CoilImagesPlugin
 import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
 
 /**
- * Full-featured Markdown renderer:
- * 1. Preprocesses LaTeX to use $$ delimiters required by JLatexMathPlugin.
- * 2. Extracts Mermaid code blocks for WebView rendering.
- * 3. Renders Markdown + LaTeX natively using Markwon.
+ * Production-grade Markdown renderer for Android.
+ *
+ * Stack:
+ * - Markwon 4.6.2 (CommonMark-compliant)
+ * - JLatexMathPlugin (LaTeX via native rendering)
+ * - CoilImagesPlugin (images: network/SVG/GIF)
+ * - TablePlugin (GFM tables)
+ * - HtmlPlugin (inline HTML)
+ * - MarkwonInlineParserPlugin (enhanced inline parsing)
+ * - Mermaid via WebView (diagrams)
  */
 @Composable
 fun MarkdownRenderer(
@@ -37,7 +46,6 @@ fun MarkdownRenderer(
     val textColor = MaterialTheme.colorScheme.onSurface
     val isDark = isSystemInDarkTheme()
 
-    // Normalize LaTeX and split out Mermaid segments
     val segments = remember(content) { parseAndNormalizeContent(content) }
 
     Column(modifier = modifier) {
@@ -45,7 +53,7 @@ fun MarkdownRenderer(
             when (segment.type) {
                 SegmentType.MARKDOWN -> {
                     if (segment.content.isNotBlank()) {
-                        MarkdownSegment(segment.content, context, textColor)
+                        MarkdownSegment(segment.content, context, textColor, isDark)
                     }
                 }
                 SegmentType.MERMAID -> {
@@ -56,11 +64,14 @@ fun MarkdownRenderer(
     }
 }
 
-// ── Markdown segment (Markwon + JLatexMath) ─────────────────────
-
 @Composable
-private fun MarkdownSegment(content: String, context: Context, textColor: androidx.compose.ui.graphics.Color) {
-    val markwon = remember(context) { buildMarkwon(context) }
+private fun MarkdownSegment(
+    content: String,
+    context: Context,
+    textColor: androidx.compose.ui.graphics.Color,
+    isDark: Boolean
+) {
+    val markwon = remember(context, isDark) { buildMarkwon(context, isDark) }
     val spanned = remember(content) {
         try { markwon.toMarkdown(content) }
         catch (_: Exception) { android.text.SpannableString(content) }
@@ -83,16 +94,13 @@ private fun MarkdownSegment(content: String, context: Context, textColor: androi
     )
 }
 
-// ── Mermaid rendering via WebView ──────────────────────────────
-
 @Composable
 private fun MermaidView(code: String, isDark: Boolean) {
     val bgColor = if (isDark) "#1a1a2e" else "#ffffff"
-
     val escapedCode = code
         .replace("\\", "\\\\")
         .replace("`", "\\`")
-        .replace("$", "\\\$")
+        .replace("$", "\\$")
         .replace("</script>", "<\\/script>")
 
     AndroidView(
@@ -128,70 +136,80 @@ private fun MermaidView(code: String, isDark: Boolean) {
     )
 }
 
-// ── Content parsing: split into segments ───────────────────────
+// ── Content parsing ────────────────────────────────────────────
 
-private enum class SegmentType { MARKDOWN, MERMAID }
-private data class Segment(val type: SegmentType, val content: String)
+internal enum class SegmentType { MARKDOWN, MERMAID }
+internal data class Segment(val type: SegmentType, val content: String)
 
-/**
- * Pre-formats LaTeX to be compatible with JLatexMathPlugin ($$ inline and block)
- * and separates out Mermaid blocks.
- */
-private fun parseAndNormalizeContent(content: String): List<Segment> {
+internal fun parseAndNormalizeContent(content: String): List<Segment> {
     val segments = mutableListOf<Segment>()
-
-    // 1. Extract Mermaid blocks first to prevent corrupting Mermaid syntax
     val mermaidPattern = Regex("""```mermaid\s*\n([\s\S]*?)```""")
-    
+
     data class Match(val start: Int, val end: Int, val content: String)
     val matches = mutableListOf<Match>()
-
     for (match in mermaidPattern.findAll(content)) {
         matches.add(Match(match.range.first, match.range.last + 1, match.groupValues[1].trim()))
     }
     matches.sortBy { it.start }
 
-    // Helper to normalize LaTeX in Markdown segments
     fun normalizeLatex(text: String): String {
+        fun Regex.safeReplace(input: CharSequence, transform: (MatchResult) -> String): String {
+            val matches = this.findAll(input).toList()
+            if (matches.isEmpty()) return input.toString()
+            val sb = StringBuilder(input.length)
+            var lastStart = 0
+            for (match in matches) {
+                sb.append(input, lastStart, match.range.first)
+                sb.append(transform(match))
+                lastStart = match.range.last + 1
+            }
+            if (lastStart < input.length) {
+                sb.append(input, lastStart, input.length)
+            }
+            return sb.toString()
+        }
+
         var res = text
-        // Replace inline \(...\)
-        res = res.replace(Regex("""\\\(([\s\S]+?)\\\)"""), "\\$\\$$1\\$\\$")
-        // Replace block \[...\] (Strictly requires backslash)
-        res = res.replace(Regex("""\\\[([\s\S]+?)\\\]"""), "\\$\\$$1\\$\\$")
-        // Replace inline $...$ (ensuring we don't accidentally match $$)
-        res = res.replace(Regex("""(?<!\$)\$(?!\$)([^\$\n]+?)\$(?!\$)"""), "\\$\\$$1\\$\\$")
+        res = Regex("""\\\(([\s\S]+?)\\\)""").safeReplace(res) { "\$\$${it.groupValues[1]}\$\$" }
+        res = Regex("""\\\[([\s\S]+?)\\\]""").safeReplace(res) { "\$\$${it.groupValues[1]}\$\$" }
+        res = Regex("""(?<!\$)\$(?!\$)([^\$\n]+?)\$(?!\$)""").safeReplace(res) { "\$\$${it.groupValues[1]}\$\$" }
         return res
     }
 
-    // 2. Build segments
     var lastIndex = 0
     for (match in matches) {
         if (match.start > lastIndex) {
             val md = content.substring(lastIndex, match.start).trim()
-            if (md.isNotBlank()) {
-                segments.add(Segment(SegmentType.MARKDOWN, normalizeLatex(md)))
-            }
+            if (md.isNotBlank()) segments.add(Segment(SegmentType.MARKDOWN, normalizeLatex(md)))
         }
-        if (match.content.isNotBlank()) {
-            segments.add(Segment(SegmentType.MERMAID, match.content))
-        }
+        if (match.content.isNotBlank()) segments.add(Segment(SegmentType.MERMAID, match.content))
         lastIndex = match.end
     }
-
     if (lastIndex < content.length) {
         val md = content.substring(lastIndex).trim()
-        if (md.isNotBlank()) {
-            segments.add(Segment(SegmentType.MARKDOWN, normalizeLatex(md)))
-        }
+        if (md.isNotBlank()) segments.add(Segment(SegmentType.MARKDOWN, normalizeLatex(md)))
     }
-
+    if (segments.isEmpty()) segments.add(Segment(SegmentType.MARKDOWN, normalizeLatex(content)))
     return segments
+}
+
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+private interface NetworkEntryPoint {
+    fun okHttpClient(): okhttp3.OkHttpClient
 }
 
 // ── Markwon builder ────────────────────────────────────────────
 
-private fun buildMarkwon(context: Context): Markwon {
+private fun buildMarkwon(context: Context, isDark: Boolean): Markwon {
+    val entryPoint = dagger.hilt.android.EntryPointAccessors.fromApplication(
+        context.applicationContext,
+        NetworkEntryPoint::class.java
+    )
+    val okHttpClient = entryPoint.okHttpClient()
+
     val imageLoader = ImageLoader.Builder(context)
+        .okHttpClient(okHttpClient)
         .components {
             add(SvgDecoder.Factory())
             add(GifDecoder.Factory())
@@ -199,7 +217,6 @@ private fun buildMarkwon(context: Context): Markwon {
         .crossfade(true)
         .build()
 
-    // JLatexMath requires configuring text size (sp -> px). 15sp is our default body text size.
     val textSizePx = 15f * context.resources.displayMetrics.scaledDensity
 
     return Markwon.builder(context)
@@ -207,8 +224,37 @@ private fun buildMarkwon(context: Context): Markwon {
         .usePlugin(HtmlPlugin.create())
         .usePlugin(CoilImagesPlugin.create(context, imageLoader))
         .usePlugin(MarkwonInlineParserPlugin.create())
-        .usePlugin(JLatexMathPlugin.create(textSizePx) { builder -> 
+        .usePlugin(object : AbstractMarkwonPlugin() {
+            override fun configureTheme(builder: MarkwonTheme.Builder) {
+                builder
+                    .codeBlockTypeface(Typeface.MONOSPACE)
+                    .codeBlockTextSize((textSizePx * 0.85f).toInt())
+                    .codeBlockBackgroundColor(if (isDark) 0xFF1E293B.toInt() else 0xFFF1F5F9.toInt())
+                    .codeBlockMargin(16)
+                    .codeTypeface(Typeface.MONOSPACE)
+                    .codeTextSize((textSizePx * 0.85f).toInt())
+                    .codeBackgroundColor(if (isDark) 0xFF334155.toInt() else 0xFFE2E8F0.toInt())
+            }
+
+            override fun configureConfiguration(builder: io.noties.markwon.MarkwonConfiguration.Builder) {
+                builder.imageDestinationProcessor(object : io.noties.markwon.image.destination.ImageDestinationProcessor() {
+                    override fun process(destination: String): String {
+                        if (destination.startsWith("http://") || destination.startsWith("https://") || destination.startsWith("data:")) {
+                            return destination
+                        }
+                        val baseUrl = com.aura.mas.util.Constants.JAVA_BASE_URL.removeSuffix("/")
+                        val path = if (destination.startsWith("/")) destination else "/$destination"
+                        return "$baseUrl$path"
+                    }
+                })
+            }
+        })
+        .usePlugin(JLatexMathPlugin.create(textSizePx) { builder ->
             builder.inlinesEnabled(true)
+            val sidePad = (textSizePx * 0.2f).toInt()
+            val bottomPad = (textSizePx * 0.15f).toInt()
+            builder.theme().inlinePadding(io.noties.markwon.ext.latex.JLatexMathTheme.Padding.of(sidePad, 0, sidePad, bottomPad))
         })
         .build()
 }
+

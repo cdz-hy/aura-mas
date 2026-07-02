@@ -42,10 +42,10 @@ data class MenuItem(
 )
 
 data class ApiResponse<T>(
-    @SerializedName("code") private val rawCode: Int = 0,
+    val code: Int = 0,
     val message: String = "",
     val data: T? = null
 ) {
-    val code: Int
-        get() = if (rawCode == 200) 0 else rawCode
+    val isSuccess: Boolean
+        get() = code == 200 || code == 0
 }

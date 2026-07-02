@@ -1,46 +1,50 @@
 package com.aura.mas.ui.components
 
-import android.webkit.WebView
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import coil.decode.SvgDecoder
+import coil.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.LocalContentColor
 
 /**
- * Renders an SVG string from planConfig.iconSvg.
- * Uses a large internal viewport (300px) and lets the WebView scale down.
+ * Renders an SVG string from planConfig.iconSvg, matching Vue's v-html flow.
  */
 @Composable
 fun SvgIcon(
     svgString: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    tint: Color = LocalContentColor.current
 ) {
-    AndroidView(
-        factory = { ctx ->
-            WebView(ctx).apply {
-                setBackgroundColor(0x00000000)
-                isVerticalScrollBarEnabled = false
-                isHorizontalScrollBarEnabled = false
-                settings.javaScriptEnabled = false
-            }
-        },
-        update = { webView ->
-            val sanitized = svgString.trim()
-            // Render SVG at 300x300 internal resolution
-            // The WebView will be constrained by the Compose modifier size
-            val html = """
-                <html>
-                <head>
-                <style>
-                *{margin:0;padding:0}
-                html,body{width:300px;height:300px;background:transparent;overflow:hidden}
-                svg{width:300px;height:300px;display:block}
-                </style>
-                </head>
-                <body>$sanitized</body>
-                </html>
-            """.trimIndent()
-            webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
-        },
-        modifier = modifier
+    val context = LocalContext.current
+    val resolvedSvg = svgString
+        .trim()
+        .replace("currentColor", tint.toCssColor())
+
+    Box(modifier = modifier) {
+        AsyncImage(
+            model = ImageRequest.Builder(context)
+                .data(resolvedSvg.toByteArray(Charsets.UTF_8))
+                .decoderFactory(SvgDecoder.Factory())
+                .build(),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Fit
+        )
+    }
+}
+
+private fun Color.toCssColor(): String {
+    val argb = toArgb()
+    return "#%02X%02X%02X".format(
+        (argb shr 16) and 0xFF,
+        (argb shr 8) and 0xFF,
+        argb and 0xFF
     )
 }

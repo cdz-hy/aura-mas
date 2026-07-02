@@ -14,7 +14,7 @@ data class Note(
 
 data class NoteCreateRequest(
     @SerializedName("noteName") val noteName: String,
-    val content: String = ""
+    val content: String = " "
 )
 
 data class NoteResourceRel(

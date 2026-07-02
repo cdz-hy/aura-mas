@@ -25,7 +25,7 @@ class OfflineSyncWorker @AssistedInject constructor(
         return try {
             // Sync plans
             val plans = api.getPlans(size = 100)
-            if (plans.code == 0 && plans.data != null) {
+            if (plans.isSuccess && plans.data != null) {
                 planDao.deleteAll()
                 planDao.insertAll(plans.data.records.map {
                     CachedPlan(it.id, it.userId, it.title, it.learningGoal, it.status, it.createdAt, it.updatedAt)
@@ -34,7 +34,7 @@ class OfflineSyncWorker @AssistedInject constructor(
 
             // Sync notes
             val notes = api.getNotes(size = 100)
-            if (notes.code == 0 && notes.data != null) {
+            if (notes.isSuccess && notes.data != null) {
                 noteDao.deleteAll()
                 noteDao.insertAll(notes.data.records.map {
                     CachedNote(it.id, it.userId, it.noteName, it.content, it.createdAt, it.updatedAt)
@@ -44,7 +44,7 @@ class OfflineSyncWorker @AssistedInject constructor(
             // Sync resources for each plan
             plans.data?.records?.forEach { plan ->
                 val resources = api.getResourcesByPlan(plan.id)
-                if (resources.code == 0 && resources.data != null) {
+                if (resources.isSuccess && resources.data != null) {
                     resourceDao.deleteByPlan(plan.id)
                     resourceDao.insertAll(resources.data.map {
                         CachedResource(it.id, it.planId, it.moduleType, it.moduleOrder, it.getModuleName(), it.getResourceTitle(), it.getResourceType(), it.getContent(), it.status)

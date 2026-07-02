@@ -18,7 +18,7 @@ class NoteRepository @Inject constructor(
     fun getNotes(page: Int = 1, size: Int = 20, keyword: String? = null): Flow<ApiResponse<PaginatedResponse<Note>>> = flow {
         try {
             val response = api.getNotes(page, size, keyword = keyword)
-            if (response.code == 0 && response.data != null) {
+            if (response.isSuccess && response.data != null) {
                 val cached = response.data.records.map { it.toCached() }
                 if (page == 1) noteDao.deleteAll()
                 noteDao.insertAll(cached)
@@ -26,18 +26,23 @@ class NoteRepository @Inject constructor(
             emit(response)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            val cachedNotes = noteDao.getAllNotesSync()
-            if (cachedNotes.isNotEmpty()) {
-                val paginated = PaginatedResponse(
-                    records = cachedNotes.map { it.toDomain() },
-                    total = cachedNotes.size.toLong(),
-                    page = 1,
-                    size = cachedNotes.size,
-                    pages = 1
-                )
-                emit(ApiResponse(data = paginated, message = "离线模式：显示缓存数据"))
-            } else {
-                emit(ApiResponse(message = e.message ?: "Network error"))
+            // Try offline cache
+            try {
+                val cachedNotes = noteDao.getAllNotesSync()
+                if (cachedNotes.isNotEmpty()) {
+                    val paginated = PaginatedResponse(
+                        records = cachedNotes.map { it.toDomain() },
+                        total = cachedNotes.size.toLong(),
+                        page = 1,
+                        size = cachedNotes.size,
+                        pages = 1
+                    )
+                    emit(ApiResponse(data = paginated, message = "离线模式"))
+                } else {
+                    emit(ApiResponse(code = -1, message = e.message ?: "网络错误"))
+                }
+            } catch (_: Exception) {
+                emit(ApiResponse(code = -1, message = e.message ?: "网络错误"))
             }
         }
     }
@@ -45,7 +50,7 @@ class NoteRepository @Inject constructor(
     suspend fun getNote(noteId: Long): ApiResponse<Note> {
         return try {
             val response = api.getNote(noteId)
-            if (response.code == 0 && response.data != null) {
+            if (response.isSuccess && response.data != null) {
                 noteDao.insert(response.data.toCached())
             }
             response
@@ -63,17 +68,23 @@ class NoteRepository @Inject constructor(
         return api.createNote(request)
     }
 
-    suspend fun updateNote(noteId: Long, note: Note): ApiResponse<Unit> {
-        val result = api.updateNote(noteId, note)
-        if (result.code == 0) {
-            noteDao.insert(note.toCached())
+    suspend fun updateNote(noteId: Long, request: NoteCreateRequest): ApiResponse<Unit> {
+        val result = api.updateNote(noteId, request)
+        if (result.isSuccess) {
+            val existing = noteDao.getNoteById(noteId)
+            if (existing != null) {
+                noteDao.insert(existing.copy(
+                    noteName = request.noteName,
+                    content = request.content
+                ))
+            }
         }
         return result
     }
 
     suspend fun deleteNote(noteId: Long): ApiResponse<Unit> {
         val result = api.deleteNote(noteId)
-        if (result.code == 0) {
+        if (result.isSuccess) {
             noteDao.getNoteById(noteId)?.let { noteDao.delete(it) }
         }
         return result

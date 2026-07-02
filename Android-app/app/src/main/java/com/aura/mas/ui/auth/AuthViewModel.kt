@@ -39,7 +39,7 @@ class AuthViewModel @Inject constructor(
             _uiState.value = AuthUiState(isLoading = true)
             try {
                 val response = api.login(LoginRequest(loginName, password))
-                if (response.code == 0 && response.data != null) {
+                if (response.isSuccess && response.data != null) {
                     authStore.saveSession(response.data.token, response.data.user)
                     _uiState.value = AuthUiState(success = true)
                 } else {
@@ -56,7 +56,7 @@ class AuthViewModel @Inject constructor(
             _uiState.value = AuthUiState(isLoading = true)
             try {
                 val response = api.register(RegisterRequest(loginName, password, nickname, email))
-                if (response.code == 0) {
+                if (response.isSuccess) {
                     _uiState.value = AuthUiState(success = true)
                 } else {
                     _uiState.value = AuthUiState(error = response.message.ifEmpty { "注册失败" })

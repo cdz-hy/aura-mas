@@ -75,7 +75,7 @@ class FlashcardReminderWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         return try {
             val result = api.getDueFlashcardCount()
-            if (result.code == 0 && result.data != null && result.data > 0) {
+            if (result.isSuccess && result.data != null && result.data > 0) {
                 NotificationHelper(applicationContext).showFlashcardReminder(result.data)
             }
             Result.success()

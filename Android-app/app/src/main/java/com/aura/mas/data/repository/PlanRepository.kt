@@ -22,7 +22,7 @@ class PlanRepository @Inject constructor(
     fun getPlans(page: Int = 1, size: Int = 20): Flow<ApiResponse<PaginatedResponse<LearningPlan>>> = flow {
         try {
             val response = api.getPlans(page, size)
-            if (response.code == 0 && response.data != null) {
+            if (response.isSuccess && response.data != null) {
                 val cached = response.data.records.map { it.toCached() }
                 if (page == 1) planDao.deleteAll()
                 planDao.insertAll(cached)
@@ -49,7 +49,7 @@ class PlanRepository @Inject constructor(
     suspend fun getPlan(planId: Long): ApiResponse<LearningPlan> {
         return try {
             val response = api.getPlan(planId)
-            if (response.code == 0 && response.data != null) {
+            if (response.isSuccess && response.data != null) {
                 planDao.insert(response.data.toCached())
             }
             response
@@ -69,7 +69,7 @@ class PlanRepository @Inject constructor(
 
     suspend fun deletePlan(planId: Long): ApiResponse<Unit> {
         val result = api.deletePlan(planId)
-        if (result.code == 0) {
+        if (result.isSuccess) {
             planDao.getPlanById(planId)?.let { planDao.delete(it) }
         }
         return result
@@ -80,7 +80,7 @@ class PlanRepository @Inject constructor(
     fun getResources(planId: Long): Flow<ApiResponse<List<LearningResource>>> = flow {
         try {
             val response = api.getResourcesByPlan(planId)
-            if (response.code == 0 && response.data != null) {
+            if (response.isSuccess && response.data != null) {
                 val cached = response.data.map { it.toCachedResource() }
                 resourceDao.deleteByPlan(planId)
                 resourceDao.insertAll(cached)

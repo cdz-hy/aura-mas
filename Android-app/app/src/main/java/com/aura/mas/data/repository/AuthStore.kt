@@ -69,6 +69,13 @@ class AuthStore @Inject constructor(
         _isLoggedIn.value = false
     }
 
+    suspend fun updateCurrentUser(user: User) {
+        _currentUser.value = user
+        dataStore.edit { prefs ->
+            prefs[USER_KEY] = gson.toJson(user)
+        }
+    }
+
     suspend fun getToken(): String? {
         val prefs = dataStore.data.first()
         return prefs[TOKEN_KEY]

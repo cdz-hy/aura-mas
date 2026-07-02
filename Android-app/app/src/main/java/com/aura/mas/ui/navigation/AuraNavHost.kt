@@ -25,6 +25,7 @@ import com.aura.mas.ui.tree.KnowledgeTreeScreen
 import com.aura.mas.ui.graph.KnowledgeGraphScreen
 import com.aura.mas.ui.profile.SettingsScreen
 import com.aura.mas.ui.profile.LearningProfileScreen
+import com.aura.mas.ui.profile.PersonalInfoEditScreen
 import com.aura.mas.ui.analytics.AnalyticsScreen
 import com.aura.mas.ui.admin.EnhancedAdminUsersScreen
 import com.aura.mas.ui.admin.EnhancedAdminLogsScreen
@@ -114,7 +115,9 @@ fun AuraNavHost() {
         ) {
             NoteDetailScreen(
                 noteId = it.arguments?.getLong("noteId") ?: 0L,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onNavigateToPlan = { planId -> navController.navigate(NavRoutes.planDetail(planId)) },
+                onNavigateToFlashcards = { noteId -> navController.navigate(NavRoutes.flashcardPlayer(noteId)) }
             )
         }
         composable(
@@ -160,7 +163,13 @@ fun AuraNavHost() {
                     navController.navigate(NavRoutes.LOGIN) {
                         popUpTo(0) { inclusive = true }
                     }
-                }
+                },
+                onPersonalInfoClick = { navController.navigate(NavRoutes.PERSONAL_INFO_EDIT) }
+            )
+        }
+        composable(NavRoutes.PERSONAL_INFO_EDIT) {
+            PersonalInfoEditScreen(
+                onBack = { navController.popBackStack() }
             )
         }
         composable(NavRoutes.ADMIN_DASHBOARD) {

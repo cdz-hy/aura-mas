@@ -27,6 +27,7 @@ import javax.inject.Inject
 fun SettingsScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit,
+    onPersonalInfoClick: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     var showLogoutDialog by remember { mutableStateOf(false) }
@@ -39,7 +40,7 @@ fun SettingsScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column {
-                    SettingsItem(Icons.Default.Person, "个人信息", "编辑昵称、邮箱") { }
+                    SettingsItem(Icons.Default.Person, "个人信息", "编辑昵称、邮箱") { onPersonalInfoClick() }
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp))
                     SettingsItem(Icons.Default.Security, "账号安全", "修改密码") { }
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp))
@@ -102,7 +103,7 @@ fun SettingsScreen(
             title = { Text("关于智学") },
             text = {
                 Column {
-                    Text("智学 - 智能自适应学习平台 (AURA MAS)", fontWeight = FontWeight.SemiBold)
+                    Text("智学 - 个性化多智能体学习平台 (AURA MAS)", fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
                     Text("版本: 1.0.0", style = MaterialTheme.typography.bodySmall)
                     Text("基于 AI 的个性化学习系统", style = MaterialTheme.typography.bodySmall)

@@ -105,7 +105,7 @@ class StandaloneChatViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(activeSessionId = sessionId)
             try {
                 val result = chatRepo.getMessages(sessionId)
-                if (result.code == 0 && result.data != null) {
+                if (result.isSuccess && result.data != null) {
                     _uiState.value = _uiState.value.copy(messages = result.data)
                 }
             } catch (_: Exception) {}

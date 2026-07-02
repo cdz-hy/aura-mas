@@ -126,18 +126,30 @@ fun AuraTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
-    // Read theme preference from DataStore
     val context = LocalContext.current
-    val themeKey = stringPreferencesKey("app_theme")
-    val savedTheme = remember {
-        try {
-            val prefs = runBlocking {
-                context.getSharedPreferences("aura_prefs", android.content.Context.MODE_PRIVATE)
-                    .getString("app_theme", null)
-            }
-            prefs?.let { try { AppTheme.valueOf(it) } catch (_: Exception) { null } }
-        } catch (_: Exception) { null }
+    var themeString by remember {
+        mutableStateOf(
+            context.getSharedPreferences("aura_prefs", android.content.Context.MODE_PRIVATE)
+                .getString("app_theme", null)
+        )
     }
+
+    DisposableEffect(context) {
+        val prefs = context.getSharedPreferences("aura_prefs", android.content.Context.MODE_PRIVATE)
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { sharedPreferences, key ->
+            if (key == "app_theme") {
+                themeString = sharedPreferences.getString("app_theme", null)
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose {
+            prefs.unregisterOnSharedPreferenceChangeListener(listener)
+        }
+    }
+
+    val savedTheme = try {
+        themeString?.let { AppTheme.valueOf(it) }
+    } catch (_: Exception) { null }
 
     val colorScheme = when (savedTheme) {
         AppTheme.DARK -> DarkColorScheme
