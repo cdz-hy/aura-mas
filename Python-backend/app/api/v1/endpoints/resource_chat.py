@@ -1814,6 +1814,7 @@ async def tutor_chat(
     # 事件队列（tutor_agent 通过 sse_callback 推入）
     _sse_events = []
     _thinkings = []
+    _thinking_chunks = []
     def _sse_callback(data):
         _sse_events.append(data)
         if '"thinking"' in data:
@@ -1821,6 +1822,13 @@ async def tutor_chat(
                 d = json.loads(data.replace("data: ", "").strip())
                 if d.get("type") == "thinking" and "content" in d:
                     _thinkings.append({"agent": d.get("agent", ""), "content": d["content"]})
+            except Exception:
+                pass
+        elif '"thinking_chunk"' in data:
+            try:
+                d = json.loads(data.replace("data: ", "").strip())
+                if d.get("type") == "thinking_chunk" and "content" in d:
+                    _thinking_chunks.append(d["content"])
             except Exception:
                 pass
 
@@ -1844,8 +1852,13 @@ async def tutor_chat(
                 if res:
                     try:
                         conversation_context = None
-                        if _thinkings:
-                            conversation_context = json.dumps({"thinkings": _thinkings}, ensure_ascii=False)
+                        if _thinkings or _thinking_chunks:
+                            context_obj = {}
+                            if _thinkings:
+                                context_obj["thinkings"] = _thinkings
+                            if _thinking_chunks:
+                                context_obj["thinking_process"] = "".join(_thinking_chunks)
+                            conversation_context = json.dumps(context_obj, ensure_ascii=False)
                         java_client.create_dialogue(
                             user_id=user_id,
                             session_id=session_id,

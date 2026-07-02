@@ -46,4 +46,29 @@ public class UserProfileController {
         userService.updateProfile(userId, profile);
         return Result.success();
     }
+
+    @Operation(summary = "内部接口：增量更新用户学习画像")
+    @PutMapping("/internal/profile/incremental")
+    public Result<Void> updateProfileIncremental(@RequestBody Map<String, Object> body) {
+        Long userId = Long.valueOf(body.get("userId").toString());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> updates = (Map<String, Object>) body.get("updates");
+        String updateReason = (String) body.get("updateReason");
+
+        userService.updateProfileIncremental(userId, updates, updateReason != null ? updateReason : "profile_bubble_survey");
+        return Result.success();
+    }
+
+    @Operation(summary = "当前用户增量更新学习画像（JWT 认证）")
+    @PutMapping("/profile/incremental")
+    public Result<Void> updateMyProfileIncremental(Authentication authentication,
+                                                     @RequestBody Map<String, Object> body) {
+        Long userId = (Long) authentication.getPrincipal();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> updates = (Map<String, Object>) body.get("updates");
+        String updateReason = (String) body.get("updateReason");
+
+        userService.updateProfileIncremental(userId, updates, updateReason != null ? updateReason : "profile_bubble_survey");
+        return Result.success();
+    }
 }

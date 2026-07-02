@@ -398,3 +398,23 @@ CREATE TABLE IF NOT EXISTS `user_knowledge_domain` (
     KEY `idx_user_id` (`user_id`),
     UNIQUE KEY `uk_user_domain` (`user_id`, `domain_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户知识领域图谱表';
+
+CREATE TABLE IF NOT EXISTS `resource_library` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `title` VARCHAR(255) NOT NULL COMMENT '资源标题',
+    `content_type` VARCHAR(20) NOT NULL COMMENT '内容类型: text/image',
+    `content` LONGTEXT COMMENT '文本内容 (text 类型)',
+    `image_url` VARCHAR(500) COMMENT '图片URL (image 类型)',
+    `image_caption` VARCHAR(500) COMMENT '图片描述 (image 类型)',
+    `qdrant_doc_id` BIGINT COMMENT 'Qdrant 中的 doc_id',
+    `status` TINYINT NOT NULL DEFAULT 0 COMMENT '状态: 0=待审核, 1=已入库, 2=已拒绝',
+    `created_by` BIGINT NOT NULL COMMENT '创建者用户ID',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_deleted` TINYINT DEFAULT 0,
+    `deleted_at` DATETIME DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_content_type` (`content_type`),
+    KEY `idx_status` (`status`),
+    KEY `idx_created_by` (`created_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='资源库表';

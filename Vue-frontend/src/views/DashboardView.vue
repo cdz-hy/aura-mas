@@ -1,13 +1,27 @@
 <template>
   <div>
     <!-- Welcome header -->
-    <div class="mb-8">
-      <h1 class="section-title">
-        {{ greeting }}，{{ authStore.user?.nickname || '同学' }}
-      </h1>
-      <p class="mt-1 text-navy-400 h-6">
-        <span class="typewriter" :class="{ 'typewriter-typing': isTyping }">{{ displayedGreeting }}</span>
-      </p>
+    <div class="mb-8 flex items-start justify-between">
+      <div>
+        <h1 class="section-title">
+          {{ greeting }}，{{ authStore.user?.nickname || '同学' }}
+        </h1>
+        <p class="mt-1 text-navy-400 h-6">
+          <span class="typewriter" :class="{ 'typewriter-typing': isTyping }">{{ displayedGreeting }}</span>
+        </p>
+      </div>
+      <button
+        class="mt-1 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium transition-all border"
+        :class="cloudEnabled
+          ? 'bg-violet-50 text-violet-600 border-violet-200 hover:bg-violet-100'
+          : 'bg-navy-50 text-navy-400 border-navy-200 hover:bg-navy-100'"
+        @click="toggleCloud"
+        :title="cloudEnabled ? '关闭画像气泡' : '开启画像气泡'"
+      >
+        <svg v-if="cloudEnabled" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+        <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        {{ cloudEnabled ? '气泡已开' : '气泡已关' }}
+      </button>
     </div>
 
     <!-- Stats cards -->
@@ -170,6 +184,12 @@
       @confirm="handleCompleteConfirm"
       @cancel="handleCompleteCancel"
     />
+
+    <!-- 画像问题气泡 -->
+    <ProfileBubble
+      v-if="authStore.user?.id && cloudEnabled"
+      :user-id="authStore.user.id"
+    />
   </div>
 </template>
 
@@ -183,6 +203,7 @@ import { getPlanResources, getProgressByPlan, markResourceComplete } from '@/api
 import type { DashboardStats } from '@/api/stats'
 import type { LearningPlan } from '@/types/plan'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import ProfileBubble from '@/components/dashboard/ProfileBubble.vue'
 import dayjs from 'dayjs'
 
 const router = useRouter()
@@ -197,6 +218,15 @@ const completingPlanId = ref<number | null>(null)
 const dynamicGreeting = ref('继续你的学习之旅')
 const displayedGreeting = ref('继续你的学习之旅')
 const isTyping = ref(false)
+
+// 画像气泡开关（默认开启）
+const CLOUD_ENABLED_KEY = 'profile_cloud_enabled'
+const cloudEnabled = ref(localStorage.getItem(CLOUD_ENABLED_KEY) !== 'false')
+
+function toggleCloud() {
+  cloudEnabled.value = !cloudEnabled.value
+  localStorage.setItem(CLOUD_ENABLED_KEY, String(cloudEnabled.value))
+}
 
 const greeting = computed(() => {
   const h = new Date().getHours()

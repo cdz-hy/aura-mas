@@ -20,3 +20,4 @@ playwright
 bilibili-api-python
 redis
 pika
+volcengine-python-sdk[ark]

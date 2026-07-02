@@ -1156,14 +1156,6 @@ const progressMap = ref<Record<number, number>>({}) // resourceId -> status (0/1
 const selectedModuleIndex = ref(-1)
 const selectedResourceId = ref<number | null>(null)
 const selectedResource = ref<LearningResource | null>(null)
-
-// 流式资源生成开始时，清除选中的资源，让中间面板显示流式预览
-watch(() => chatStore.isResourceStreaming, (streaming) => {
-  if (streaming) {
-    selectedResource.value = null
-    selectedResourceId.value = null
-  }
-})
 const isFullscreen = ref(false)
 const quizData = ref<QuizData | null>(null)
 const mindmapData = ref<MindElixirData | null>(null)
@@ -1826,8 +1818,7 @@ async function generateFromTreeNode(payload: { nodeId: string; type: string }) {
     }
     chatStore.selectedModuleContext = ctx
     await chatStore.requestNodeResourceGeneration(String(planId.value), ctx, payload.type)
-    // quiz 类型由流式预览（QuizStreamPreview）处理，不要提前打开占位资源
-    if (!isTreeMode.value && payload.type !== 'quiz') {
+    if (!isTreeMode.value) {
       await openResourceById(resourceId, payload.type)
     }
   } catch (e) {
@@ -3169,8 +3160,8 @@ watch(() => chatStore.streamingPlaceholders, (placeholders) => {
     }
     resources.value.push(placeholderRes)
   }
-  // 自动选中第一个占位资源以在中间面板显示流式内容
-  if (placeholders.length > 0 && !selectedResource.value) {
+  // 自动选中第一个占位资源以在中间面板显示流式内容（始终覆盖，确保流式预览可见）
+  if (placeholders.length > 0) {
     const firstPlaceholder = resources.value.find(r => r.id === placeholders[0].id)
     if (firstPlaceholder) {
       selectedResourceId.value = firstPlaceholder.id

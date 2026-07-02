@@ -27,3 +27,4 @@ from app.prompts.quiz_grader import QUIZ_GRADER_PROMPT
 from app.prompts.profile_maintainer import PROFILE_MAINTAINER_PROMPT
 from app.prompts.anomaly_checker import ANOMALY_CHECK_PROMPT
 from app.prompts.qwen_chat import QWEN_CHAT_SYSTEM_PROMPT
+from app.prompts.tutor import TUTOR_REACT_PROMPT, RESPONSE_PROMPT, TUTOR_PROFILE_PROMPT

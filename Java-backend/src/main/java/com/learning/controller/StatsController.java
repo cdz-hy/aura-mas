@@ -29,6 +29,12 @@ public class StatsController {
         return Result.success(statsService.getDashboardStats(userId));
     }
 
+    @Operation(summary = "内部接口：获取仪表盘统计数据")
+    @GetMapping("/internal/dashboard")
+    public Result<Map<String, Object>> getDashboardInternal(@RequestParam Long userId) {
+        return Result.success(statsService.getDashboardStats(userId));
+    }
+
     @Operation(summary = "获取答题详细分析")
     @GetMapping("/quiz-analysis")
     public Result<Map<String, Object>> getQuizAnalysis(Authentication authentication) {
