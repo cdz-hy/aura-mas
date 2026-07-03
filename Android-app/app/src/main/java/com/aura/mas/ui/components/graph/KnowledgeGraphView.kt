@@ -104,13 +104,13 @@ fun KnowledgeGraphView(
                     settings.allowContentAccess = true
                     settings.allowFileAccessFromFileURLs = true
                     settings.allowUniversalAccessFromFileURLs = true
-                    
+
                     // Allow transparent background to match Compose theme colors
                     setBackgroundColor(Color.TRANSPARENT)
-                    
+
                     // Hardware acceleration for high-performance fluid 60fps graph animations
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                    
+
                     addJavascriptInterface(jsBridge, "AndroidInterface")
                     loadUrl("https://appassets.androidplatform.net/assets/echarts_graph.html")
                     webViewRef = this
