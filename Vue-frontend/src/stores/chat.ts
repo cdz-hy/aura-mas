@@ -76,7 +76,7 @@ export const useChatStore = defineStore('chat', () => {
     return keys.length > 0 ? buffers[Number(keys[keys.length - 1])] || '' : ''
   })
 
-  const selectedModuleContext = ref<{ title: string; description: string; moduleId: number; planId?: number; nodeId?: string } | null>(null)
+  const selectedModuleContext = ref<{ title: string; description: string; moduleId: number; planId?: number; nodeId?: string; moduleOrder?: number } | null>(null)
 
   let currentPlanId = localStorage.getItem('chat_currentPlanId') || ''
 

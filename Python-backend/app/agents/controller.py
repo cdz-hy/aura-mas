@@ -646,13 +646,42 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         current_module_id = fetched_module_id if fetched_module_id is not None else state.get("current_module_id")
         if current_module_id and not state.get("task_breakdown"):
             current_title = fetched_module_title if fetched_module_title else (state.get("current_module_title") or "当前学习模块")
-            logger.info(f"  [主控智能体] 自动伪造 task_breakdown (module_id={current_module_id})")
+            logger.info(f"  [主控智能体] 自动伪造 task_breakdown (module_id={current_module_id}, resource_type={resource_type})")
+
+            # 确定资源类型
+            res_type = resource_type
+            if intent == "generate_animation":
+                res_type = "animation"
+            elif not res_type:
+                # 从用户消息中推断资源类型
+                user_msg = state.get("user_message", "").lower()
+                if "思维导图" in user_msg or "mindmap" in user_msg or "导图" in user_msg:
+                    res_type = "mindmap"
+                elif "播客" in user_msg or "podcast" in user_msg:
+                    res_type = "podcast"
+                elif "总结" in user_msg or "summary" in user_msg:
+                    res_type = "summary"
+                elif "代码" in user_msg or "code" in user_msg:
+                    res_type = "code"
+                elif "ppt" in user_msg:
+                    res_type = "pptx"
+                else:
+                    res_type = "text"
+                logger.info(f"  [主控智能体] LLM 未返回 resource_type，从用户消息推断: {res_type}")
+
+            # 获取当前资源的 moduleOrder，新资源应该在同一个模块下
+            current_module_order = state.get("current_module_order", 0)
+
             result["task_breakdown"] = {
                 "title": current_title,
                 "modules": [{
-                    "module_order": current_module_id,
+                    "module_order": current_module_order,
                     "title": current_title,
-                    "description": "用户请求的补充学习资源"
+                    "description": "用户请求的补充学习资源",
+                    "resources": [{
+                        "resource_type": res_type,
+                        "title": f"{current_title}的{res_type}资源"
+                    }]
                 }]
             }
             result["task_breakdown_confirmed"] = True

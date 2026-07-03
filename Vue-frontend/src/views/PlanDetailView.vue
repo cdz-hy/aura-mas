@@ -2561,6 +2561,7 @@ function toggleResource(res: LearningResource) {
     moduleId: res.id,
     planId: res.planId || planId.value,
     nodeId: (res.moduleData?.nodeId || res.moduleData?.node_id) as string | undefined,
+    moduleOrder: res.moduleOrder,
   }
   // 仅在非 quiz 资源时提示（quiz 本身已是补充资源）
   if (res.moduleType !== 'quiz') {
