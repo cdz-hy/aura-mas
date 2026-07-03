@@ -28,7 +28,7 @@ class OfflineSyncWorker @AssistedInject constructor(
             if (plans.isSuccess && plans.data != null) {
                 planDao.deleteAll()
                 planDao.insertAll(plans.data.records.map {
-                    CachedPlan(it.id, it.userId, it.title, it.learningGoal, it.status, it.createdAt, it.updatedAt)
+                    CachedPlan(it.id, it.userId, it.title, it.learningGoal, it.planConfig, it.status, it.createdAt, it.updatedAt)
                 })
             }
 

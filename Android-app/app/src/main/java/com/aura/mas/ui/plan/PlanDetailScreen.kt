@@ -77,7 +77,8 @@ class PlanDetailViewModel @Inject constructor(
     private val planRepo: PlanRepository,
     private val api: ApiService,
     private val chatRepo: ChatRepository,
-    private val sseClient: SseClient
+    private val sseClient: SseClient,
+    private val networkUtil: com.aura.mas.util.NetworkUtil
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(PlanDetailUiState())
     val uiState: StateFlow<PlanDetailUiState> = _uiState.asStateFlow()
@@ -260,6 +261,10 @@ class PlanDetailViewModel @Inject constructor(
 
     fun sendMessage(message: String, extraParams: Map<String, String>? = null) {
         if (message.isBlank()) return
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法发送消息")
+            return
+        }
         val currentMode = _uiState.value.chatMode
 
         viewModelScope.launch {
@@ -327,6 +332,10 @@ class PlanDetailViewModel @Inject constructor(
     }
 
     fun markComplete(resourceId: Long) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法更新进度")
+            return
+        }
         viewModelScope.launch {
             planRepo.markComplete(planId, resourceId)
             loadPlan(planId)
@@ -1203,28 +1212,35 @@ private fun stripCitationSection(content: String): String {
 }
 
 private fun getResourceIcon(type: String) = when (type) {
-    "document", "reading" -> Icons.Outlined.Description
+    "document" -> Icons.Outlined.Description
+    "text" -> Icons.Outlined.Article
+    "reading" -> Icons.Outlined.MenuBook
     "summary" -> Icons.Outlined.Summarize
     "mindmap" -> Icons.Filled.Folder
     "quiz" -> Icons.Outlined.Quiz
     "code" -> Icons.Outlined.Code
     "video" -> Icons.Filled.PlayCircle
+    "image" -> Icons.Outlined.Image
+    "diagram" -> Icons.Outlined.BarChart
+    "animation" -> Icons.Filled.Animation
     "podcast" -> Icons.Filled.Headphones
     "pptx" -> Icons.Filled.Slideshow
-    "animation" -> Icons.Filled.Animation
-    else -> Icons.Outlined.Article
+    else -> Icons.Outlined.Description
 }
 
 private fun getResourceTypeName(type: String) = when (type) {
     "document" -> "文档"
-    "reading" -> "阅读材料"
-    "summary" -> "摘要"
-    "mindmap" -> "思维导图"
-    "quiz" -> "测验"
+    "text" -> "图文"
+    "reading" -> "阅读"
+    "summary" -> "总结"
+    "mindmap" -> "导图"
+    "quiz" -> "题目"
     "code" -> "代码"
     "video" -> "视频"
-    "podcast" -> "播客"
-    "pptx" -> "演示文稿"
+    "image" -> "图片"
+    "diagram" -> "图表"
     "animation" -> "动画"
+    "podcast" -> "播客"
+    "pptx" -> "PPT"
     else -> "资源"
 }

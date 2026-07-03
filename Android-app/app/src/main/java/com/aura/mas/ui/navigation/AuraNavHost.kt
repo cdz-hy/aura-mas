@@ -154,7 +154,9 @@ fun AuraNavHost() {
         ) {
             KnowledgeGraphScreen(
                 userId = it.arguments?.getLong("userId") ?: 0L,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onNavigateToNote = { noteId -> navController.navigate(NavRoutes.noteDetail(noteId)) },
+                onNavigateToQuiz = { quizId -> navController.navigate(NavRoutes.quizPlayer(quizId)) }
             )
         }
         composable(NavRoutes.SETTINGS) {

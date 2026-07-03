@@ -59,7 +59,8 @@ data class PersonalInfoUiState(
 @HiltViewModel
 class PersonalInfoViewModel @Inject constructor(
     val authStore: AuthStore,
-    private val api: ApiService
+    private val api: ApiService,
+    private val networkUtil: com.aura.mas.util.NetworkUtil
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(PersonalInfoUiState())
     val uiState: StateFlow<PersonalInfoUiState> = _uiState.asStateFlow()
@@ -84,6 +85,10 @@ class PersonalInfoViewModel @Inject constructor(
     }
 
     fun saveUserInfo(nickname: String, email: String, gender: String, age: String, domain: String) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法保存")
+            return
+        }
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSaving = true, error = null, saveSuccess = false)
             try {

@@ -459,7 +459,7 @@ private fun AnimationContent(moduleData: Map<String, Any>) {
                     }
                 },
                 update = { webView ->
-                    webView.loadHtml(fullHtml, Constants.PYTHON_BASE_URL)
+                    webView.loadDataWithBaseURL("file:///android_asset/", fullHtml, "text/html", "UTF-8", null)
                 },
                 modifier = Modifier.fillMaxWidth().height(520.dp).clip(RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
             )
@@ -865,7 +865,7 @@ private fun MindElixirWebView(
                     }
                 }
             },
-            update = { webView -> webView.loadHtml(mindmapHtml, "https://cdn.jsdelivr.net/") }
+            update = { webView -> webView.loadDataWithBaseURL("file:///android_asset/", mindmapHtml, "text/html", "UTF-8", null) }
         )
         if (errorMsg.isNotBlank()) {
             Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
@@ -941,7 +941,7 @@ private fun buildMindElixirHtml(data: Map<String, Any>): String {
         <head>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=4.0,user-scalable=yes">
-          <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mind-elixir/dist/style.css">
+          <link rel="stylesheet" href="mind-elixir.css">
           <style>
             html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#fff;font-family:system-ui,-apple-system,sans-serif}
             #map{width:100vw;height:100vh;background:#fff}
@@ -952,7 +952,7 @@ private fun buildMindElixirHtml(data: Map<String, Any>): String {
         </head>
         <body>
           <div id="map"></div>
-          <script src="https://cdn.jsdelivr.net/npm/mind-elixir/dist/MindElixirLite.iife.js"></script>
+          <script src="MindElixirLite.iife.js"></script>
           <script>
             (function(){
               try {
@@ -1021,13 +1021,17 @@ private fun mapToMindmapNode(raw: Map<*, *>, fallbackTopic: String): MindmapNode
 }
 
 private fun normalizeAnimationHtmlForAndroid(raw: String): String {
-    val baseTag = "<base href=\"${Constants.PYTHON_BASE_URL.trimEnd('/')}/\">"
-    val inner = if (raw.contains("<html", ignoreCase = true) || raw.contains("<!DOCTYPE", ignoreCase = true)) {
-        raw
+    val rawWithLocalGsap = raw.replace(
+        "https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js",
+        "gsap.min.js"
+    )
+    val baseTag = "<base href=\"file:///android_asset/\">"
+    val inner = if (rawWithLocalGsap.contains("<html", ignoreCase = true) || rawWithLocalGsap.contains("<!DOCTYPE", ignoreCase = true)) {
+        rawWithLocalGsap
     } else {
         """
         <!DOCTYPE html>
-        <html><head><meta charset="UTF-8"></head><body>$raw</body></html>
+        <html><head><meta charset="UTF-8"></head><body>$rawWithLocalGsap</body></html>
         """.trimIndent()
     }
 
@@ -1053,12 +1057,14 @@ private class DiagnosticWebChromeClient(
     }
 }
 
-private fun WebView.applyResourceWebSettings(allowFileAccess: Boolean = false) {
+private fun WebView.applyResourceWebSettings(allowFileAccess: Boolean = true) {
     settings.javaScriptEnabled = true
     settings.domStorageEnabled = true
     settings.databaseEnabled = true
     settings.allowFileAccess = allowFileAccess
     settings.allowContentAccess = true
+    settings.allowFileAccessFromFileURLs = true
+    settings.allowUniversalAccessFromFileURLs = true
     settings.mediaPlaybackRequiresUserGesture = false
     settings.setSupportZoom(true)
     settings.builtInZoomControls = true
@@ -1294,29 +1300,36 @@ private fun stripCitationSection(content: String): String {
 }
 
 private fun getResourceIcon(type: String) = when (type) {
-    "document", "reading" -> Icons.Outlined.Description
+    "document" -> Icons.Outlined.Description
+    "text" -> Icons.Outlined.Article
+    "reading" -> Icons.Outlined.MenuBook
     "summary" -> Icons.Outlined.Summarize
     "mindmap" -> Icons.Filled.Folder
     "quiz" -> Icons.Outlined.Quiz
     "code" -> Icons.Outlined.Code
     "video" -> Icons.Filled.PlayCircle
+    "image" -> Icons.Outlined.Image
+    "diagram" -> Icons.Outlined.BarChart
+    "animation" -> Icons.Filled.Animation
     "podcast" -> Icons.Filled.Headphones
     "pptx" -> Icons.Filled.Slideshow
-    "animation" -> Icons.Filled.Animation
-    else -> Icons.Outlined.Article
+    else -> Icons.Outlined.Description
 }
 
 private fun getResourceTypeName(type: String) = when (type) {
     "document" -> "文档"
-    "reading" -> "阅读材料"
-    "summary" -> "摘要"
-    "mindmap" -> "思维导图"
-    "quiz" -> "测验"
+    "text" -> "图文"
+    "reading" -> "阅读"
+    "summary" -> "总结"
+    "mindmap" -> "导图"
+    "quiz" -> "题目"
     "code" -> "代码"
     "video" -> "视频"
-    "podcast" -> "播客"
-    "pptx" -> "演示文稿"
+    "image" -> "图片"
+    "diagram" -> "图表"
     "animation" -> "动画"
+    "podcast" -> "播客"
+    "pptx" -> "PPT"
     else -> "资源"
 }
 
