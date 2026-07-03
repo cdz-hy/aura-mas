@@ -602,6 +602,9 @@ private fun MessageBubble(
                                                                 "mindmap" -> "思维导图"
                                                                 "code" -> "代码示例"
                                                                 "summary" -> "总结"
+                                                                "video" -> "教学视频"
+                                                                "animation" -> "动画"
+                                                                "podcast" -> "播客"
                                                                 "pptx" -> "PPT"
                                                                 else -> r.resourceType
                                                             }
@@ -635,6 +638,9 @@ private fun MessageBubble(
                                             "mindmap" -> "思维导图"
                                             "code" -> "代码示例"
                                             "summary" -> "总结"
+                                            "video" -> "教学视频"
+                                            "animation" -> "动画"
+                                            "podcast" -> "播客"
                                             "pptx" -> "PPT"
                                             else -> r.type
                                         }
