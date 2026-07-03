@@ -113,7 +113,8 @@ fun MainLayout(navController: NavController) {
                     onLearningProfileClick = { navController.navigate(NavRoutes.LEARNING_PROFILE) },
                     onSettingsClick = { navController.navigate(NavRoutes.SETTINGS) },
                     onAnalyticsClick = { navController.navigate(NavRoutes.ANALYTICS) },
-                    onAdminClick = { navController.navigate(NavRoutes.ADMIN_DASHBOARD) }
+                    onAdminClick = { navController.navigate(NavRoutes.ADMIN_DASHBOARD) },
+                    onKnowledgeGraphClick = { userId -> navController.navigate(NavRoutes.knowledgeGraph(userId)) }
                 )
             }
         }

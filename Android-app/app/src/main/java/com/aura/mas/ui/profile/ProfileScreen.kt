@@ -73,6 +73,7 @@ fun ProfileScreen(
     onSettingsClick: () -> Unit,
     onAnalyticsClick: () -> Unit,
     onAdminClick: () -> Unit,
+    onKnowledgeGraphClick: (Long) -> Unit,
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -154,6 +155,9 @@ fun ProfileScreen(
         item {
             Spacer(Modifier.height(16.dp))
             ProfileMenuItem(Icons.Default.PersonSearch, "详细学习画像", onLearningProfileClick)
+            ProfileMenuItem(Icons.Default.Hub, "知识图谱") {
+                onKnowledgeGraphClick(user?.id ?: 0L)
+            }
             ProfileMenuItem(Icons.Default.BarChart, "学习分析", onAnalyticsClick)
             ProfileMenuItem(Icons.Default.Settings, "设置", onSettingsClick)
             if (user?.role == "admin") {

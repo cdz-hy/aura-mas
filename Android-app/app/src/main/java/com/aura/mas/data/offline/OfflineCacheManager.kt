@@ -90,14 +90,14 @@ class OfflineCacheManager @Inject constructor(
 
     private fun CachedPlan.toDomain() = LearningPlan(
         id = id, userId = userId, title = title,
-        learningGoal = learningGoal, status = status,
-        createdAt = createdAt, updatedAt = updatedAt
+        learningGoal = learningGoal, planConfig = planConfig,
+        status = status, createdAt = createdAt, updatedAt = updatedAt
     )
 
     private fun LearningPlan.toCached() = CachedPlan(
         id = id, userId = userId, title = title,
-        learningGoal = learningGoal, status = status,
-        createdAt = createdAt, updatedAt = updatedAt
+        learningGoal = learningGoal, planConfig = planConfig,
+        status = status, createdAt = createdAt, updatedAt = updatedAt
     )
 
     private fun CachedResource.toDomain() = LearningResource(

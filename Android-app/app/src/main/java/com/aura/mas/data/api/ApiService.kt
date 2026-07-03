@@ -219,7 +219,17 @@ interface ApiService {
 
     // ── Knowledge Graph ───────────────────────────────────────
     @GET("/api/knowledge-graph/user/{userId}")
-    suspend fun getKnowledgeDomains(@Path("userId") userId: Long): ApiResponse<List<Any>>
+    suspend fun getKnowledgeDomains(@Path("userId") userId: Long): ApiResponse<List<UserKnowledgeDomain>>
+
+    @GET("/api/knowledge-graph/domain/{domainId}")
+    suspend fun getDomainGraph(@Path("domainId") domainId: Long): ApiResponse<UserKnowledgeDomain>
+
+    @PATCH("/api/knowledge-graph/domain/{domainId}/node/{nodeId}")
+    suspend fun patchKnowledgeNode(
+        @Path("domainId") domainId: Long,
+        @Path("nodeId") nodeId: String,
+        @Body req: Map<String, Double>
+    ): ApiResponse<Boolean>
 
     // ── Quiz Records ──────────────────────────────────────────
     @GET("/api/quiz/internal/user/{userId}")

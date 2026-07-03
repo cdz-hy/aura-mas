@@ -60,7 +60,8 @@ data class StandaloneChatUiState(
 @HiltViewModel
 class StandaloneChatViewModel @Inject constructor(
     private val chatRepo: ChatRepository,
-    private val sseClient: SseClient
+    private val sseClient: SseClient,
+    private val networkUtil: com.aura.mas.util.NetworkUtil
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(StandaloneChatUiState())
     val uiState: StateFlow<StandaloneChatUiState> = _uiState.asStateFlow()
@@ -125,6 +126,10 @@ class StandaloneChatViewModel @Inject constructor(
     }
 
     fun deleteSession(sessionId: String) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法删除会话")
+            return
+        }
         viewModelScope.launch {
             chatRepo.deleteSession(sessionId)
             loadSessions()
@@ -150,6 +155,10 @@ class StandaloneChatViewModel @Inject constructor(
 
     fun sendMessage(message: String, extraParams: Map<String, String>? = null) {
         if (message.isBlank()) return
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法发送消息")
+            return
+        }
         val mode = _uiState.value.mode
         viewModelScope.launch {
             val sessionId = _uiState.value.activeSessionId ?: if (mode == ChatMode.TUTOR) {

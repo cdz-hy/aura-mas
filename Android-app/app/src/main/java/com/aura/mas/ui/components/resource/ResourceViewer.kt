@@ -5,6 +5,7 @@ import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -256,8 +257,6 @@ private fun MindmapContent(moduleData: Map<String, Any>) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(520.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .border(1.dp, Navy100, RoundedCornerShape(14.dp))
                 )
             }
         }
@@ -416,8 +415,16 @@ private fun AnimationContent(moduleData: Map<String, Any>) {
         return
     }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
     val fullHtml = remember(html) { normalizeAnimationHtmlForAndroid(html) }
     var debugInfo by remember(html) { mutableStateOf("") }
+    var loadedHtml by remember { mutableStateOf("") }
+
+    val assetLoader = remember(context) {
+        androidx.webkit.WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", androidx.webkit.WebViewAssetLoader.AssetsPathHandler(context))
+            .build()
+    }
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -446,7 +453,16 @@ private fun AnimationContent(moduleData: Map<String, Any>) {
                             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                                 if (request?.isForMainFrame == true) {
                                     debugInfo = "页面加载失败: ${error?.description}"
+                                } else if (request?.url?.toString()?.contains("gsap", ignoreCase = true) == true) {
+                                    debugInfo = "核心JS文件(GSAP)加载失败，这通常是因为修改了assets但未重新安装(Rebuild)App导致。请尝试重新编译安装。"
                                 }
+                            }
+
+                            override fun shouldInterceptRequest(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): WebResourceResponse? {
+                                return request?.url?.let { assetLoader.shouldInterceptRequest(it) }
                             }
                         }
                         setOnTouchListener { v, event ->
@@ -459,9 +475,12 @@ private fun AnimationContent(moduleData: Map<String, Any>) {
                     }
                 },
                 update = { webView ->
-                    webView.loadHtml(fullHtml, Constants.PYTHON_BASE_URL)
+                    if (loadedHtml != fullHtml) {
+                        loadedHtml = fullHtml
+                        webView.loadDataWithBaseURL("https://appassets.androidplatform.net/assets/", fullHtml, "text/html", "UTF-8", null)
+                    }
                 },
-                modifier = Modifier.fillMaxWidth().height(520.dp).clip(RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
+                modifier = Modifier.fillMaxWidth().height(520.dp)
             )
             if (debugInfo.isNotBlank()) {
                 Surface(
@@ -836,15 +855,24 @@ private fun MindElixirWebView(
     onFallback: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val mindmapHtml = remember(nodeData) { buildMindElixirHtml(nodeData) }
     var errorMsg by remember(nodeData) { mutableStateOf("") }
+    var loadedHtml by remember { mutableStateOf("") }
+
+    val assetLoader = remember(context) {
+        androidx.webkit.WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", androidx.webkit.WebViewAssetLoader.AssetsPathHandler(context))
+            .build()
+    }
+
     Column(modifier = modifier) {
         AndroidView(
             modifier = Modifier.fillMaxWidth().weight(1f),
             factory = { ctx ->
                 WebView(ctx).apply {
                     setBackgroundColor(android.graphics.Color.WHITE)
-                    applyResourceWebSettings(allowFileAccess = false)
+                    applyResourceWebSettings(allowFileAccess = true)
                     webChromeClient = DiagnosticWebChromeClient { message ->
                         if (message.contains("ERROR", ignoreCase = true)) errorMsg = message
                     }
@@ -853,7 +881,17 @@ private fun MindElixirWebView(
                             if (request?.isForMainFrame == true) {
                                 errorMsg = "加载失败: ${error?.description}"
                                 onFallback()
+                            } else if (request?.url?.toString()?.contains("MindElixirLite", ignoreCase = true) == true) {
+                                errorMsg = "核心JS文件加载失败，这通常是因为修改了assets但未重新安装(Rebuild)App导致。请尝试重新编译安装。"
+                                onFallback()
                             }
+                        }
+
+                        override fun shouldInterceptRequest(
+                            view: WebView?,
+                            request: WebResourceRequest?
+                        ): WebResourceResponse? {
+                            return request?.url?.let { assetLoader.shouldInterceptRequest(it) }
                         }
                     }
                     setOnTouchListener { v, event ->
@@ -865,7 +903,12 @@ private fun MindElixirWebView(
                     }
                 }
             },
-            update = { webView -> webView.loadHtml(mindmapHtml, "https://cdn.jsdelivr.net/") }
+            update = { webView ->
+                if (loadedHtml != mindmapHtml) {
+                    loadedHtml = mindmapHtml
+                    webView.loadDataWithBaseURL("https://appassets.androidplatform.net/assets/", mindmapHtml, "text/html", "UTF-8", null)
+                }
+            }
         )
         if (errorMsg.isNotBlank()) {
             Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
@@ -941,7 +984,7 @@ private fun buildMindElixirHtml(data: Map<String, Any>): String {
         <head>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=4.0,user-scalable=yes">
-          <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mind-elixir/dist/style.css">
+          <link rel="stylesheet" href="mind-elixir.css">
           <style>
             html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#fff;font-family:system-ui,-apple-system,sans-serif}
             #map{width:100vw;height:100vh;background:#fff}
@@ -952,7 +995,7 @@ private fun buildMindElixirHtml(data: Map<String, Any>): String {
         </head>
         <body>
           <div id="map"></div>
-          <script src="https://cdn.jsdelivr.net/npm/mind-elixir/dist/MindElixirLite.iife.js"></script>
+          <script src="MindElixirLite.iife.js"></script>
           <script>
             (function(){
               try {
@@ -1021,13 +1064,17 @@ private fun mapToMindmapNode(raw: Map<*, *>, fallbackTopic: String): MindmapNode
 }
 
 private fun normalizeAnimationHtmlForAndroid(raw: String): String {
-    val baseTag = "<base href=\"${Constants.PYTHON_BASE_URL.trimEnd('/')}/\">"
-    val inner = if (raw.contains("<html", ignoreCase = true) || raw.contains("<!DOCTYPE", ignoreCase = true)) {
-        raw
+    val rawWithLocalGsap = raw.replace(
+        "https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js",
+        "gsap.min.js"
+    )
+    val baseTag = "<base href=\"https://appassets.androidplatform.net/assets/\">"
+    val inner = if (rawWithLocalGsap.contains("<html", ignoreCase = true) || rawWithLocalGsap.contains("<!DOCTYPE", ignoreCase = true)) {
+        rawWithLocalGsap
     } else {
         """
         <!DOCTYPE html>
-        <html><head><meta charset="UTF-8"></head><body>$raw</body></html>
+        <html><head><meta charset="UTF-8"></head><body>$rawWithLocalGsap</body></html>
         """.trimIndent()
     }
 
@@ -1046,6 +1093,7 @@ private class DiagnosticWebChromeClient(
     override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
         val message = consoleMessage ?: return false
         val text = "WebView ${message.messageLevel()}: ${message.message()} (${message.sourceId()}:${message.lineNumber()})"
+        android.util.Log.d("ResourceWebViewConsole", text)
         if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR || message.message().contains("animation", ignoreCase = true)) {
             onMessage(text)
         }
@@ -1053,12 +1101,14 @@ private class DiagnosticWebChromeClient(
     }
 }
 
-private fun WebView.applyResourceWebSettings(allowFileAccess: Boolean = false) {
+private fun WebView.applyResourceWebSettings(allowFileAccess: Boolean = true) {
     settings.javaScriptEnabled = true
     settings.domStorageEnabled = true
     settings.databaseEnabled = true
     settings.allowFileAccess = allowFileAccess
     settings.allowContentAccess = true
+    settings.allowFileAccessFromFileURLs = true
+    settings.allowUniversalAccessFromFileURLs = true
     settings.mediaPlaybackRequiresUserGesture = false
     settings.setSupportZoom(true)
     settings.builtInZoomControls = true
@@ -1294,29 +1344,36 @@ private fun stripCitationSection(content: String): String {
 }
 
 private fun getResourceIcon(type: String) = when (type) {
-    "document", "reading" -> Icons.Outlined.Description
+    "document" -> Icons.Outlined.Description
+    "text" -> Icons.Outlined.Article
+    "reading" -> Icons.Outlined.MenuBook
     "summary" -> Icons.Outlined.Summarize
     "mindmap" -> Icons.Filled.Folder
     "quiz" -> Icons.Outlined.Quiz
     "code" -> Icons.Outlined.Code
     "video" -> Icons.Filled.PlayCircle
+    "image" -> Icons.Outlined.Image
+    "diagram" -> Icons.Outlined.BarChart
+    "animation" -> Icons.Filled.Animation
     "podcast" -> Icons.Filled.Headphones
     "pptx" -> Icons.Filled.Slideshow
-    "animation" -> Icons.Filled.Animation
-    else -> Icons.Outlined.Article
+    else -> Icons.Outlined.Description
 }
 
 private fun getResourceTypeName(type: String) = when (type) {
     "document" -> "文档"
-    "reading" -> "阅读材料"
-    "summary" -> "摘要"
-    "mindmap" -> "思维导图"
-    "quiz" -> "测验"
+    "text" -> "图文"
+    "reading" -> "阅读"
+    "summary" -> "总结"
+    "mindmap" -> "导图"
+    "quiz" -> "题目"
     "code" -> "代码"
     "video" -> "视频"
-    "podcast" -> "播客"
-    "pptx" -> "演示文稿"
+    "image" -> "图片"
+    "diagram" -> "图表"
     "animation" -> "动画"
+    "podcast" -> "播客"
+    "pptx" -> "PPT"
     else -> "资源"
 }
 

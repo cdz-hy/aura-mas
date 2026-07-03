@@ -1,156 +1,138 @@
 package com.aura.mas.ui.components.graph
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.layout.fillMaxSize
+import android.annotation.SuppressLint
+import android.graphics.Color
+import android.view.View
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
-import com.aura.mas.ui.theme.*
-import kotlin.math.cos
-import kotlin.math.sin
-import kotlin.math.sqrt
 
-data class GraphNode(
-    val id: Long,
-    val label: String,
-    val mastery: Float = 0.5f,
-    val importance: Float = 0.5f,
-    var x: Float = 0f,
-    var y: Float = 0f
-)
-
-data class GraphEdge(
-    val sourceId: Long,
-    val targetId: Long,
-    val weight: Float = 1f
-)
-
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun KnowledgeGraphView(
-    nodes: List<GraphNode>,
-    edges: List<GraphEdge>,
-    modifier: Modifier = Modifier
+    jsonData: String,
+    onNodeClick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    isDarkTheme: Boolean = isSystemInDarkTheme()
 ) {
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    var offsetY by remember { mutableFloatStateOf(0f) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var isHtmlLoaded by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
 
-    // Force-directed layout simulation
-    val positionedNodes = remember(nodes, edges) {
-        val list = nodes.map { it.copy() }
-        // Simple circular initial layout
-        val centerX = 400f
-        val centerY = 400f
-        val radius = 150f
-        list.forEachIndexed { index, node ->
-            val angle = 2 * Math.PI * index / list.size
-            node.x = centerX + radius * cos(angle).toFloat()
-            node.y = centerY + radius * sin(angle).toFloat()
-        }
-        // Simple force simulation (5 iterations)
-        repeat(5) {
-            // Repulsion between nodes
-            for (i in list.indices) {
-                for (j in i + 1 until list.size) {
-                    val dx = list[j].x - list[i].x
-                    val dy = list[j].y - list[i].y
-                    val dist = sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
-                    val force = 1000f / (dist * dist)
-                    val fx = dx / dist * force
-                    val fy = dy / dist * force
-                    list[i].x -= fx; list[i].y -= fy
-                    list[j].x += fx; list[j].y += fy
+    // HTML loading callback with WebViewAssetLoader support
+    val webViewClientInstance = remember(context) {
+        val assetLoader = androidx.webkit.WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", androidx.webkit.WebViewAssetLoader.AssetsPathHandler(context))
+            .build()
+
+        object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                if (loadError == null) {
+                    isHtmlLoaded = true
                 }
             }
-            // Attraction along edges
-            edges.forEach { edge ->
-                val source = list.find { it.id == edge.sourceId }
-                val target = list.find { it.id == edge.targetId }
-                if (source != null && target != null) {
-                    val dx = target.x - source.x
-                    val dy = target.y - source.y
-                    val dist = sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
-                    val force = (dist - 120f) * 0.01f
-                    val fx = dx / dist * force
-                    val fy = dy / dist * force
-                    source.x += fx; source.y += fy
-                    target.x -= fx; target.y -= fy
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: android.webkit.WebResourceRequest?,
+                error: android.webkit.WebResourceError?
+            ) {
+                super.onReceivedError(view, request, error)
+                if (request?.isForMainFrame == true) {
+                    loadError = "加载失败: ${error?.description}"
+                    android.util.Log.e("WebViewConsole", "onReceivedError: ${error?.description} for URL: ${request.url}")
                 }
             }
+
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: android.webkit.WebResourceRequest?
+            ): android.webkit.WebResourceResponse? {
+                return request?.url?.let { assetLoader.shouldInterceptRequest(it) }
+            }
         }
-        list
     }
 
-    val textColor = Color(0xFF1B2A4A)
-
-    Canvas(
-        modifier = modifier.fillMaxSize()
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    scale = (scale * zoom).coerceIn(0.3f, 3f)
-                    offsetX += pan.x
-                    offsetY += pan.y
+    // Android to JavaScript Interface Bridge
+    val jsBridge = remember(onNodeClick) {
+        object {
+            @JavascriptInterface
+            fun onNodeClick(nodeId: String) {
+                // Post to main UI thread
+                webViewRef?.post {
+                    onNodeClick(nodeId)
                 }
-            }
-            .graphicsLayer {
-                scaleX = scale; scaleY = scale
-                translationX = offsetX; translationY = offsetY
-            }
-    ) {
-        // Draw edges
-        edges.forEach { edge ->
-            val source = positionedNodes.find { it.id == edge.sourceId }
-            val target = positionedNodes.find { it.id == edge.targetId }
-            if (source != null && target != null) {
-                drawLine(
-                    color = Color(0xFFC0CADC),
-                    start = Offset(source.x, source.y),
-                    end = Offset(target.x, target.y),
-                    strokeWidth = edge.weight * 2f
-                )
             }
         }
+    }
 
-        // Draw nodes
-        positionedNodes.forEach { node ->
-            val nodeRadius = 8f + node.importance * 16f
-            val nodeColor = masteryColor(node.mastery)
-
-            // Node circle
-            drawCircle(nodeColor, nodeRadius, Offset(node.x, node.y))
-            drawCircle(Color.White, nodeRadius - 3f, Offset(node.x, node.y))
-            drawCircle(nodeColor, nodeRadius - 5f, Offset(node.x, node.y))
-
-            // Label
-            drawContext.canvas.nativeCanvas.drawText(
-                node.label,
-                node.x,
-                node.y + nodeRadius + 16.dp.toPx(),
-                android.graphics.Paint().apply {
-                    color = textColor.hashCode()
-                    textSize = 10.dp.toPx()
-                    textAlign = android.graphics.Paint.Align.CENTER
-                }
+    // Update graph data when data or theme changes AND html has finished loading
+    LaunchedEffect(jsonData, isDarkTheme, isHtmlLoaded) {
+        if (isHtmlLoaded && jsonData.isNotBlank()) {
+            webViewRef?.evaluateJavascript(
+                "javascript:loadGraphData($jsonData, $isDarkTheme)",
+                null
             )
         }
     }
-}
 
-private fun masteryColor(mastery: Float): Color {
-    return when {
-        mastery >= 0.8f -> Sage500
-        mastery >= 0.6f -> Emerald500
-        mastery >= 0.4f -> Amber500
-        mastery >= 0.2f -> Navy500
-        else -> Navy300
+    androidx.compose.foundation.layout.Box(modifier = modifier) {
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    webViewClient = webViewClientInstance
+                    webChromeClient = object : android.webkit.WebChromeClient() {
+                        override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
+                            android.util.Log.d("WebViewConsole", "${consoleMessage?.message()} -- From line ${consoleMessage?.lineNumber()} of ${consoleMessage?.sourceId()}")
+                            return true
+                        }
+                    }
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.useWideViewPort = true
+                    settings.loadWithOverviewMode = true
+                    settings.allowFileAccess = true
+                    settings.allowContentAccess = true
+                    settings.allowFileAccessFromFileURLs = true
+                    settings.allowUniversalAccessFromFileURLs = true
+
+                    // Allow transparent background to match Compose theme colors
+                    setBackgroundColor(Color.TRANSPARENT)
+
+                    // Hardware acceleration for high-performance fluid 60fps graph animations
+                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
+                    addJavascriptInterface(jsBridge, "AndroidInterface")
+                    loadUrl("https://appassets.androidplatform.net/assets/echarts_graph.html")
+                    webViewRef = this
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+            onRelease = {
+                webViewRef = null
+            }
+        )
+        if (loadError != null) {
+            androidx.compose.material3.Surface(
+                color = androidx.compose.material3.MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier.align(androidx.compose.ui.Alignment.Center).padding(16.dp),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+            ) {
+                androidx.compose.material3.Text(
+                    text = loadError ?: "",
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+        }
     }
 }
