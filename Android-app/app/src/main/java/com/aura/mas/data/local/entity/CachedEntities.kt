@@ -9,6 +9,7 @@ data class CachedPlan(
     val userId: Long,
     val title: String,
     val learningGoal: String?,
+    val planConfig: String? = null,
     val status: Int,
     val createdAt: String?,
     val updatedAt: String?,

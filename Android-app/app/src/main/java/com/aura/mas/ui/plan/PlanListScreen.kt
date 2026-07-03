@@ -291,34 +291,22 @@ fun PlanListScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Plan icon - prefer SVG from planConfig, fall back to Material icon
+                        // Plan icon - prefer SVG from planConfig, fall back to book icon
                         val iconSvg = plan.getIconSvg()
                         Box(
                             modifier = Modifier
                                 .size(44.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (plan.getEffectiveStatus() == LearningPlan.STATUS_COMPLETED)
-                                        MaterialTheme.colorScheme.secondaryContainer
-                                    else MaterialTheme.colorScheme.primaryContainer
-                                ),
+                                .background(MaterialTheme.colorScheme.primaryContainer),
                             contentAlignment = Alignment.Center
                         ) {
                             if (!iconSvg.isNullOrBlank()) {
                                 SvgIcon(svgString = iconSvg, modifier = Modifier.size(24.dp))
                             } else {
                                 Icon(
-                                    when (plan.getEffectiveStatus()) {
-                                        LearningPlan.STATUS_COMPLETED -> Icons.Default.CheckCircle
-                                        LearningPlan.STATUS_GENERATING -> Icons.Default.Sync
-                                        else -> Icons.Default.MenuBook
-                                    },
+                                    Icons.Default.MenuBook,
                                     null,
-                                    tint = when (plan.getEffectiveStatus()) {
-                                        LearningPlan.STATUS_COMPLETED -> MaterialTheme.colorScheme.secondary
-                                        LearningPlan.STATUS_GENERATING -> MaterialTheme.colorScheme.tertiary
-                                        else -> MaterialTheme.colorScheme.primary
-                                    },
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(24.dp)
                                 )
                             }

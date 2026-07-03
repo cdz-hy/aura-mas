@@ -47,7 +47,8 @@ data class QuizUiState(
 @HiltViewModel
 class QuizViewModel @Inject constructor(
     private val api: ApiService,
-    private val sseClient: SseClient
+    private val sseClient: SseClient,
+    private val networkUtil: com.aura.mas.util.NetworkUtil
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(QuizUiState())
     val uiState: StateFlow<QuizUiState> = _uiState.asStateFlow()
@@ -156,6 +157,10 @@ class QuizViewModel @Inject constructor(
     fun submitQuiz(planId: Long) {
         val state = _uiState.value
         if (state.isSubmitting || state.questions.isEmpty()) return
+        if (!networkUtil.isOnline()) {
+            _uiState.value = state.copy(error = "离线状态，无法提交测验")
+            return
+        }
         _uiState.value = state.copy(isSubmitting = true, error = null)
 
         viewModelScope.launch {

@@ -46,7 +46,8 @@ data class AdminLogsUiState(
 
 @HiltViewModel
 class AdminUsersViewModel @Inject constructor(
-    private val adminRepo: AdminRepository
+    private val adminRepo: AdminRepository,
+    private val networkUtil: com.aura.mas.util.NetworkUtil
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(AdminUsersUiState())
     val uiState: StateFlow<AdminUsersUiState> = _uiState.asStateFlow()
@@ -75,6 +76,10 @@ class AdminUsersViewModel @Inject constructor(
     }
 
     fun toggleStatus(userId: Long, currentStatus: Int) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法操作")
+            return
+        }
         viewModelScope.launch {
             adminRepo.toggleUserStatus(userId, if (currentStatus == 1) 0 else 1)
             loadUsers(_uiState.value.page)

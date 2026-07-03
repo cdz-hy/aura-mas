@@ -122,6 +122,10 @@ class NoteDetailViewModel @Inject constructor(
     }
 
     fun save(noteId: Long) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法保存")
+            return
+        }
         val state = _uiState.value
         val note = state.note ?: return
         viewModelScope.launch {
