@@ -79,19 +79,28 @@ class ChatRepository @Inject constructor(
     /**
      * Send a message via AI assistant chat (SSE to /api/ai/chat).
      */
+    private suspend fun getTicket(): String {
+        val response = api.issueTicket()
+        return response.data?.get("ticket")
+            ?: throw Exception(response.message.ifEmpty { "Failed to get ticket" })
+    }
+
+    /**
+     * Send a message via AI assistant chat (SSE to /api/ai/chat).
+     */
     suspend fun chat(
         sessionId: String,
         message: String,
         planId: Long? = null,
         extraParams: Map<String, String>? = null
     ): Flow<SseEvent> {
-        val ticket = api.issueTicket().data ?: throw Exception("Failed to get ticket")
-        val baseUrl = com.aura.mas.util.Constants.PYTHON_BASE_URL
+        val ticket = getTicket()
+        val baseUrl = com.aura.mas.util.Constants.PYTHON_BASE_URL.trimEnd('/')
         val url = buildString {
             append("$baseUrl/api/ai/chat?")
             append("session_id=$sessionId")
             append("&message=${java.net.URLEncoder.encode(message, "UTF-8")}")
-            planId?.let { append("&plan_id=$it") }
+            append("&plan_id=${planId ?: 0}")
             append("&ticket=$ticket")
             extraParams?.forEach { (k, v) ->
                 append("&$k=${java.net.URLEncoder.encode(v, "UTF-8")}")
@@ -107,14 +116,14 @@ class ChatRepository @Inject constructor(
         sessionId: String, message: String,
         planId: Long? = null, resourceId: Long? = null
     ): Flow<SseEvent> {
-        val ticket = api.issueTicket().data ?: throw Exception("Failed to get ticket")
-        val baseUrl = com.aura.mas.util.Constants.PYTHON_BASE_URL
+        val ticket = getTicket()
+        val baseUrl = com.aura.mas.util.Constants.PYTHON_BASE_URL.trimEnd('/')
         val url = buildString {
             append("$baseUrl/api/ai/tutor/chat?")
             append("session_id=$sessionId")
             append("&message=${java.net.URLEncoder.encode(message, "UTF-8")}")
-            planId?.let { append("&plan_id=$it") }
-            resourceId?.let { append("&resource_id=$it") }
+            append("&plan_id=${planId ?: 0}")
+            append("&resource_id=${resourceId ?: 0}")
             append("&ticket=$ticket")
         }
         return sseClient.connect(url)

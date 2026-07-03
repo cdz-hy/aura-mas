@@ -30,6 +30,7 @@ import javax.inject.Inject
 
 data class FlashcardUiState(
     val isLoading: Boolean = true,
+    val isRefreshing: Boolean = false,
     val cards: List<Flashcard> = emptyList(),
     val currentIndex: Int = 0,
     val isFlipped: Boolean = false,
@@ -39,43 +40,60 @@ data class FlashcardUiState(
 
 @HiltViewModel
 class FlashcardViewModel @Inject constructor(
-    private val flashcardRepo: FlashcardRepository
+    private val flashcardRepo: FlashcardRepository,
+    private val offlineCache: com.aura.mas.data.offline.OfflineCacheManager
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(FlashcardUiState())
     val uiState: StateFlow<FlashcardUiState> = _uiState.asStateFlow()
 
     fun loadCards(noteId: Long) {
         viewModelScope.launch {
-            _uiState.value = FlashcardUiState(isLoading = true)
+            // Step 1: Show cached data immediately
+            val cached = offlineCache.getCachedFlashcards(noteId)
+            if (cached.isNotEmpty()) {
+                _uiState.value = FlashcardUiState(cards = filterDueCards(cached, noteId), isLoading = false, isRefreshing = true)
+            } else {
+                _uiState.value = FlashcardUiState(isLoading = true)
+            }
+
+            // Step 2: Fetch fresh data
             try {
                 val result = if (noteId > 0) {
                     flashcardRepo.getFlashcardsByNote(noteId)
                 } else {
                     flashcardRepo.getDueFlashcards()
                 }
-                
+
                 if (result.isSuccess && result.data != null) {
                     val cards = result.data
-                    val reviewList = if (noteId > 0) {
-                        val now = java.time.Instant.now()
-                        val dueCards = cards.filter { card ->
-                            card.nextReviewAt == null || try {
-                                java.time.Instant.parse(card.nextReviewAt).isBefore(now)
-                            } catch (_: Exception) {
-                                true
-                            }
-                        }
-                        if (dueCards.isNotEmpty()) dueCards else cards
-                    } else {
-                        cards
-                    }
-                    _uiState.value = FlashcardUiState(cards = reviewList, isLoading = false)
+                    offlineCache.cacheFlashcards(cards) // Cache for offline
+                    val reviewList = filterDueCards(cards, noteId)
+                    _uiState.value = _uiState.value.copy(cards = reviewList, isLoading = false, isRefreshing = false)
                 } else {
-                    _uiState.value = FlashcardUiState(error = result.message, isLoading = false)
+                    _uiState.value = _uiState.value.copy(error = result.message, isLoading = false, isRefreshing = false)
                 }
             } catch (e: Exception) {
-                _uiState.value = FlashcardUiState(error = e.message, isLoading = false)
+                _uiState.value = _uiState.value.copy(isLoading = false, isRefreshing = false)
             }
+        }
+    }
+
+    private fun filterDueCards(cards: List<Flashcard>, noteId: Long): List<Flashcard> {
+        if (noteId <= 0) return cards
+        val now = java.time.Instant.now()
+        val dueCards = cards.filter { card ->
+            val isDue = card.nextReviewAt == null || isCardDue(card.nextReviewAt, now)
+            isDue
+        }
+        return dueCards.ifEmpty { cards }
+    }
+
+    private fun isCardDue(nextReviewAt: String?, now: java.time.Instant): Boolean {
+        if (nextReviewAt == null) return true
+        return try {
+            java.time.Instant.parse(nextReviewAt).isBefore(now)
+        } catch (_: Exception) {
+            true
         }
     }
 
@@ -97,6 +115,7 @@ class FlashcardViewModel @Inject constructor(
         }
     }
 }
+
 
 @Composable
 fun FlashcardPlayerScreen(

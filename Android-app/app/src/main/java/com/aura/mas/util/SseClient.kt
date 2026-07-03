@@ -16,7 +16,8 @@ import javax.inject.Singleton
 
 data class SseEvent(
     val type: String,
-    val data: String
+    val data: String,
+    val rawJson: JsonObject? = null
 )
 
 @Singleton
@@ -40,8 +41,16 @@ class SseClient @Inject constructor(
 
         val listener = object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                val eventType = type ?: "message"
-                trySend(SseEvent(eventType, data))
+                // Python backend sends: data: {"type": "stream_text", "content": "..."}
+                // The SSE event type is inside the JSON 'type' field, not the SSE 'event' field
+                try {
+                    val json = gson.fromJson(data, JsonObject::class.java)
+                    val eventType = json?.get("type")?.asString ?: type ?: "message"
+                    trySend(SseEvent(eventType, data, json))
+                } catch (e: Exception) {
+                    // If JSON parsing fails, use the raw SSE event type
+                    trySend(SseEvent(type ?: "message", data))
+                }
             }
 
             override fun onClosed(eventSource: EventSource) {

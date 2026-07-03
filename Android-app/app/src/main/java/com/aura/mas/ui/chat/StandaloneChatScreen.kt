@@ -149,9 +149,17 @@ class StandaloneChatViewModel @Inject constructor(
     }
 
     fun sendMessage(message: String, extraParams: Map<String, String>? = null) {
-        val sessionId = _uiState.value.activeSessionId ?: return
+        if (message.isBlank()) return
         val mode = _uiState.value.mode
         viewModelScope.launch {
+            val sessionId = _uiState.value.activeSessionId ?: if (mode == ChatMode.TUTOR) {
+                chatRepo.generateTutorSessionId(0)
+            } else {
+                chatRepo.generateChatSessionId()
+            }
+            if (_uiState.value.activeSessionId == null) {
+                _uiState.value = _uiState.value.copy(activeSessionId = sessionId)
+            }
             val userMsg = ChatMessage(role = ChatMessage.ROLE_USER, content = message, sessionId = sessionId)
             _uiState.value = _uiState.value.copy(
                 messages = _uiState.value.messages + userMsg,
@@ -175,7 +183,7 @@ class StandaloneChatViewModel @Inject constructor(
     }
 
     private fun handleSseEvent(event: com.aura.mas.util.SseEvent) {
-        val data = sseClient.parseEventData(event.data)
+        val data = event.rawJson ?: sseClient.parseEventData(event.data)
         when (event.type) {
             "stream_text", "chunk" -> {
                 val text = data?.get("content")?.asString ?: data?.get("text")?.asString ?: ""
@@ -225,6 +233,7 @@ class StandaloneChatViewModel @Inject constructor(
                             )
                         }
                     } catch (_: Exception) {}
+                    loadSessions()
                 }
             }
             "error" -> {

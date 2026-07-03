@@ -165,7 +165,11 @@ class QuizViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(isSubmitting = false, error = "无法申请答题票据")
                     return@launch
                 }
-                val ticket = ticketResult.data
+                val ticket = ticketResult.data?.get("ticket")
+                if (ticket.isNullOrBlank()) {
+                    _uiState.value = _uiState.value.copy(isSubmitting = false, error = "票据获取失败")
+                    return@launch
+                }
 
                 val answersMap = state.answers.mapKeys { it.key.toString() }
                 val answersJson = Gson().toJson(answersMap)

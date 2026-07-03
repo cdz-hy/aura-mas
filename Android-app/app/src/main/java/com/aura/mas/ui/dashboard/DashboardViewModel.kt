@@ -147,8 +147,8 @@ class DashboardViewModel @Inject constructor(
     private fun loadAiGreeting() {
         viewModelScope.launch {
             try {
-                val ticket = api.issueTicket().data ?: return@launch
-                val response = pythonApi.getGreeting(ticket)
+                val userId = authStore.currentUser.value?.id ?: return@launch
+                val response = pythonApi.getGreeting(userId)
                 val json = com.google.gson.Gson().fromJson(response.string(), com.google.gson.JsonObject::class.java)
                 val greeting = json?.get("greeting")?.asString
                 if (!greeting.isNullOrBlank()) {

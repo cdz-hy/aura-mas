@@ -13,7 +13,7 @@ interface ApiService {
     suspend fun register(@Body request: RegisterRequest): ApiResponse<User>
 
     @POST("/api/ticket/issue")
-    suspend fun issueTicket(): ApiResponse<String>
+    suspend fun issueTicket(): ApiResponse<Map<String, String>>
 
     // ── User ──────────────────────────────────────────────────
     @GET("/api/user/me")

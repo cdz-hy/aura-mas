@@ -285,9 +285,9 @@ class PlanDetailViewModel @Inject constructor(
                     chatRepo.chat(sessionId, message, planId, extraParams)
                 }
                 flow.collect { event ->
+                    val data = event.rawJson ?: sseClient.parseEventData(event.data)
                     when (event.type) {
                         "chunk", "stream_text" -> {
-                            val data = sseClient.parseEventData(event.data)
                             val text = data?.get("text")?.asString ?: data?.get("content")?.asString ?: ""
                             _uiState.value = _uiState.value.copy(
                                 streamContent = _uiState.value.streamContent + text
@@ -486,59 +486,81 @@ private fun ResourceTreePanel(
     onComplete: (Long) -> Unit,
     onRetry: (Long) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f)) {
-        Text(
-            "学习大纲",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp)
-        )
-        HorizontalDivider()
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val grouped = resources.groupBy { it.moduleOrder }.toSortedMap()
-            grouped.forEach { (moduleOrder, moduleResources) ->
-                item(key = "module_$moduleOrder") {
-                    val moduleTitle = moduleResources.firstOrNull()?.getModuleName()?.ifEmpty { "模块 $moduleOrder" } ?: "模块 $moduleOrder"
-                    Text(
-                        moduleTitle,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
-                    )
-                }
-                items(moduleResources, key = { it.id }) { resource ->
-                    ResourceItem(
-                        resource = resource,
-                        isCompleted = progress.any { it.resourceId == resource.id && it.completed },
-                        isSelected = selectedResource?.id == resource.id,
-                        onClick = { onResourceClick(resource) },
-                        onComplete = { onComplete(resource.id) },
-                        onRetry = { onRetry(resource.id) }
-                    )
-                }
-            }
-        }
-    }
-}
-@Composable
-private fun ResourceItem(
-    resource: LearningResource,
-    isCompleted: Boolean,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    onComplete: () -> Unit,
-    onRetry: () -> Unit
-) {
-    val isGenerating = resource.status == LearningResource.STATUS_GENERATING
-    val isReady = resource.status >= LearningResource.STATUS_READY
+     val grouped = remember(resources) {
+         val groups = resources.groupBy { it.moduleOrder }.toSortedMap()
+         groups.mapValues { (_, moduleResources) ->
+             val list = mutableListOf<LearningResource>()
+             val parents = moduleResources.filter { it.parentId == null }.sortedBy { it.id }
+             val children = moduleResources.filter { it.parentId != null }.sortedBy { it.id }
+             
+             parents.forEach { parent ->
+                 list.add(parent)
+                 val parentChildren = children.filter { it.parentId == parent.id }
+                 list.addAll(parentChildren)
+             }
+             val remaining = children.filter { child -> parents.none { it.id == child.parentId } }
+             list.addAll(remaining)
+             list
+         }
+     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(enabled = isReady) { onClick() },
+     Column(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f)) {
+         Text(
+             "学习大纲",
+             style = MaterialTheme.typography.titleMedium,
+             fontWeight = FontWeight.Bold,
+             modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp)
+         )
+         HorizontalDivider()
+         LazyColumn(
+             modifier = Modifier.fillMaxWidth().weight(1f),
+             contentPadding = PaddingValues(16.dp),
+             verticalArrangement = Arrangement.spacedBy(8.dp)
+         ) {
+             grouped.forEach { (moduleOrder, sortedResources) ->
+                 item(key = "module_$moduleOrder") {
+                     val moduleTitle = sortedResources.firstOrNull()?.getModuleName()?.ifEmpty { "模块 $moduleOrder" } ?: "模块 $moduleOrder"
+                     Text(
+                         moduleTitle,
+                         style = MaterialTheme.typography.titleSmall,
+                         fontWeight = FontWeight.SemiBold,
+                         color = MaterialTheme.colorScheme.primary,
+                         modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                     )
+                 }
+
+                 items(sortedResources, key = { it.id }) { resource ->
+                     ResourceItem(
+                         resource = resource,
+                         isCompleted = progress.any { it.resourceId == resource.id && it.completed },
+                         isSelected = selectedResource?.id == resource.id,
+                         onClick = { onResourceClick(resource) },
+                         onComplete = { onComplete(resource.id) },
+                         onRetry = { onRetry(resource.id) }
+                     )
+                 }
+             }
+         }
+     }
+ }
+ @Composable
+ private fun ResourceItem(
+     resource: LearningResource,
+     isCompleted: Boolean,
+     isSelected: Boolean,
+     onClick: () -> Unit,
+     onComplete: () -> Unit,
+     onRetry: () -> Unit
+ ) {
+     val isGenerating = resource.status == LearningResource.STATUS_GENERATING
+     val isReady = resource.status >= LearningResource.STATUS_READY
+     val isChild = resource.parentId != null
+
+     Card(
+         modifier = Modifier
+             .fillMaxWidth()
+             .padding(start = if (isChild) 20.dp else 0.dp)
+             .clickable(enabled = isReady) { onClick() },
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface

@@ -97,14 +97,14 @@ class KnowledgeTreeViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isStreaming = true, streamContent = "")
             try {
-                chatRepo.issueTicket()
-                val ticket = api.issueTicket().data ?: return@launch
-                val baseUrl = com.aura.mas.util.Constants.PYTHON_BASE_URL
+                val ticketResponse = api.issueTicket()
+                val ticket = ticketResponse.data?.get("ticket") ?: return@launch
+                val baseUrl = com.aura.mas.util.Constants.PYTHON_BASE_URL.trimEnd('/')
                 val url = "$baseUrl/api/ai/tree/$treeId/nodes/$nodeId/explain?ticket=$ticket"
                 sseClient.connect(url).collect { event ->
+                    val data = event.rawJson ?: sseClient.parseEventData(event.data)
                     when (event.type) {
                         "chunk", "stream_text" -> {
-                            val data = sseClient.parseEventData(event.data)
                             val text = data?.get("text")?.asString ?: data?.get("content")?.asString ?: ""
                             _uiState.value = _uiState.value.copy(streamContent = _uiState.value.streamContent + text)
                         }

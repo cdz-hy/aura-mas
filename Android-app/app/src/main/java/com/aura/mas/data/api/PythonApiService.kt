@@ -104,7 +104,8 @@ interface PythonApiService {
     ): ResponseBody
 
     @GET("/api/analytics/greeting")
-    suspend fun getGreeting(@Query("ticket") ticket: String): ResponseBody
+    suspend fun getGreeting(@Query("user_id") userId: Long): ResponseBody
+
 
     @POST("/api/analytics/plan-icon")
     suspend fun generatePlanIcon(
