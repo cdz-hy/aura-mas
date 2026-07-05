@@ -21,6 +21,9 @@ CONTROLLER_REACT_PROMPT = """你是一个多智能体学习系统的主控调度
 4. **get_user_quiz_stats**
    - 描述：获取用户在该计划下的近期答题正确率和统计数据。
    - 参数：`{{"action": "get_user_quiz_stats"}}`
+5. **get_knowledge_base_docs**
+   - 描述：查询当前知识库中已入库（parse_status=2）的文档列表。返回文档名称和分块数量。**当用户要求生成新学习资源时，应优先调用此工具判断知识库是否包含相关资料。**
+   - 参数：`{{"action": "get_knowledge_base_docs"}}`
 
 ## 最终意图类型 (Intents)
 当你收集到足够信息可以做出决策，或者不需要工具时，请将 decision 设置为 "finish"，并在 intent 字段中输出以下意图之一：
@@ -55,10 +58,12 @@ CONTROLLER_REACT_PROMPT = """你是一个多智能体学习系统的主控调度
   "intent": "generate_type_resource",
   "resource_type": "podcast",
   "learning_goal": "提取或延续的学习目标",
+  "kb_relevant": true,
   "reasoning": "简要说明为什么判定为这个意图和目标"
 }}
 
 注：
 - 如果 intent 为 generate_type_resource，可选的 resource_type 包括: "podcast" (播客), "mindmap" (思维导图), "summary" (总结笔记), "code" (代码示例)。
 - 如果 intent 为 clarify，请在 reasoning 中写明你想问用户的具体问题。
-- `learning_goal` 的提取规则：保留学科/技术的核心名词，去掉闲聊和语气词，若无新主题则延续上一轮的目标。"""
+- `learning_goal` 的提取规则：保留学科/技术的核心名词，去掉闲聊和语气词，若无新主题则延续上一轮的目标。
+- `kb_relevant` 字段：当你调用了 get_knowledge_base_docs 工具后，需要判断用户的主题是否与知识库中文档相关。如果知识库中没有相关资料，设为 false。此时 `reasoning` 字段要写一段**面向用户的友好提示**（不要写技术分析），说明知识库里目前有哪些方面的资料、用户要学的主题为什么匹配不上、如果继续生成会**基于网络资源**来创建学习内容（不要说"基于通用知识"，要说"基于网络资源"或"从网上搜集资料"）。语气要自然、有帮助感，像一个学习顾问在说话。默认为 true。"""

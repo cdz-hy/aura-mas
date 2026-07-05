@@ -21,7 +21,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from app.services.db.java_client import java_client
 from app.graph.learning_graph import get_learning_graph
-from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR, NODE_ANIMATION_SKILL_GENERATOR, NODE_HUMAN_CONFIRM, NODE_WAIT_USER_REPLY
+from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR, NODE_ANIMATION_SKILL_GENERATOR, NODE_HUMAN_CONFIRM, NODE_WAIT_USER_REPLY, NODE_KB_CONFIRM
 from app.prompts import QUIZ_GRADER_PROMPT
 from app.agents.profile_maintainer import profile_maintainer_node
 from app.agents.conversation_compressor import build_chat_history_with_context, async_compress_and_save
@@ -33,6 +33,28 @@ from app.utils import stream_registry
 
 logger = logging.getLogger("api.resource_chat")
 router = APIRouter()
+
+
+def _persist_confirmation_if_needed(sse_item: str, user_id: int, session_id: str, plan_id_int: int):
+    """检测 SSE 中的 need_confirmation 事件，将 AI 确认消息持久化到数据库"""
+    if not sse_item or '"need_confirmation"' not in sse_item:
+        return
+    try:
+        import re
+        m = re.search(r'data:\s*(\{.*\})', sse_item)
+        if m:
+            d = json.loads(m.group(1))
+            msg = d.get("message", "")
+            confirm_type = d.get("confirmation_type", "task_breakdown")
+            if msg:
+                intent_type = "kb_check" if confirm_type == "kb_check" else "plan_chat"
+                java_client.create_dialogue(
+                    user_id=user_id, session_id=session_id,
+                    conversation_text=msg, dialogue_type="AI",
+                    plan_id=plan_id_int, intent_type=intent_type,
+                )
+    except Exception as e:
+        logger.warning(f"持久化确认消息失败: {e}")
 
 
 def _is_confirmation_message(message: str) -> bool:
@@ -365,6 +387,10 @@ async def plan_chat(
                 _can_resume = True
                 _resume_node = NODE_HUMAN_CONFIRM
                 logger.info(f"[计划对话] 检测到中断状态，将从 checkpointer 恢复 (human_confirm)")
+            elif NODE_KB_CONFIRM in existing.next:
+                _can_resume = True
+                _resume_node = NODE_KB_CONFIRM
+                logger.info(f"[计划对话] 检测到中断状态，将从 checkpointer 恢复 (kb_confirm)")
             elif NODE_WAIT_USER_REPLY in existing.next:
                 _can_resume = True
                 _resume_node = NODE_WAIT_USER_REPLY
@@ -460,7 +486,18 @@ async def plan_chat(
                             update_payload["human_feedback"] = None if breakdown_confirmed else (human_feedback or message)
                             update_payload["task_breakdown_confirmed"] = breakdown_confirmed
                             update_payload["needs_human_confirm"] = False
-                            
+
+                        elif _resume_node == NODE_KB_CONFIRM:
+                            # 按钮确认（前端发送固定文案）走快速路径，自然语言交给节点 LLM 判断
+                            if message in ("继续生成", "确认，开始生成学习资源"):
+                                update_payload["kb_confirmed"] = True
+                                update_payload["human_feedback"] = None
+                            else:
+                                update_payload["kb_confirmed"] = False
+                                update_payload["human_feedback"] = message
+                            update_payload["needs_human_confirm"] = False
+                            logger.info(f"[计划对话-KB确认] 用户回复: {message[:80]}")
+
                         # 如果是 wait_user_reply 恢复，仅更新 user_message 等基础信息即可
                         # 图会正常执行从 wait_user_reply 路由到 controller_node，controller 就能读到新的 user_message
 
@@ -520,6 +557,7 @@ async def plan_chat(
                         yield f'data: {json.dumps({"type": "done", "stopped": True}, ensure_ascii=False)}\n\n'
                         _completed_normally = True
                         break
+                    _persist_confirmation_if_needed(item, user_id, session_id, plan_id_int)
                     yield item
             finally:
                 # 客户端断开连接时不停止后台线程，让生成继续运行
@@ -711,6 +749,7 @@ async def plan_chat(
                         yield f'data: {json.dumps({"type": "done", "stopped": True}, ensure_ascii=False)}\n\n'
                         _completed_normally = True
                         break
+                    _persist_confirmation_if_needed(item, user_id, session_id, plan_id_int)
                     yield item
             finally:
                 # 客户端断开连接时不停止后台线程，让生成继续运行
@@ -2814,12 +2853,42 @@ async def get_stream_state(
     """
     查询当前会话的流式输出状态
     前端刷新后轮询此端点，获取已累积的流式文本并恢复动画
+    同时检测图中断状态（kb_confirm / human_confirm），返回待确认信息
     """
     from app.services.stream_state import get_stream_state as _get_state
     state = _get_state(session_id)
     if state is None:
-        return {"data": None}
-    return {"data": state}
+        state = {}
+
+    # 检测图是否有未完成的中断
+    pending_confirmation = None
+    try:
+        graph = get_learning_graph()
+        config = {"configurable": {"thread_id": session_id}}
+        existing = graph.get_state(config)
+        if existing and existing.next:
+            next_nodes = existing.next
+            if NODE_KB_CONFIRM in next_nodes:
+                # 知识库确认中断 — 从 state 中恢复确认消息
+                kb_msg = existing.values.get("kb_check_message", "") if existing.values else ""
+                if not kb_msg:
+                    kb_msg = "知识库中暂无相关资料，生成内容将主要参考网络资源。是否继续？"
+                pending_confirmation = {
+                    "type": "kb_check",
+                    "message": kb_msg,
+                }
+            elif NODE_HUMAN_CONFIRM in next_nodes:
+                # 任务分解确认中断
+                task_breakdown = existing.values.get("task_breakdown") if existing.values else None
+                pending_confirmation = {
+                    "type": "task_breakdown",
+                    "message": "学习路径已生成，请确认",
+                    "task_breakdown": task_breakdown,
+                }
+    except Exception:
+        pass
+
+    return {"data": state, "pending_confirmation": pending_confirmation}
 
 
 @router.post("/stop")

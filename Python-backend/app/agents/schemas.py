@@ -24,6 +24,7 @@ NODE_ANIMATION_SKILL_GENERATOR = "animation_skill_generator"
 NODE_PROFILE_MAINTAINER = "profile_maintainer"
 NODE_HUMAN_CONFIRM = "human_confirm"
 NODE_WAIT_USER_REPLY = "wait_user_reply"
+NODE_KB_CONFIRM = "kb_confirm"
 
 # 意图类型
 INTENT_GENERATE_RESOURCE = "generate_resource"
@@ -92,6 +93,12 @@ class AgentState(TypedDict, total=False):
     _checkpoint_learning_goal: str  # 上一轮 checkpointer 中的学习目标（供 controller 意图驱动判定）
     task_breakdown: Optional[Dict[str, Any]]  # 任务分解结果
     task_breakdown_confirmed: bool  # 用户是否已确认分解
+
+    # ==================== 知识库相关性检查 ====================
+    kb_relevant: bool  # 主控判断知识库是否有相关资料
+    kb_confirmed: bool  # 用户是否确认继续生成（知识库无关时）
+    web_search_fallback: bool  # 是否启用网络搜索兜底（知识库无相关内容时）
+    kb_check_message: str  # 主控生成的知识库确认提示信息（面向用户）
 
     # ==================== RAG 检索 ====================
     search_queries: List[str]  # 优化后的检索词列表

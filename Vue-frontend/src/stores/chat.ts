@@ -59,6 +59,7 @@ export const useChatStore = defineStore('chat', () => {
   const pendingTaskBreakdown = ref<any>(null)
   const pendingModules = ref<any[]>([])
   const awaitingConfirmation = ref(false)
+  const confirmationType = ref<string>('task_breakdown')  // 'task_breakdown' | 'kb_check'
   let skipNextModulesPush = false
   let isNewlyCreated = false
 
@@ -189,8 +190,59 @@ export const useChatStore = defineStore('chat', () => {
     const sessionId = activeSessionId.value
     if (!sessionId) return false
 
-    // 先检查后端是否有该会话的流式状态
-    const state = await getStreamState(sessionId)
+    // 先检查后端是否有该会话的流式状态或确认中断
+    const { state, pendingConfirmation } = await getStreamState(sessionId)
+
+    // 如果有未完成的确认中断（刷新后恢复），先加载 DB 消息再补充确认卡片
+    if (pendingConfirmation) {
+      // 先从 DB 加载已有消息（包含 _persist_confirmation_if_needed 保存的确认消息）
+      await loadSessions(planId)
+      if (sessionId === activeSessionId.value) {
+        await selectSession(sessionId)
+      }
+
+      // 检查 DB 中是否已有确认卡片（避免重复）
+      const hasConfirmMsg = messages.value.some(
+        (m: any) => m.role === 'assistant' && m.type === 'confirm'
+      )
+
+      if (!hasConfirmMsg) {
+        // DB 中没有确认卡片（可能 _persist_confirmation_if_needed 未执行），补充显示
+        const cType = pendingConfirmation.type || 'task_breakdown'
+        confirmationType.value = cType
+        awaitingConfirmation.value = true
+        if (cType === 'kb_check') {
+          messages.value.push({
+            role: 'assistant',
+            content: pendingConfirmation.message || '知识库中暂无相关资料，是否继续生成？',
+            type: 'confirm',
+            breakdown: null,
+            confirmationType: 'kb_check',
+          })
+        } else {
+          const breakdown = pendingConfirmation.task_breakdown || null
+          pendingTaskBreakdown.value = breakdown
+          messages.value.push({
+            role: 'assistant',
+            content: pendingConfirmation.message || '学习路径已生成，请确认',
+            type: 'confirm',
+            breakdown,
+          })
+        }
+      } else {
+        // DB 中已有确认卡片，只需恢复确认状态
+        const cType = pendingConfirmation.type || 'task_breakdown'
+        confirmationType.value = cType
+        awaitingConfirmation.value = true
+        if (cType !== 'kb_check') {
+          pendingTaskBreakdown.value = pendingConfirmation.task_breakdown || null
+        }
+      }
+
+      streaming.value = false
+      return true
+    }
+
     if (!state || !state.is_streaming) return false
 
     // 后端正流式中，恢复前端状态
@@ -212,7 +264,47 @@ export const useChatStore = defineStore('chat', () => {
     // 持续轮询更新
     _recoverTimer.value = setInterval(async () => {
       try {
-        const s = await getStreamState(sessionId)
+        const { state: s, pendingConfirmation: pc } = await getStreamState(sessionId)
+
+        // 轮询期间也检测确认中断（流式结束后图可能暂停在 confirm 节点）
+        if (pc) {
+          _stopRecover()
+          _removeEmptyPlaceholder()
+          streaming.value = false
+
+          // 去重：检查是否已有确认卡片
+          const hasConfirmMsg = messages.value.some(
+            (m: any) => m.role === 'assistant' && m.type === 'confirm'
+          )
+          const cType = pc.type || 'task_breakdown'
+          confirmationType.value = cType
+          awaitingConfirmation.value = true
+
+          if (!hasConfirmMsg) {
+            if (cType === 'kb_check') {
+              messages.value.push({
+                role: 'assistant',
+                content: pc.message || '知识库中暂无相关资料，是否继续生成？',
+                type: 'confirm',
+                breakdown: null,
+                confirmationType: 'kb_check',
+              })
+            } else {
+              const breakdown = pc.task_breakdown || null
+              pendingTaskBreakdown.value = breakdown
+              messages.value.push({
+                role: 'assistant',
+                content: pc.message || '学习路径已生成，请确认',
+                type: 'confirm',
+                breakdown,
+              })
+            }
+          } else if (cType !== 'kb_check') {
+            pendingTaskBreakdown.value = pc.task_breakdown || null
+          }
+          return
+        }
+
         if (!s) {
           // 缓存过期或不存在
           _stopRecover()
@@ -308,6 +400,9 @@ export const useChatStore = defineStore('chat', () => {
         const breakdown = JSON.parse(m.conversationText)
         return { id: m.id, role: 'assistant' as const, content: '学习路径已生成，请确认', type: 'confirm', breakdown, thinkings }
       } catch {}
+    }
+    if (m.intentType === 'kb_check') {
+      return { id: m.id, role: 'assistant' as const, content: m.conversationText, type: 'confirm', breakdown: null, confirmationType: 'kb_check', thinkings }
     }
     if (m.intentType === 'resource_generated') {
       try {
@@ -525,7 +620,7 @@ export const useChatStore = defineStore('chat', () => {
           onModules(modules) {
             pendingModules.value = [...pendingModules.value, ...modules]
           },
-          onNeedConfirmation(message, taskBreakdown) {
+          onNeedConfirmation(message, taskBreakdown, confirmType) {
             // 仅在当前活跃会话时更新显示
             if (capturedSessionId !== activeSessionId.value) return
             if (streamBuffer.value) {
@@ -542,15 +637,33 @@ export const useChatStore = defineStore('chat', () => {
             if (_ph && _ph.role === 'assistant' && !_ph.type && !_ph.content && (!_ph.thinkings || _ph.thinkings.length === 0)) {
               messages.value.pop()
             }
-            const breakdown = taskBreakdown || (pendingModules.value.length ? { modules: pendingModules.value } : null)
-            pendingTaskBreakdown.value = breakdown
-            awaitingConfirmation.value = true
-            messages.value.push({
-              role: 'assistant',
-              content: message || '学习路径已生成，请确认',
-              type: 'confirm',
-              breakdown,
-            })
+
+            const cType = confirmType || 'task_breakdown'
+            confirmationType.value = cType
+
+            if (cType === 'kb_check') {
+              // 知识库相关性确认
+              pendingTaskBreakdown.value = null
+              awaitingConfirmation.value = true
+              messages.value.push({
+                role: 'assistant',
+                content: message || '知识库中暂无相关资料，是否继续生成？',
+                type: 'confirm',
+                breakdown: null,
+                confirmationType: 'kb_check',
+              })
+            } else {
+              // 任务分解确认（原有逻辑）
+              const breakdown = taskBreakdown || (pendingModules.value.length ? { modules: pendingModules.value } : null)
+              pendingTaskBreakdown.value = breakdown
+              awaitingConfirmation.value = true
+              messages.value.push({
+                role: 'assistant',
+                content: message || '学习路径已生成，请确认',
+                type: 'confirm',
+                breakdown,
+              })
+            }
             pendingModules.value = []
             streaming.value = false
             clearStreamState(capturedSessionId)
@@ -721,17 +834,19 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function confirmBreakdown(planId: string, feedback?: string) {
-    const message = feedback || '确认，开始生成学习资源'
+    const isKbCheck = confirmationType.value === 'kb_check'
+    const message = feedback || (isKbCheck ? '继续生成' : '确认，开始生成学习资源')
     const breakdown = pendingTaskBreakdown.value
     pendingTaskBreakdown.value = null
     awaitingConfirmation.value = false
+    confirmationType.value = 'task_breakdown'
     const extra: Record<string, string> = {}
     if (feedback) {
       skipNextModulesPush = false
     } else {
       skipNextModulesPush = true
     }
-    if (breakdown) {
+    if (breakdown && !isKbCheck) {
       extra.task_breakdown = JSON.stringify(breakdown)
     }
     await sendMessage(message, planId, extra)
@@ -961,6 +1076,7 @@ export const useChatStore = defineStore('chat', () => {
     streamBuffer,
     pendingTaskBreakdown,
     awaitingConfirmation,
+    confirmationType,
     lastQuizResource,
     lastGradingResult,
     lastGeneratedResources,

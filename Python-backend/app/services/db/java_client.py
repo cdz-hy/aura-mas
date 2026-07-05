@@ -564,6 +564,10 @@ class JavaBackendClient:
         """获取知识库记录"""
         return self._request("GET", f"/api/admin/kb/internal/{kb_id}")
 
+    def get_indexed_kb_documents(self) -> list:
+        """获取已入库的知识库文档列表(parse_status=2)"""
+        return self._request("GET", "/api/admin/kb/internal/indexed") or []
+
     def delete_kb_by_id(self, kb_id: int):
         """删除知识库记录"""
         return self._request("DELETE", f"/api/admin/kb/internal/{kb_id}")

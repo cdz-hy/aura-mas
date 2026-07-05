@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 @Tag(name = "知识库管理")
@@ -92,5 +93,11 @@ public class KnowledgeBaseController {
     public Result<Void> deleteInternal(@PathVariable Long id) {
         kbService.deleteById(id);
         return Result.success();
+    }
+
+    @Operation(summary = "内部API - 获取已入库的文档列表(parse_status=2)")
+    @GetMapping("/internal/indexed")
+    public Result<List<KnowledgeBase>> getIndexedDocuments() {
+        return Result.success(kbService.getIndexedDocuments());
     }
 }

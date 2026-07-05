@@ -13,7 +13,7 @@ from app.agents.schemas import (
     NODE_RAG_RETRIEVER, NODE_RESOURCE_GENERATOR, NODE_QUIZ_GENERATOR,
     NODE_QUIZ_GRADER, NODE_RESOURCE_TYPE_GENERATOR,
     NODE_ANIMATION_SKILL_GENERATOR,
-    NODE_PROFILE_MAINTAINER, NODE_HUMAN_CONFIRM,
+    NODE_PROFILE_MAINTAINER, NODE_HUMAN_CONFIRM, NODE_KB_CONFIRM,
     NODE_REVIEW_ORCHESTRATE, NODE_REVIEWER, NODE_CONTENT_ORCHESTRATOR,
     NODE_WAIT_USER_REPLY,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
@@ -224,6 +224,26 @@ def route_after_human_confirm(state: AgentState) -> str:
     return END
 
 
+def route_after_kb_confirm(state: AgentState) -> str:
+    """知识库相关性确认之后的路由"""
+    anomaly = _route_if_anomaly(state)
+    if anomaly:
+        return anomaly
+
+    # kb_confirm_node 确认时会设置 web_search_fallback=True（不清理 kb_confirmed，保证路由可见）
+    if state.get("web_search_fallback"):
+        logger.info(f"  [路由] 用户确认继续生成（知识库无相关内容，使用网络资源）-> 任务分解智能体")
+        return NODE_TASK_DECOMPOSER
+
+    if state.get("human_feedback"):
+        logger.info(f"  [路由] 用户有反馈 -> 主控智能体 (重新判断)")
+        return NODE_CONTROLLER
+
+    # 用户取消 → 转简答智能体，告知用户当前知识库内容
+    logger.info(f"  [路由] 用户取消知识库确认 -> 简答智能体")
+    return NODE_SIMPLE_ANSWER
+
+
 def route_after_quiz_generator(state: AgentState) -> str:
     """题目生成之后的路由"""
     anomaly = _route_if_anomaly(state)
@@ -392,7 +412,8 @@ def build_learning_graph() -> StateGraph:
     graph.add_node(NODE_PROFILE_MAINTAINER, profile_maintainer_node)
     graph.add_node(NODE_HUMAN_CONFIRM, _human_confirm_node)
     graph.add_node(NODE_WAIT_USER_REPLY, wait_user_reply_node)
-    logger.info("已注册 15 个节点")
+    graph.add_node(NODE_KB_CONFIRM, _kb_confirm_node)
+    logger.info("已注册 16 个节点")
 
     # 设置入口
     graph.set_entry_point(NODE_CONTROLLER)
@@ -412,6 +433,7 @@ def build_learning_graph() -> StateGraph:
             NODE_ANIMATION_SKILL_GENERATOR: NODE_ANIMATION_SKILL_GENERATOR,
             NODE_HUMAN_CONFIRM: NODE_HUMAN_CONFIRM,
             NODE_WAIT_USER_REPLY: NODE_WAIT_USER_REPLY,
+            NODE_KB_CONFIRM: NODE_KB_CONFIRM,
             END: END,
         }
     )
@@ -434,6 +456,18 @@ def build_learning_graph() -> StateGraph:
         {
             NODE_CONTROLLER: NODE_CONTROLLER,
             NODE_RAG_RETRIEVER: NODE_RAG_RETRIEVER,
+            END: END,
+        }
+    )
+
+    # 知识库确认 -> 任务分解（确认继续）或主控（有反馈）或简答（取消）
+    graph.add_conditional_edges(
+        NODE_KB_CONFIRM,
+        route_after_kb_confirm,
+        {
+            NODE_TASK_DECOMPOSER: NODE_TASK_DECOMPOSER,
+            NODE_CONTROLLER: NODE_CONTROLLER,
+            NODE_SIMPLE_ANSWER: NODE_SIMPLE_ANSWER,
             END: END,
         }
     )
@@ -593,6 +627,83 @@ def _human_confirm_node(state: AgentState) -> Dict[str, Any]:
     }
 
 
+# ==================== 知识库相关性确认节点 ====================
+
+_KB_CONFIRM_PROMPT = """你是一个学习助手的确认模块。用户被告知知识库中没有与其学习主题直接相关的资料，系统询问用户是否要使用网络资源来生成学习内容。
+
+用户的回复是："{user_reply}"
+
+请判断用户的意图，输出 JSON：
+{{"action": "confirm"}} - 用户同意继续生成（如：好的、继续、可以、用网上的资料吧、那就搜搜吧、行、ok、没问题等）
+{{"action": "decline"}} - 用户不想继续（如：算了、取消、不学了、不用了、退出、以后再说等）
+{{"action": "other"}} - 用户有其他问题或想了解更多信息（如：有什么资料？、其他方法？、知识库里有什么？等）
+
+只输出 JSON，不要其他文本。"""
+
+
+def _kb_confirm_node(state: AgentState) -> Dict[str, Any]:
+    """知识库相关性确认节点 - 知识库无相关资料时暂停，询问用户是否使用网络资源。
+    支持按钮确认和自然语言回复（通过 LLM 理解用户意图）。"""
+    kb_confirmed = state.get("kb_confirmed", False)
+    human_feedback = state.get("human_feedback")
+
+    logger.info(f"  [知识库确认节点] 开始处理")
+    logger.info(f"    确认状态: {kb_confirmed}, 反馈: {human_feedback[:50] if human_feedback else '无'}")
+
+    # 按钮确认 → 直接通过（不清空 kb_confirmed，保证 route_after_kb_confirm 可见）
+    if kb_confirmed:
+        logger.info(f"  [知识库确认节点] 用户确认继续生成，启用网络搜索兜底")
+        return {
+            "web_search_fallback": True,
+            "needs_human_confirm": False,
+            "current_step": "用户确认继续生成，将使用网络资源",
+        }
+
+    # 自然语言回复 → 用 LLM 理解意图
+    if human_feedback is not None:
+        from app.agents.llm_factory import get_simple_answer_llm
+        llm = get_simple_answer_llm()
+        try:
+            prompt = _KB_CONFIRM_PROMPT.format(user_reply=human_feedback)
+            result = llm.chat_json([{"role": "user", "content": prompt}])
+            action = result.get("action", "other") if isinstance(result, dict) else "other"
+            logger.info(f"  [知识库确认节点] LLM 判断用户意图: {action}")
+        except Exception as e:
+            logger.warning(f"  [知识库确认节点] LLM 判断失败，降级为关键词匹配: {e}")
+            # 降级：简单关键词匹配
+            confirm_words = ["继续", "确认", "好的", "可以", "行", "ok", "没问题", "那就", "搜", "生成"]
+            action = "confirm" if any(w in human_feedback for w in confirm_words) else "decline"
+
+        if action == "confirm":
+            logger.info(f"  [知识库确认节点] 用户确认继续生成（自然语言），启用网络搜索兜底")
+            return {
+                "web_search_fallback": True,
+                "needs_human_confirm": False,
+                "current_step": "用户确认继续生成，将使用网络资源",
+            }
+        elif action == "decline":
+            logger.info(f"  [知识库确认节点] 用户取消生成")
+            return {
+                "human_feedback": "用户取消了学习资源生成，请简要告知当前知识库中有哪些方面的资料，并说明后续会持续优化",
+                "needs_human_confirm": False,
+                "current_step": "用户取消了学习资源生成",
+            }
+        else:
+            # 用户有其他问题 → 交给 Controller 处理
+            logger.info(f"  [知识库确认节点] 用户有其他问题，转交主控处理")
+            return {
+                "needs_human_confirm": False,
+                "current_step": f"用户追问: {human_feedback[:50]}",
+            }
+
+    # 无回复 → 图中断暂停
+    logger.info(f"  [知识库确认节点] 等待用户确认，流程暂停")
+    return {
+        "current_step": "等待用户确认是否使用网络资源生成",
+        "iteration_count": state.get("iteration_count", 0) + 1,
+    }
+
+
 # ==================== 追问挂起节点 ====================
 
 def wait_user_reply_node(state: AgentState) -> Dict[str, Any]:
@@ -645,6 +756,6 @@ def get_learning_graph():
         graph = build_learning_graph()
         _learning_graph = graph.compile(
             checkpointer=_checkpointer,
-            interrupt_before=[NODE_HUMAN_CONFIRM, NODE_WAIT_USER_REPLY]
+            interrupt_before=[NODE_HUMAN_CONFIRM, NODE_WAIT_USER_REPLY, NODE_KB_CONFIRM]
         )
     return _learning_graph
