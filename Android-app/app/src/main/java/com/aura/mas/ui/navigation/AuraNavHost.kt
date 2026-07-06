@@ -56,6 +56,17 @@ fun AuraNavHost() {
         return
     }
 
+    // Observe session expiration (401 from backend) and redirect to login
+    val sessionExpired by authStore.sessionExpired.collectAsState()
+    LaunchedEffect(sessionExpired) {
+        if (sessionExpired) {
+            authStore.resetSessionExpired()
+            navController.navigate(NavRoutes.LOGIN) {
+                popUpTo(0) { inclusive = true }
+            }
+        }
+    }
+
     val startDestination = remember {
         if (authStore.isLoggedIn.value) NavRoutes.MAIN else NavRoutes.LOGIN
     }

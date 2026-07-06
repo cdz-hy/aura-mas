@@ -37,7 +37,16 @@ fun LoginScreen(
     var loginName by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+    var rememberPassword by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
+
+    // Pre-fill saved credentials
+    LaunchedEffect(Unit) {
+        val (savedName, savedPass, savedRemember) = viewModel.authStore.getSavedCredentials()
+        if (savedName.isNotBlank()) loginName = savedName
+        if (savedPass.isNotBlank()) password = savedPass
+        rememberPassword = savedRemember
+    }
 
     LaunchedEffect(uiState.success) {
         if (uiState.success) onLoginSuccess()
@@ -126,17 +135,37 @@ fun LoginScreen(
                         keyboardActions = KeyboardActions(onDone = {
                             focusManager.clearFocus()
                             if (loginName.isNotBlank() && password.isNotBlank()) {
-                                viewModel.login(loginName, password)
+                                viewModel.login(loginName, password, rememberPassword)
                             }
                         }),
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     )
 
-                    Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(12.dp))
+
+                    // Remember password checkbox
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Checkbox(
+                            checked = rememberPassword,
+                            onCheckedChange = { rememberPassword = it },
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "记住密码",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+
+                    Spacer(Modifier.height(16.dp))
 
                     Button(
-                        onClick = { viewModel.login(loginName, password) },
+                        onClick = { viewModel.login(loginName, password, rememberPassword) },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         enabled = !uiState.isLoading && loginName.isNotBlank() && password.isNotBlank(),
                         shape = RoundedCornerShape(12.dp)

@@ -26,19 +26,44 @@ class AuthStore @Inject constructor(
     private val _isLoggedIn = MutableStateFlow(false)
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
 
+    private val _sessionExpired = MutableStateFlow(false)
+    val sessionExpired: StateFlow<Boolean> = _sessionExpired.asStateFlow()
+
     companion object {
         private val TOKEN_KEY = stringPreferencesKey("auth_token")
         private val USER_KEY = stringPreferencesKey("user_data")
+        private val LOGIN_NAME_KEY = stringPreferencesKey("login_name")
+        private val PASSWORD_KEY = stringPreferencesKey("saved_password")
+        private val REMEMBER_KEY = stringPreferencesKey("remember_password")
     }
 
-    suspend fun saveSession(token: String, user: User) {
+    suspend fun saveSession(token: String, user: User, loginName: String = "", password: String = "", remember: Boolean = false) {
         dataStore.edit { prefs ->
             prefs[TOKEN_KEY] = token
             prefs[USER_KEY] = gson.toJson(user)
+            if (remember) {
+                prefs[LOGIN_NAME_KEY] = loginName
+                prefs[PASSWORD_KEY] = password
+                prefs[REMEMBER_KEY] = "true"
+            } else {
+                prefs.remove(LOGIN_NAME_KEY)
+                prefs.remove(PASSWORD_KEY)
+                prefs.remove(REMEMBER_KEY)
+            }
         }
         tokenFlow.value = token
         _currentUser.value = user
         _isLoggedIn.value = true
+    }
+
+    suspend fun getSavedCredentials(): Triple<String, String, Boolean> {
+        val prefs = dataStore.data.first()
+        val remember = prefs[REMEMBER_KEY] == "true"
+        return Triple(
+            if (remember) prefs[LOGIN_NAME_KEY] ?: "" else "",
+            if (remember) prefs[PASSWORD_KEY] ?: "" else "",
+            remember
+        )
     }
 
     suspend fun restoreSession(): Boolean {
@@ -59,7 +84,7 @@ class AuthStore @Inject constructor(
         }
     }
 
-    suspend fun clearSession() {
+    suspend fun clearSession(expired: Boolean = false) {
         dataStore.edit { prefs ->
             prefs.remove(TOKEN_KEY)
             prefs.remove(USER_KEY)
@@ -67,6 +92,11 @@ class AuthStore @Inject constructor(
         tokenFlow.value = null
         _currentUser.value = null
         _isLoggedIn.value = false
+        if (expired) _sessionExpired.value = true
+    }
+
+    fun resetSessionExpired() {
+        _sessionExpired.value = false
     }
 
     suspend fun updateCurrentUser(user: User) {

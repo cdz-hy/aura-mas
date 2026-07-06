@@ -65,7 +65,7 @@ class NoteListViewModel @Inject constructor(
 
             // Step 2: Fetch fresh data in background
             try {
-                val result = kotlinx.coroutines.withTimeout(15_000L) { api.getNotes(size = 50) }
+                val result = kotlinx.coroutines.withTimeout(8_000L) { api.getNotes(size = 50) }
                 if (result.isSuccess && result.data != null) {
                     val notes = result.data.records.sortedByDescending { it.id }
                     offlineCache.cacheNotes(notes)

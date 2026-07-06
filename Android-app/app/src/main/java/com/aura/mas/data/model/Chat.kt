@@ -23,6 +23,7 @@ data class ChatMessage(
     
     // Enhanced fields for rich message types
     val type: String = "", // "confirm", "resource_generated", "modules"
+    val confirmationType: String = "", // "task_breakdown" | "kb_check"
     val thinkings: List<ThinkingStep> = emptyList(),
     val searchSources: List<com.aura.mas.ui.chat.SearchSource> = emptyList(),
     val breakdown: TaskBreakdown? = null, // Task breakdown for confirmation
@@ -55,9 +56,20 @@ data class ChatMessage(
             return copy(
                 role = normRole,
                 type = "confirm",
+                confirmationType = "task_breakdown",
                 thinkings = thinkingsParsed,
                 content = "学习路径已生成，请确认",
                 breakdown = parsedBreakdown
+            )
+        }
+        if (intentType == "kb_check") {
+            return copy(
+                role = normRole,
+                type = "confirm",
+                confirmationType = "kb_check",
+                thinkings = thinkingsParsed,
+                content = content.ifBlank { "知识库中暂无相关资料，是否继续生成？" },
+                breakdown = null
             )
         }
         if (intentType == "resource_generated") {

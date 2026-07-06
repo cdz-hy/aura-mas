@@ -28,6 +28,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -67,6 +68,9 @@ data class PlanDetailUiState(
     val streamContent: String = "",
     val showChat: Boolean = false,
     val showSessionList: Boolean = false,
+    val awaitingConfirmation: Boolean = false,
+    val confirmationType: String = "task_breakdown",
+    val pendingTaskBreakdown: TaskBreakdown? = null,
     
     val showResourceTree: Boolean = false,
     val error: String? = null
@@ -222,7 +226,38 @@ class PlanDetailViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(isStreaming = false)
             }
+            // Check for pending confirmation (refresh recovery)
+            recoverPendingConfirmation(session.sessionId)
         }
+    }
+
+    private suspend fun recoverPendingConfirmation(sessionId: String) {
+        try {
+            val streamState = chatRepo.getStreamState(sessionId)
+            val pc = streamState.pendingConfirmation ?: return
+            val hasConfirm = _uiState.value.chatMessages.any { it.type == "confirm" }
+            if (!hasConfirm) {
+                val confirmMsg = ChatMessage(
+                    role = ChatMessage.ROLE_ASSISTANT,
+                    content = pc.message.ifBlank { "请确认" },
+                    type = "confirm",
+                    confirmationType = pc.type,
+                    breakdown = if (pc.type != "kb_check") pc.taskBreakdown else null
+                )
+                _uiState.value = _uiState.value.copy(
+                    chatMessages = _uiState.value.chatMessages + confirmMsg,
+                    awaitingConfirmation = true,
+                    confirmationType = pc.type,
+                    pendingTaskBreakdown = if (pc.type != "kb_check") pc.taskBreakdown else null
+                )
+            } else {
+                _uiState.value = _uiState.value.copy(
+                    awaitingConfirmation = true,
+                    confirmationType = pc.type,
+                    pendingTaskBreakdown = if (pc.type != "kb_check") pc.taskBreakdown else null
+                )
+            }
+        } catch (_: Exception) {}
     }
     
     fun toggleSessionList() {
@@ -243,8 +278,13 @@ class PlanDetailViewModel @Inject constructor(
     }
 
     fun confirmBreakdown() {
-        val lastMsg = _uiState.value.chatMessages.lastOrNull()
-        if (lastMsg != null && lastMsg.type == "confirm" && lastMsg.breakdown != null) {
+        val lastMsg = _uiState.value.chatMessages.lastOrNull() ?: return
+        if (lastMsg.type != "confirm") return
+        val isKbCheck = _uiState.value.confirmationType == "kb_check" || lastMsg.confirmationType == "kb_check"
+        _uiState.value = _uiState.value.copy(awaitingConfirmation = false, confirmationType = "task_breakdown")
+        if (isKbCheck) {
+            sendMessage("继续生成")
+        } else if (lastMsg.breakdown != null) {
             val breakdownJson = com.google.gson.Gson().toJson(lastMsg.breakdown)
             sendMessage("确认，开始生成学习资源", mapOf("task_breakdown" to breakdownJson))
         }
@@ -252,8 +292,13 @@ class PlanDetailViewModel @Inject constructor(
 
     fun modifyBreakdown(feedback: String) {
         if (feedback.isBlank()) return
-        val lastMsg = _uiState.value.chatMessages.lastOrNull()
-        if (lastMsg != null && lastMsg.type == "confirm" && lastMsg.breakdown != null) {
+        val lastMsg = _uiState.value.chatMessages.lastOrNull() ?: return
+        if (lastMsg.type != "confirm") return
+        val isKbCheck = _uiState.value.confirmationType == "kb_check" || lastMsg.confirmationType == "kb_check"
+        _uiState.value = _uiState.value.copy(awaitingConfirmation = false, confirmationType = "task_breakdown")
+        if (isKbCheck) {
+            sendMessage(feedback)
+        } else if (lastMsg.breakdown != null) {
             val breakdownJson = com.google.gson.Gson().toJson(lastMsg.breakdown)
             sendMessage(feedback, mapOf("task_breakdown" to breakdownJson))
         }
@@ -300,6 +345,28 @@ class PlanDetailViewModel @Inject constructor(
                         }
                         "resource_generated", "resource_type_generated" -> {
                             loadPlan(planId)
+                        }
+                        "need_confirmation" -> {
+                            val msg = data?.get("message")?.asString ?: "请确认"
+                            val confirmType = data?.get("confirmation_type")?.asString ?: "task_breakdown"
+                            val taskBreakdown = data?.get("task_breakdown")?.let {
+                                try { com.google.gson.Gson().fromJson(it, TaskBreakdown::class.java) } catch (_: Exception) { null }
+                            }
+                            val confirmMsg = ChatMessage(
+                                role = ChatMessage.ROLE_ASSISTANT,
+                                content = msg,
+                                type = "confirm",
+                                confirmationType = confirmType,
+                                breakdown = if (confirmType != "kb_check") taskBreakdown else null
+                            )
+                            _uiState.value = _uiState.value.copy(
+                                chatMessages = _uiState.value.chatMessages + confirmMsg,
+                                awaitingConfirmation = true,
+                                confirmationType = confirmType,
+                                pendingTaskBreakdown = if (confirmType != "kb_check") taskBreakdown else null,
+                                isStreaming = false,
+                                streamContent = ""
+                            )
                         }
                         "done" -> {
                             try {
@@ -455,6 +522,7 @@ fun PlanDetailScreen(
                         onSelectSession = { viewModel.selectSession(it) },
                         onGenerateResource = { viewModel.generateResource(it) },
                         onConfirmBreakdown = { viewModel.confirmBreakdown() },
+                        onModifyBreakdown = { viewModel.modifyBreakdown(it) },
                         onSelectResource = { viewModel.selectResource(it) },
                         modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f)
                     )
@@ -648,6 +716,7 @@ private fun ChatPanel(
     onSelectSession: (ChatSession) -> Unit,
     onGenerateResource: (String) -> Unit,
     onConfirmBreakdown: () -> Unit,
+    onModifyBreakdown: (String) -> Unit,
     onSelectResource: (LearningResource) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -807,8 +876,10 @@ private fun ChatPanel(
 
                 // Confirm action buttons
                 val lastMsg = uiState.chatMessages.lastOrNull()
-                if (lastMsg != null && lastMsg.type == "confirm" && !uiState.isStreaming) {
+                val awaitingConfirm = uiState.awaitingConfirmation || (lastMsg != null && lastMsg.type == "confirm" && !uiState.isStreaming)
+                if (awaitingConfirm && lastMsg != null && lastMsg.type == "confirm" && !uiState.isStreaming) {
                     item {
+                        val isKbCheck = uiState.confirmationType == "kb_check" || lastMsg.confirmationType == "kb_check"
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(start = 40.dp, top = 4.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -818,15 +889,27 @@ private fun ChatPanel(
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Text("确认并生成", style = MaterialTheme.typography.labelMedium)
+                                Text(if (isKbCheck) "继续生成" else "确认并生成", style = MaterialTheme.typography.labelMedium)
                             }
                             OutlinedButton(
-                                onClick = { 
-                                    input = "补充说明："
+                                onClick = {
+                                    if (isKbCheck) {
+                                        onModifyBreakdown("取消，暂不生成")
+                                    } else {
+                                        input = "补充说明："
+                                    }
                                 },
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Text("反馈修改", style = MaterialTheme.typography.labelMedium)
+                                Text(if (isKbCheck) "取消" else "反馈修改", style = MaterialTheme.typography.labelMedium)
+                            }
+                            if (isKbCheck) {
+                                OutlinedButton(
+                                    onClick = { input = "" },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("说点别的...", style = MaterialTheme.typography.labelMedium)
+                                }
                             }
                         }
                     }
@@ -1024,7 +1107,40 @@ private fun ChatBubble(
                 Column(Modifier.padding(12.dp)) {
                     when (message.type) {
                         "confirm" -> {
-                            Text(displayContent, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            val isKbCheck = message.confirmationType == "kb_check"
+                            if (isKbCheck) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color(0xFFFFF8E1),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFE082))
+                                ) {
+                                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+                                        Icon(
+                                            Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = Color(0xFFF59E0B),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                "知识库内容提示",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF92400E)
+                                            )
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                displayContent,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color(0xFFB45309)
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                Text(displayContent, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            }
                             message.breakdown?.modules?.let { modules ->
                                 Spacer(Modifier.height(8.dp))
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

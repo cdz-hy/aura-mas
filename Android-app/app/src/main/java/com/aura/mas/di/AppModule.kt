@@ -38,7 +38,10 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideAuthInterceptor(@Named("token_datastore") tokenFlow: MutableStateFlow<String?>): AuthInterceptor {
-        return AuthInterceptor(tokenFlow)
+    fun provideAuthInterceptor(
+        @Named("token_datastore") tokenFlow: MutableStateFlow<String?>,
+        authStore: com.aura.mas.data.repository.AuthStore
+    ): AuthInterceptor {
+        return AuthInterceptor(tokenFlow, authStore)
     }
 }
