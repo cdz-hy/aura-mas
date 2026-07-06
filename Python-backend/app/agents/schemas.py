@@ -150,6 +150,9 @@ class AgentState(TypedDict, total=False):
     anomaly_reason: str  # 异常原因描述
     anomaly_clarify: bool  # 主控已处理异常，简答智能体进入追问澄清模式
 
+    # ==================== 追问上下文（checkpoint 恢复后供 controller 读取） ====================
+    _pending_question: str  # 上一轮智能体提出的追问内容（供 controller 恢复上下文）
+
     # ==================== 循环控制 ====================
     iteration_count: int  # 当前迭代次数（防止无限循环）
     max_iterations: int  # 最大迭代次数

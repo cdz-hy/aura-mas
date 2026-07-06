@@ -383,7 +383,7 @@ async def plan_chat(
     try:
         existing = graph.get_state(config)
         if existing and existing.next:
-            if NODE_HUMAN_CONFIRM in existing.next and (breakdown_confirmed or human_feedback):
+            if NODE_HUMAN_CONFIRM in existing.next:
                 _can_resume = True
                 _resume_node = NODE_HUMAN_CONFIRM
                 logger.info(f"[计划对话] 检测到中断状态，将从 checkpointer 恢复 (human_confirm)")

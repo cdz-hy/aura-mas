@@ -184,6 +184,11 @@ def route_after_task_decomposer(state: AgentState) -> str:
     if anomaly:
         return anomaly
 
+    # 任务分解智能体需要追问用户（目标不明确/存在歧义）→ checkpoint 暂停，等待用户回答
+    if state.get("_pending_question"):
+        logger.info(f"  [路由] 任务分解需要追问 -> 等待用户回复 (checkpoint)")
+        return NODE_WAIT_USER_REPLY
+
     task_breakdown = state.get("task_breakdown") or {}
     needs_decomposition = task_breakdown.get("needs_decomposition", True)
 
@@ -438,13 +443,14 @@ def build_learning_graph() -> StateGraph:
         }
     )
 
-    # 任务分解 -> 用户确认（多模块）或直接 RAG 检索（单模块）
+    # 任务分解 -> 用户确认（多模块）或直接 RAG 检索（单模块）或追问（目标不明确）
     graph.add_conditional_edges(
         NODE_TASK_DECOMPOSER,
         route_after_task_decomposer,
         {
             NODE_HUMAN_CONFIRM: NODE_HUMAN_CONFIRM,
             NODE_RAG_RETRIEVER: NODE_RAG_RETRIEVER,
+            NODE_WAIT_USER_REPLY: NODE_WAIT_USER_REPLY,  # 追问：checkpoint 暂停等用户回答
             NODE_CONTROLLER: NODE_CONTROLLER,  # 异常回主控
         }
     )
