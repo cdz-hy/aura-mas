@@ -126,6 +126,7 @@ def _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, us
                                 placeholder["id"],
                                 json.dumps(module_data, ensure_ascii=False),
                                 status=2,
+                                module_type=placeholder.get("type"),
                             )
                             try:
                                 res_task = java_client.create_generation_task(
@@ -312,6 +313,7 @@ async def plan_chat(
     current_module_id_int = int(current_module_id) if current_module_id and current_module_id.isdigit() else 0
     source_resource_content = ""
     current_module_order = 0
+    current_node_id = ""
     if current_module_id_int:
         try:
             current_resource = await asyncio.to_thread(java_client.get_resource_by_id, current_module_id_int)
@@ -321,7 +323,15 @@ async def plan_chat(
                 fallback_description="",
                 plan_id=plan_id_int,
             )
-            logger.info(f"[计划对话] 获取到当前模块内容长度: {len(source_resource_content)}, order: {current_module_order}")
+            # 从已有资源的 moduleData 中提取 node_id
+            try:
+                md = current_resource.get("moduleData") or current_resource.get("module_data") or {}
+                if isinstance(md, str):
+                    md = json.loads(md)
+                current_node_id = md.get("node_id") or md.get("nodeId") or ""
+            except Exception:
+                pass
+            logger.info(f"[计划对话] 获取到当前模块内容长度: {len(source_resource_content)}, order: {current_module_order}, node_id: {current_node_id}")
         except Exception as e:
             logger.warning(f"[计划对话] 获取当前模块内容失败: {e}")
 
@@ -406,8 +416,10 @@ async def plan_chat(
         if breakdown_confirmed and parsed_breakdown and plan_id_int:
             modules = parsed_breakdown.get("modules", [])
             if modules:
-                placeholder_map = _create_placeholder_resources(plan_id_int, modules)
-                logger.info(f"[占位资源] 已创建 {len(placeholder_map)} 个占位记录")
+                # 有 current_module_order 时用 fixed_order，确保新资源与原模块同 moduleOrder
+                fixed = current_module_order if len(modules) == 1 and current_module_order else None
+                placeholder_map = _create_placeholder_resources(plan_id_int, modules, fixed)
+                logger.info(f"[占位资源-恢复] 已创建 {len(placeholder_map)} 个占位记录, fixed_order={fixed}")
 
         bg_state = {
             "events": [],
@@ -441,7 +453,9 @@ async def plan_chat(
             def _create_placeholder_callback(modules: list) -> dict:
                 if not plan_id_int or not modules:
                     return {}
-                ph_map = _create_placeholder_resources(plan_id_int, modules)
+                # 单模块时用 fixed_order，新资源与原模块同 moduleOrder
+                fixed = current_module_order if len(modules) == 1 and current_module_order else None
+                ph_map = _create_placeholder_resources(plan_id_int, modules, fixed)
                 if ph_map:
                     bg_state["placeholder_map"] = ph_map
                     stream_registry.update_placeholder_map(session_id, ph_map)
@@ -573,8 +587,10 @@ async def plan_chat(
         if breakdown_confirmed and parsed_breakdown and plan_id_int:
             modules = parsed_breakdown.get("modules", [])
             if modules:
-                placeholder_map = _create_placeholder_resources(plan_id_int, modules)
-                logger.info(f"[占位资源] 已创建 {len(placeholder_map)} 个占位记录")
+                # 有 current_module_order 时用 fixed_order，确保新资源与原模块同 moduleOrder
+                fixed = current_module_order if len(modules) == 1 and current_module_order else None
+                placeholder_map = _create_placeholder_resources(plan_id_int, modules, fixed)
+                logger.info(f"[占位资源] 已创建 {len(placeholder_map)} 个占位记录, fixed_order={fixed}")
 
         from app.utils.goal_utils import resolve_session_learning_goal
         _checkpoint_learning_goal = resolve_session_learning_goal(plan_id_int, session_id)
@@ -597,6 +613,7 @@ async def plan_chat(
             "user_message": message,
             "current_module_id": int(current_module_id) if current_module_id and current_module_id.isdigit() else None,
             "current_module_title": current_module_title,
+            "current_module_order": current_module_order,
             "human_feedback": human_feedback,
             "chat_history": chat_history,
             "user_profile": user_profile,
@@ -669,7 +686,22 @@ async def plan_chat(
             def _create_placeholder_callback(modules: list) -> dict:
                 if not plan_id_int or not modules:
                     return {}
-                fixed_order = current_module_order if len(modules) == 1 and current_module_order else None
+                # 如果 current_module_order 为 0，尝试从 current_module_id 获取
+                effective_order = current_module_order
+                if not effective_order and current_module_id_int:
+                    try:
+                        res = java_client.get_resource_by_id(current_module_id_int)
+                        effective_order = res.get("moduleOrder", 0) or 0
+                        logger.info(f"[占位回调] 从资源 {current_module_id_int} 获取 moduleOrder={effective_order}")
+                    except Exception as e:
+                        logger.warning(f"[占位回调] 获取资源 moduleOrder 失败: {e}")
+                # 对于类型资源生成（单模块），必须使用 fixed_order 确保在同一模块下
+                if len(modules) == 1:
+                    fixed_order = effective_order if effective_order else None
+                else:
+                    fixed_order = None
+                logger.info(f"[占位回调] effective_order={effective_order}, fixed_order={fixed_order}")
+
                 ph_map = _create_placeholder_resources(plan_id_int, modules, fixed_order)
                 if ph_map:
                     bg_state["placeholder_map"] = ph_map
@@ -766,11 +798,11 @@ async def plan_chat(
         if bs["generated_content"] and not bs["module_list"] and not bs["orchestrated_content"]:
             gc = bs["generated_content"]
             bs["module_list"] = [{
-                "module_order": 1,
+                "module_order": current_module_order or 1,
                 "module_id": gc.get("module_id", 1),
                 "title": gc.get("title", ""),
                 "content": gc.get("content", ""),
-                "module_type": _normalize_module_type(gc.get("content_type", "text")),
+                "module_type": _normalize_module_type(gc.get("module_type") or gc.get("content_type") or "text"),
                 "key_points": gc.get("key_points", []),
                 "images": gc.get("images", []),
                 "references": gc.get("references", []),
@@ -788,7 +820,7 @@ async def plan_chat(
             new_modules = [m for m in bs["module_list"]
                            if m.get("module_order") not in bs["saved_module_orders"]]
             if new_modules:
-                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"], placeholder_map=bs.get("placeholder_map"))
+                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"], placeholder_map=bs.get("placeholder_map"), fixed_order=current_module_order or None, node_id=current_node_id or None)
                 for idx, rid in enumerate(new_ids):
                     mod = new_modules[idx] if idx < len(new_modules) else {}
                     bs["generated_resource_info"].append({
@@ -820,7 +852,7 @@ async def plan_chat(
             new_modules = [m for m in bs["module_list"]
                            if m.get("module_order") not in bs["saved_module_orders"]]
             if new_modules:
-                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"], placeholder_map=bs.get("placeholder_map"))
+                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"], placeholder_map=bs.get("placeholder_map"), fixed_order=current_module_order or None, node_id=current_node_id or None)
                 for idx, rid in enumerate(new_ids):
                     mod = new_modules[idx] if idx < len(new_modules) else {}
                     bs["generated_resource_info"].append({
@@ -1186,6 +1218,7 @@ async def generate_single_resource(
         "learning_goal": resource_message,
         "current_module_id": module_id_int,
         "current_module_title": title,
+        "current_module_order": current_module_order,
         "task_breakdown": {
             "title": title,
             "modules": [{
@@ -1441,7 +1474,7 @@ async def generate_single_resource(
                             "module_id": gc.get("module_id", 1),
                             "title": gc.get("title", ""),
                             "content": gc.get("content", ""),
-                            "module_type": _normalize_module_type(gc.get("module_type") or gc.get("content_type", "text")),
+                            "module_type": _normalize_module_type(gc.get("module_type") or gc.get("content_type") or "text"),
                             "key_points": gc.get("key_points", []),
                             "images": gc.get("images", []),
                             "references": gc.get("references", []),
@@ -2661,7 +2694,8 @@ def _create_placeholder_resources(plan_id: int, modules: list, fixed_order: int 
     placeholder_map = {}
     try:
         max_order = 0
-        if fixed_order is None:
+        use_fixed_order = fixed_order is not None and fixed_order > 0
+        if not use_fixed_order:
             existing = java_client.get_plan_resources(plan_id)
             max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
 
@@ -2681,7 +2715,8 @@ def _create_placeholder_resources(plan_id: int, modules: list, fixed_order: int 
                 "description": mod.get("description", ""),
             }
             try:
-                final_order = fixed_order if fixed_order is not None else (max_order + module_order)
+                final_order = fixed_order if use_fixed_order else (max_order + module_order)
+                logger.info(f"[占位资源] 创建模块 {module_order}, type={module_type}, final_order={final_order}")
                 result = java_client.create_resource(
                     plan_id=plan_id,
                     module_type=module_type,
@@ -2705,7 +2740,7 @@ def _create_placeholder_resources(plan_id: int, modules: list, fixed_order: int 
                         )
                     except Exception as e:
                         logger.warning(f"[占位资源] 创建 task 记录失败: {e}")
-                    logger.info(f"[占位资源] 创建模块 {module_order} 占位记录，ID={res_id}")
+                    logger.info(f"[占位资源] 创建模块 {module_order} 占位记录，ID={res_id}, moduleOrder={final_order}")
             except Exception as e:
                 logger.warning(f"[占位资源] 创建模块 {module_order} 占位记录失败: {e}")
     except Exception as e:
@@ -2713,7 +2748,7 @@ def _create_placeholder_resources(plan_id: int, modules: list, fixed_order: int 
     return placeholder_map
 
 
-def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_content: dict = None, placeholder_map: dict = None) -> list:
+def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_content: dict = None, placeholder_map: dict = None, fixed_order: int = None, node_id: str = None) -> list:
     """将确认后的学习模块保存为 learning_resource 记录，如果有对应的占位符则优先更新，返回资源ID列表"""
     try:
         if not module_list:
@@ -2741,6 +2776,8 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
                 "estimated_hours": mod.get("estimated_hours", 2),
                 "references": mod.get("references", []),
             }
+            if node_id:
+                module_data["node_id"] = node_id
             images = mod.get("images", [])
             if images:
                 module_data["images"] = images
@@ -2761,11 +2798,13 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
                 except Exception as e:
                     logger.warning(f"更新占位资源失败: {e}")
             else:
+                # fixed_order 存在时用绝对位置，否则用相对偏移
+                final_order = fixed_order if fixed_order else (max_order + module_order_in_list)
                 resources.append({
                     "planId": plan_id,
                     "moduleType": module_type,
                     "moduleData": json.dumps(module_data, ensure_ascii=False),
-                    "moduleOrder": max_order + module_order_in_list,
+                    "moduleOrder": final_order,
                     "status": 2,
                     "generatedByAgent": "content_orchestrator",
                 })

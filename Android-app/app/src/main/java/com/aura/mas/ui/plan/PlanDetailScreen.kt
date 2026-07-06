@@ -41,6 +41,9 @@ import com.aura.mas.data.api.ApiService
 import com.aura.mas.data.model.*
 import com.aura.mas.data.repository.ChatRepository
 import com.aura.mas.data.repository.PlanRepository
+import com.aura.mas.ui.chat.SearchSource
+import com.aura.mas.ui.chat.SearchSources
+import com.aura.mas.ui.chat.ThinkingProcess
 import com.aura.mas.ui.common.*
 import com.aura.mas.ui.components.resource.MarkdownRenderer
 import com.aura.mas.ui.theme.*
@@ -58,7 +61,7 @@ data class PlanDetailUiState(
     val resources: List<LearningResource> = emptyList(),
     val selectedResource: LearningResource? = null,
     val progress: List<ResourceProgress> = emptyList(),
-    
+
     // Chat state
     val chatMode: String = "assistant", // "assistant" or "tutor"
     val chatMessages: List<ChatMessage> = emptyList(),
@@ -71,7 +74,12 @@ data class PlanDetailUiState(
     val awaitingConfirmation: Boolean = false,
     val confirmationType: String = "task_breakdown",
     val pendingTaskBreakdown: TaskBreakdown? = null,
-    
+
+    // Thinking process
+    val thinkingSteps: List<ThinkingStep> = emptyList(),
+    val searchSources: List<SearchSource> = emptyList(),
+    val isSearching: Boolean = false,
+
     val showResourceTree: Boolean = false,
     val error: String? = null
 )
@@ -343,6 +351,37 @@ class PlanDetailViewModel @Inject constructor(
                                 streamContent = _uiState.value.streamContent + text
                             )
                         }
+                        "thinking", "thinking_start" -> {
+                            val agent = data?.get("agent")?.asString ?: "AI"
+                            val content = data?.get("content")?.asString ?: ""
+                            val step = ThinkingStep(agent = agent, content = content)
+                            _uiState.value = _uiState.value.copy(
+                                thinkingSteps = _uiState.value.thinkingSteps + step
+                            )
+                        }
+                        "thinking_chunk" -> {
+                            val content = data?.get("content")?.asString ?: ""
+                            val steps = _uiState.value.thinkingSteps.toMutableList()
+                            if (steps.isNotEmpty()) {
+                                val last = steps.last()
+                                steps[steps.size - 1] = last.copy(content = last.content + content)
+                                _uiState.value = _uiState.value.copy(thinkingSteps = steps)
+                            }
+                        }
+                        "search_start" -> {
+                            _uiState.value = _uiState.value.copy(isSearching = true, searchSources = emptyList())
+                        }
+                        "search_result" -> {
+                            val title = data?.get("title")?.asString ?: ""
+                            val url = data?.get("url")?.asString ?: ""
+                            val snippet = data?.get("snippet")?.asString ?: ""
+                            _uiState.value = _uiState.value.copy(
+                                searchSources = _uiState.value.searchSources + SearchSource(title, url, snippet)
+                            )
+                        }
+                        "search_done" -> {
+                            _uiState.value = _uiState.value.copy(isSearching = false)
+                        }
                         "resource_generated", "resource_type_generated" -> {
                             loadPlan(planId)
                         }
@@ -377,12 +416,18 @@ class PlanDetailViewModel @Inject constructor(
                             } catch (_: Exception) {}
                             _uiState.value = _uiState.value.copy(
                                 streamContent = "",
-                                isStreaming = false
+                                isStreaming = false,
+                                thinkingSteps = emptyList(),
+                                searchSources = emptyList(),
+                                isSearching = false
                             )
                             loadSessions()
                         }
                         "error" -> {
-                            _uiState.value = _uiState.value.copy(isStreaming = false)
+                            _uiState.value = _uiState.value.copy(
+                                isStreaming = false,
+                                thinkingSteps = emptyList()
+                            )
                         }
                     }
                 }
@@ -395,7 +440,9 @@ class PlanDetailViewModel @Inject constructor(
     fun generateResource(type: String) {
         val resource = _uiState.value.selectedResource ?: return
         val msg = "请为模块「${resource.getModuleName()}」生成补充资源: $type"
-        sendMessage(msg)
+        // 传递 current_module_id 以便后端获取源资源内容
+        val extraParams = mapOf("current_module_id" to resource.id.toString())
+        sendMessage(msg, extraParams)
     }
 
     fun markComplete(resourceId: Long) {
@@ -915,6 +962,30 @@ private fun ChatPanel(
                     }
                 }
                 
+                // Thinking process during streaming
+                if (uiState.isStreaming && (uiState.thinkingSteps.isNotEmpty() || uiState.isSearching)) {
+                    item {
+                        Row(verticalAlignment = Alignment.Top) {
+                            Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp))
+                                .background(if (isAssistant) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary),
+                                contentAlignment = Alignment.Center) {
+                                Icon(if (isAssistant) Icons.Default.AutoAwesome else Icons.Default.School,
+                                    null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                ThinkingProcess(
+                                    thinkings = uiState.thinkingSteps,
+                                    isStreaming = true
+                                )
+                                if (uiState.searchSources.isNotEmpty()) {
+                                    SearchSources(sources = uiState.searchSources)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (uiState.isStreaming && uiState.streamContent.isNotBlank()) {
                     item {
                         ChatBubble(
@@ -923,7 +994,7 @@ private fun ChatPanel(
                             onOpenResource = {}
                         )
                     }
-                } else if (uiState.isStreaming) {
+                } else if (uiState.isStreaming && uiState.thinkingSteps.isEmpty()) {
                     item {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp))
@@ -1045,7 +1116,7 @@ private fun ContextPrompt(title: String, onGenerate: (String) -> Unit) {
             Column(Modifier.padding(12.dp)) {
                 Text("你正在查看「${title}」，如需为该模块生成补充资源，请点击：", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(8.dp))
-                val opts = listOf("测验" to "quiz", "思维导图" to "mindmap", "代码示例" to "code", "总结" to "summary", "PPT" to "pptx")
+                val opts = listOf("测验" to "quiz", "思维导图" to "mindmap", "代码示例" to "code", "总结" to "summary", "教学视频" to "video", "动画" to "animation", "播客" to "podcast", "PPT" to "pptx")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     opts.forEach { (label, type) ->
                         Surface(
@@ -1185,6 +1256,9 @@ private fun ChatBubble(
                                                                 "mindmap" -> "思维导图"
                                                                 "code" -> "代码示例"
                                                                 "summary" -> "总结"
+                                                                "video" -> "教学视频"
+                                                                "animation" -> "动画"
+                                                                "podcast" -> "播客"
                                                                 "pptx" -> "PPT"
                                                                 else -> r.resourceType
                                                             }
@@ -1218,6 +1292,9 @@ private fun ChatBubble(
                                             "mindmap" -> "思维导图"
                                             "code" -> "代码示例"
                                             "summary" -> "总结"
+                                            "video" -> "教学视频"
+                                            "animation" -> "动画"
+                                            "podcast" -> "播客"
                                             "pptx" -> "PPT"
                                             else -> r.type
                                         }
@@ -1239,6 +1316,11 @@ private fun ChatBubble(
                             }
                         }
                         else -> {
+                            // Show thinking process if available
+                            if (message.thinkings.isNotEmpty()) {
+                                ThinkingProcess(thinkings = message.thinkings, isStreaming = false)
+                                Spacer(Modifier.height(8.dp))
+                            }
                             val cleanContent = remember(displayContent) { stripCitationSection(displayContent) }
                             MarkdownRenderer(content = cleanContent)
                         }
