@@ -351,6 +351,9 @@
           v-model="assistantInput"
           :placeholder="chatStore.streaming ? 'AI回复中...' : chatStore.awaitingConfirmation ? '输入补充说明...' : '描述你想学习的内容...'"
           :disabled="chatStore.streaming"
+          show-voice
+          :voice-recording="voice.isRecording.value"
+          @voice-toggle="voice.toggle"
         />
         <button type="submit" class="btn-primary px-5" :disabled="!assistantInput.trim() || chatStore.streaming">
           发送
@@ -362,6 +365,9 @@
           v-model="tutorInput"
           placeholder="输入你的问题..."
           :disabled="tutor.loading.value"
+          show-voice
+          :voice-recording="voice.isRecording.value"
+          @voice-toggle="voice.toggle"
         />
         <button type="submit" class="btn-primary px-5" :disabled="!tutorInput.trim() || tutor.loading.value">
           发送
@@ -435,6 +441,7 @@ import type { TutorContext } from '@/composables/useTutor'
 import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
 import tutorGif from '@/image/智能辅导.gif'
 import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
+import { useVoiceInput } from '@/composables/useVoiceInput'
 
 const props = defineProps<{
   planId: string
@@ -498,6 +505,15 @@ const showSessionList = ref(false)
 const assistantInput = ref('')
 const tutorInput = ref('')
 const showModifyInput = ref(false)
+
+// 语音输入：根据当前 mode 写入对应 ref
+const voice = useVoiceInput({
+  onText: (text) => {
+    if (props.mode === 'tutor') tutorInput.value += text
+    else assistantInput.value += text
+  },
+  onError: (err) => { console.error('[Voice]', err) },
+})
 const modifyText = ref('')
 const isManageMode = ref(false)
 const selectedMessageIds = ref<number[]>([])

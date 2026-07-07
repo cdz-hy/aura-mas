@@ -753,11 +753,90 @@ private fun ChatInputBar(
     onSend: (String) -> Unit,
     onStop: () -> Unit
 ) {
+    // 语音识别
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var isRecording by remember { mutableStateOf(false) }
+
+    val speechLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        isRecording = false
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(
+                android.speech.RecognizerIntent.EXTRA_RESULTS
+            )
+            val recognized = matches?.firstOrNull()
+            if (!recognized.isNullOrBlank()) {
+                onInputValueChange(input + recognized)
+            }
+        }
+    }
+
+    // 麦克风权限请求
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            // 权限通过，启动语音识别
+            isRecording = true
+            val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "请说出你的问题")
+            }
+            try { speechLauncher.launch(intent) } catch (e: Exception) {
+                isRecording = false
+                android.widget.Toast.makeText(context, "设备不支持语音识别", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            android.widget.Toast.makeText(context, "需要麦克风权限才能使用语音输入", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun startSpeechRecognition() {
+        val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (hasPermission) {
+            isRecording = true
+            val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "请说出你的问题")
+            }
+            try { speechLauncher.launch(intent) } catch (e: Exception) {
+                isRecording = false
+                android.widget.Toast.makeText(context, "设备不支持语音识别", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            permissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     Surface(shadowElevation = 8.dp) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Bottom
         ) {
+            // 麦克风按钮
+            IconButton(
+                onClick = {
+                    if (isRecording) {
+                        isRecording = false
+                    } else {
+                        startSpeechRecognition()
+                    }
+                },
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(
+                    Icons.Default.Mic,
+                    contentDescription = "语音输入",
+                    tint = if (isRecording) MaterialTheme.colorScheme.error
+                           else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.width(4.dp))
             OutlinedTextField(
                 value = input,
                 onValueChange = onInputValueChange,

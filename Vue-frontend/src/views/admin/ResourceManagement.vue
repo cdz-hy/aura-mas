@@ -1319,7 +1319,8 @@ onUnmounted(() => {
 }
 
 .card {
-  @apply bg-white rounded-2xl shadow-sm border border-navy-100/50;
+  @apply bg-white rounded-2xl shadow-sm border;
+  border-color: rgba(198, 210, 232, 0.5);
 }
 
 .input-field {

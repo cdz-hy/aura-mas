@@ -74,9 +74,11 @@ public class StatsController {
 
     @Operation(summary = "获取全部分析数据")
     @GetMapping("/analytics")
-    public Result<Map<String, Object>> getAnalytics(Authentication authentication) {
+    public Result<Map<String, Object>> getAnalytics(
+            Authentication authentication,
+            @RequestParam(defaultValue = "180") int days) {
         Long userId = AuthUtils.getCurrentUserId(authentication);
-        return Result.success(statsService.getAnalyticsData(userId));
+        return Result.success(statsService.getAnalyticsData(userId, days));
     }
 
     @Operation(summary = "获取学习效率时段分析")

@@ -4,7 +4,7 @@
     <AiSuggestions :data="data" />
 
     <!-- Study Heatmap -->
-    <StudyHeatmap />
+    <StudyHeatmap :heatmap-data="data.heatmap" />
 
     <!-- Study Efficiency -->
     <StudyEfficiency :efficiency-data="data.studyEfficiency" />
