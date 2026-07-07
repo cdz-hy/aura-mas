@@ -691,6 +691,12 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         result["task_breakdown_confirmed"] = False
         result["needs_human_confirm"] = False
         result["human_feedback"] = None
+        # 用户取消确认 → 计划状态从"待确认(2)"回退到"学习中(3)"
+        if intent == INTENT_CANCEL and state.get("plan_id"):
+            try:
+                java_client.update_plan_status(state["plan_id"], 3)
+            except Exception:
+                pass
         
     # 自动伪造 task_breakdown 以便下游生成补充资源
     if intent in ["generate_type_resource", "generate_animation"]:

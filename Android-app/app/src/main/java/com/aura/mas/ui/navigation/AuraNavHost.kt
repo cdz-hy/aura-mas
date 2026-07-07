@@ -79,7 +79,8 @@ fun AuraNavHost() {
                     navController.navigate(NavRoutes.MAIN) {
                         popUpTo(NavRoutes.LOGIN) { inclusive = true }
                     }
-                }
+                },
+                onServerSettings = { navController.navigate(NavRoutes.SERVER_SETTINGS) }
             )
         }
         composable(NavRoutes.REGISTER) {
@@ -207,6 +208,12 @@ fun AuraNavHost() {
         }
         composable(NavRoutes.CHAT) {
             StandaloneChatScreen(onBack = { navController.popBackStack() })
+        }
+        composable(NavRoutes.SERVER_SETTINGS) {
+            com.aura.mas.ui.settings.ServerSettingsScreen(
+                serverConfig = authViewModel.serverConfig,
+                onBack = { navController.popBackStack() }
+            )
         }
         composable(NavRoutes.NOT_FOUND) {
             NotFoundScreen(onBack = { navController.popBackStack() })

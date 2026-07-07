@@ -122,6 +122,26 @@ class PlanListViewModel @Inject constructor(
         }
     }
 
+    fun markAllComplete(planId: Long) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法操作")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val result = api.markAllComplete(planId)
+                if (result.isSuccess) {
+                    // Reload plans to get updated status
+                    loadPlans()
+                } else {
+                    _uiState.value = _uiState.value.copy(error = result.message.ifEmpty { "操作失败" })
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = e.message ?: "操作失败")
+            }
+        }
+    }
+
     fun updatePlanTitle(plan: LearningPlan, title: String) {
         if (!networkUtil.isOnline()) {
             _uiState.value = _uiState.value.copy(error = "离线状态，无法修改")
@@ -246,6 +266,7 @@ fun PlanListScreen(
             items(uiState.plans, key = { it.id }) { plan ->
                 var showMenu by remember { mutableStateOf(false) }
                 var showDeleteConfirm by remember { mutableStateOf(false) }
+                var showCompleteConfirm by remember { mutableStateOf(false) }
                 var isEditingTitle by remember { mutableStateOf(false) }
                 var editingTitle by remember(plan.id, plan.title) { mutableStateOf(plan.title) }
                 val focusRequester = remember { FocusRequester() }
@@ -270,6 +291,23 @@ fun PlanListScreen(
                     )
                 }
 
+                if (showCompleteConfirm) {
+                    AlertDialog(
+                        onDismissRequest = { showCompleteConfirm = false },
+                        title = { Text("标记为已完成") },
+                        text = { Text("确定要将学习计划「${plan.title.ifBlank { "未命名计划" }}」标记为已完成吗？这会将该计划下所有已生成的学习资源均标记为已完成。") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                showCompleteConfirm = false
+                                viewModel.markAllComplete(plan.id)
+                            }) { Text("确认完成", color = MaterialTheme.colorScheme.primary) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showCompleteConfirm = false }) { Text("取消") }
+                        }
+                    )
+                }
+
                 LaunchedEffect(isEditingTitle) {
                     if (isEditingTitle) focusRequester.requestFocus()
                 }
@@ -286,16 +324,24 @@ fun PlanListScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Plan icon - prefer SVG from planConfig, fall back to book icon
+                        // Plan icon - completed shows checkmark, prefer SVG, fall back to book icon
                         val iconSvg = plan.getIconSvg()
+                        val isCompleted = plan.getEffectiveStatus() == LearningPlan.STATUS_COMPLETED
                         Box(
                             modifier = Modifier
                                 .size(44.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.primaryContainer),
+                                .background(if (isCompleted) Emerald50 else MaterialTheme.colorScheme.primaryContainer),
                             contentAlignment = Alignment.Center
                         ) {
-                            if (!iconSvg.isNullOrBlank()) {
+                            if (isCompleted && iconSvg.isNullOrBlank()) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    null,
+                                    tint = Emerald500,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            } else if (!iconSvg.isNullOrBlank()) {
                                 SvgIcon(svgString = iconSvg, modifier = Modifier.size(24.dp))
                             } else {
                                 Icon(
@@ -358,23 +404,22 @@ fun PlanListScreen(
                             Spacer(Modifier.height(4.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 // Status chip
+                                val chipColor = when (plan.getEffectiveStatus()) {
+                                    LearningPlan.STATUS_COMPLETED -> Emerald700
+                                    LearningPlan.STATUS_GENERATING -> Amber700
+                                    LearningPlan.STATUS_CONFIRMING -> Sky700
+                                    LearningPlan.STATUS_LEARNING -> Teal700
+                                    else -> Gray500
+                                }
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
-                                    color = when (plan.getEffectiveStatus()) {
-                                        LearningPlan.STATUS_COMPLETED -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
-                                        LearningPlan.STATUS_GENERATING -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
-                                        else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                    }
+                                    color = chipColor.copy(alpha = 0.12f)
                                 ) {
                                     Text(
                                         plan.getStatusText(),
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = when (plan.getEffectiveStatus()) {
-                                            LearningPlan.STATUS_COMPLETED -> MaterialTheme.colorScheme.secondary
-                                            LearningPlan.STATUS_GENERATING -> MaterialTheme.colorScheme.tertiary
-                                            else -> MaterialTheme.colorScheme.primary
-                                        }
+                                        color = chipColor
                                     )
                                 }
                                 plan.createdAt?.let {
@@ -400,6 +445,16 @@ fun PlanListScreen(
                                 Icon(Icons.Default.MoreVert, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                if (plan.getEffectiveStatus() != LearningPlan.STATUS_COMPLETED) {
+                                    DropdownMenuItem(
+                                        text = { Text("标记为已完成") },
+                                        onClick = {
+                                            showMenu = false
+                                            showCompleteConfirm = true
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.CheckCircle, null) }
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("编辑") },
                                     onClick = {

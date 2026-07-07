@@ -991,6 +991,12 @@ async def plan_chat(
             _emit(
                 f'data: {json.dumps({"type": "resource_generated", "resources": bs["generated_resource_info"]}, ensure_ascii=False)}\n\n'
             )
+            # 资源生成完成，将计划状态从"生成中(1)"或"确认中(2)"更新为"学习中(3)"
+            if plan_id_int:
+                try:
+                    java_client.update_plan_status(plan_id_int, 3)
+                except Exception:
+                    pass
         _emit(
             f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
         )
@@ -1501,7 +1507,11 @@ async def generate_single_resource(
                     if res_info:
                         bg_state["generated_resource_info"].extend(res_info)
                         _threadsafe_cb(f'data: {json.dumps({"type": "resource_generated", "resources": res_info}, ensure_ascii=False)}\n\n')
-                        # 记录AI回复对话已由 _persist_generated_resources 内部处理
+                        # 单资源生成完成，更新计划状态为"学习中(3)"
+                        try:
+                            java_client.update_plan_status(plan_id_int, 3)
+                        except Exception:
+                            pass
                     _threadsafe_cb(f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n')
 
                     if generation_task_id:

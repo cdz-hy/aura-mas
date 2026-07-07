@@ -1387,11 +1387,21 @@ const planIconSvg = computed(() => {
 })
 
 function statusClass(status: number) {
-  return status === 2 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+  const map: Record<number, string> = {
+    0: 'bg-gray-100 text-gray-500',                        // 待规划
+    1: 'bg-amber-50 text-amber-700 border border-amber-200',  // 生成中
+    2: 'bg-sky-50 text-sky-700 border border-sky-200',        // 待确认
+    3: 'bg-orange-50 text-orange-700 border border-orange-200', // 学习中
+    4: 'bg-emerald-50 text-emerald-700 border border-emerald-200', // 已完成
+  }
+  return map[status] ?? 'bg-gray-100 text-gray-500'
 }
 
 function statusText(status: number) {
-  return status === 2 ? '已完成' : '进行中'
+  const map: Record<number, string> = {
+    0: '待规划', 1: '生成中', 2: '待确认', 3: '学习中', 4: '已完成',
+  }
+  return map[status] ?? '未知'
 }
 
 function pptxDownloadUrl(filename: string) {

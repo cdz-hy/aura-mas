@@ -88,8 +88,8 @@
                   <h3 class="font-semibold text-navy-800 truncate group-hover:text-navy-600 transition-colors text-base" :title="plan.title">{{ plan.title }}</h3>
                   <div class="flex items-center gap-2 mt-0.5">
                     <span class="text-xs text-navy-400">{{ formatDate(plan.createdAt) }}</span>
-                    <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" :class="statusClass(plan.displayStatus ?? plan.status)">
-                      {{ statusText(plan.displayStatus ?? plan.status) }}
+                    <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" :class="statusClass(plan.status)">
+                      {{ statusText(plan.status) }}
                     </span>
                   </div>
                 </div>
@@ -97,7 +97,7 @@
               
               <!-- Complete button -->
               <button
-                v-if="plan.status !== 4 && (plan.displayStatus ?? plan.status) !== 4"
+                v-if="plan.status !== 4 && (plan.status) !== 4"
                 class="absolute top-4 right-12 p-1.5 rounded-lg text-emerald-400 hover:text-white hover:bg-emerald-500 transition-all opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 z-10"
                 @click.stop="confirmCompletePlan(plan.id)"
                 title="标记为已完成"
@@ -295,7 +295,6 @@ async function handleCompleteConfirm() {
   const planId = completingPlanId.value
   try {
     await markAllComplete(planId)
-    await updatePlan(planId, { status: 4, displayStatus: 4 })
     await loadDashboard()
   } catch (e) {
     console.error('Failed to complete plan:', e)
@@ -311,11 +310,18 @@ function handleCompleteCancel() {
 }
 
 function statusText(status: number) {
-  return ['待规划', '生成中', '确认中', '学习中', '已完成'][status] || '未知'
+  return ['待规划', '生成中', '待确认', '学习中', '已完成'][status] || '未知'
 }
 
 function statusClass(status: number) {
-  return ['bg-gray-100 text-gray-600', 'bg-blue-100 text-blue-600', 'bg-amber-100 text-amber-600', 'bg-emerald-100 text-emerald-600', 'bg-sage-100 text-sage-700'][status] || 'bg-gray-100 text-gray-600'
+  const map: Record<number, string> = {
+    0: 'bg-gray-100 text-gray-500',       // 待规划 — 灰色，安静
+    1: 'bg-amber-50 text-amber-700 border border-amber-200',   // 生成中 — 琥珀，动态
+    2: 'bg-sky-50 text-sky-700 border border-sky-200',         // 待确认 — 天蓝，等待
+    3: 'bg-orange-50 text-orange-700 border border-orange-200', // 学习中 — 橙色，活力
+    4: 'bg-emerald-50 text-emerald-700 border border-emerald-200', // 已完成 — 翡翠绿，达成
+  }
+  return map[status] || 'bg-gray-100 text-gray-500'
 }
 
 async function loadDashboard() {

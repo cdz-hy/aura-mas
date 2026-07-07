@@ -49,6 +49,26 @@ fun DashboardScreen(
         return
     }
 
+    var completingPlan by remember { mutableStateOf<LearningPlan?>(null) }
+
+    // Complete confirmation dialog
+    completingPlan?.let { plan ->
+        AlertDialog(
+            onDismissRequest = { completingPlan = null },
+            title = { Text("标记为已完成") },
+            text = { Text("确定要将「${plan.title.ifBlank { "未命名计划" }}」标记为已完成吗？这会将所有已生成的学习资源均标记为已完成。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.markAllComplete(plan.id)
+                    completingPlan = null
+                }) { Text("确认完成") }
+            },
+            dismissButton = {
+                TextButton(onClick = { completingPlan = null }) { Text("取消") }
+            }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 24.dp)
@@ -125,7 +145,12 @@ fun DashboardScreen(
             item { EmptyState(Icons.Outlined.MenuBook, "暂无学习计划", "创建你的第一个学习计划吧") }
         } else {
             items(uiState.recentPlans.take(3), key = { it.id }) { plan ->
-                PlanCard(plan, { onPlanClick(plan.id) }, Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+                PlanCard(
+                    plan,
+                    onClick = { onPlanClick(plan.id) },
+                    onComplete = { completingPlan = plan },
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                )
             }
         }
     }
@@ -268,7 +293,7 @@ private fun RecentActivityCard(activities: List<RecentActivity>) {
 // ── Plan Card ─────────────────────────────────────────────────
 
 @Composable
-private fun PlanCard(plan: LearningPlan, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun PlanCard(plan: LearningPlan, onClick: () -> Unit, onComplete: (() -> Unit)? = null, modifier: Modifier = Modifier) {
     Card(
         modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(16.dp),
@@ -327,6 +352,12 @@ private fun PlanCard(plan: LearningPlan, onClick: () -> Unit, modifier: Modifier
                     LinearProgressIndicator(progress = { pct / 100f }, modifier = Modifier.width(48.dp).height(4.dp).clip(RoundedCornerShape(2.dp)), trackColor = MaterialTheme.colorScheme.surfaceVariant)
                 }
             }
+            if (plan.getEffectiveStatus() != LearningPlan.STATUS_COMPLETED && onComplete != null) {
+                Spacer(Modifier.width(8.dp))
+                IconButton(onClick = onComplete, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.CheckCircle, "标记完成", tint = Emerald500, modifier = Modifier.size(20.dp))
+                }
+            }
         }
     }
 }
@@ -348,10 +379,11 @@ private fun ErrorBanner(error: String, onRetry: () -> Unit) {
 // ── Helpers ───────────────────────────────────────────────────
 
 private fun statusColor(plan: LearningPlan) = when (plan.getEffectiveStatus()) {
-    LearningPlan.STATUS_COMPLETED -> Emerald500
-    LearningPlan.STATUS_GENERATING -> Amber500
-    LearningPlan.STATUS_LEARNING -> Navy600
-    else -> Navy400
+    LearningPlan.STATUS_COMPLETED -> Emerald700   // 已完成 — 翡翠绿
+    LearningPlan.STATUS_GENERATING -> Amber700     // 生成中 — 琥珀
+    LearningPlan.STATUS_CONFIRMING -> Sky700       // 待确认 — 天蓝
+    LearningPlan.STATUS_LEARNING -> Teal700        // 学习中 — 青绿
+    else -> Gray500                                // 待规划 — 灰色
 }
 
 private fun formatStudyHours(hours: Double): String {

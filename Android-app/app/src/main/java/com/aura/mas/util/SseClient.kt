@@ -22,9 +22,31 @@ data class SseEvent(
 
 @Singleton
 class SseClient @Inject constructor(
-    private val gson: Gson
+    private val gson: Gson,
+    private val serverConfig: com.aura.mas.data.repository.ServerConfig
 ) {
+    // Interceptor that rewrites URLs from default to custom server address
+    private val serverRewrite = Interceptor { chain ->
+        val request = chain.request()
+        val currentJavaUrl = serverConfig.javaUrl.value
+        val currentPythonUrl = serverConfig.pythonUrl.value
+        val url = request.url.toString()
+        val newUrl = when {
+            url.startsWith(Constants.JAVA_BASE_URL) && currentJavaUrl != Constants.JAVA_BASE_URL ->
+                url.replaceFirst(Constants.JAVA_BASE_URL, currentJavaUrl)
+            url.startsWith(Constants.PYTHON_BASE_URL) && currentPythonUrl != Constants.PYTHON_BASE_URL ->
+                url.replaceFirst(Constants.PYTHON_BASE_URL, currentPythonUrl)
+            else -> null
+        }
+        if (newUrl != null) {
+            chain.proceed(request.newBuilder().url(newUrl).build())
+        } else {
+            chain.proceed(request)
+        }
+    }
+
     private val client = OkHttpClient.Builder()
+        .addInterceptor(serverRewrite)
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.MINUTES)
         .writeTimeout(30, TimeUnit.SECONDS)

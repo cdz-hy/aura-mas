@@ -132,6 +132,10 @@ class PlanRepository @Inject constructor(
         return api.markComplete(planId, resourceId)
     }
 
+    suspend fun unmarkComplete(planId: Long, resourceId: Long): ApiResponse<Unit> {
+        return api.unmarkComplete(planId, resourceId)
+    }
+
     private fun LearningPlan.toCached() = CachedPlan(
         id = id, userId = userId, title = title,
         learningGoal = learningGoal, planConfig = planConfig,

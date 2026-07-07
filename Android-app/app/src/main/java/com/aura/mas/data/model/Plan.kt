@@ -29,7 +29,7 @@ data class LearningPlan(
         const val STATUS_COMPLETED = 4
     }
 
-    fun getEffectiveStatus(): Int = displayStatus ?: status
+    fun getEffectiveStatus(): Int = status
 
     fun getStatusText(): String = when (getEffectiveStatus()) {
         STATUS_PENDING -> "待规划"

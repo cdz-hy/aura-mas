@@ -82,10 +82,10 @@
           <!-- Top section: Icon and Title -->
           <div class="flex items-start justify-between">
             <div class="flex items-center gap-4 min-w-0 pr-16">
-              <div class="w-12 h-12 rounded-[14px] flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform duration-500 shadow-sm" :class="(plan.displayStatus ?? plan.status) === 4 ? 'bg-emerald-50 text-emerald-500' : 'bg-gradient-to-br from-navy-50 to-navy-100 text-navy-600'">
+              <div class="w-12 h-12 rounded-[14px] flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform duration-500 shadow-sm" :class="(plan.status) === 4 ? 'bg-emerald-50 text-emerald-500' : 'bg-gradient-to-br from-navy-50 to-navy-100 text-navy-600'">
                 <!-- 优先显示自定义图标 -->
                 <div v-if="getPlanIcon(plan)" class="w-6 h-6" v-html="getPlanIcon(plan)"></div>
-                <svg v-else-if="(plan.displayStatus ?? plan.status) === 4" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <svg v-else-if="(plan.status) === 4" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
                 </svg>
                 <svg v-else class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -95,8 +95,8 @@
               <div class="min-w-0 flex-1">
                 <h3 class="font-display font-bold text-navy-800 truncate group-hover:text-navy-600 transition-colors text-lg" :title="plan.title || '未命名计划'">{{ plan.title || '未命名计划' }}</h3>
                 <div class="flex items-center gap-2 mt-1">
-                  <span class="text-[11px] px-2 py-0.5 rounded-full font-medium" :class="statusClass(plan.displayStatus ?? plan.status)">
-                    {{ statusText(plan.displayStatus ?? plan.status) }}
+                  <span class="text-[11px] px-2 py-0.5 rounded-full font-medium" :class="statusClass(plan.status)">
+                    {{ statusText(plan.status) }}
                   </span>
                   <span class="text-xs text-navy-400 font-medium whitespace-nowrap">{{ formatDate(plan.createdAt) }}</span>
                 </div>
@@ -107,7 +107,7 @@
             <div class="absolute top-5 right-4 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0 z-10">
               <!-- Complete button -->
               <button
-                v-if="(plan.displayStatus ?? plan.status) !== 4"
+                v-if="(plan.status) !== 4"
                 class="p-2 rounded-xl text-emerald-400 bg-emerald-50/50 border border-emerald-100/50 hover:text-white hover:bg-emerald-500 hover:border-emerald-500 transition-all shadow-sm"
                 @click.stop="confirmCompletePlan(plan.id)"
                 title="标记为已完成"
@@ -151,10 +151,10 @@
           <div class="flex items-center justify-between p-6 sm:p-7 rounded-2xl border border-navy-100/60 bg-white hover:border-navy-300 hover:shadow-xl hover:shadow-navy-200/30 hover:-translate-y-1 transition-all duration-300 relative gap-6">
             <div class="flex items-center gap-5 min-w-0 flex-1">
               <!-- Icon -->
-              <div class="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform duration-500 shadow-sm" :class="(plan.displayStatus ?? plan.status) === 4 ? 'bg-emerald-50 text-emerald-500' : 'bg-gradient-to-br from-navy-50 to-navy-100 text-navy-600'">
+              <div class="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform duration-500 shadow-sm" :class="(plan.status) === 4 ? 'bg-emerald-50 text-emerald-500' : 'bg-gradient-to-br from-navy-50 to-navy-100 text-navy-600'">
                 <!-- 优先显示自定义图标 -->
                 <div v-if="getPlanIcon(plan)" class="w-7 h-7" v-html="getPlanIcon(plan)"></div>
-                <svg v-else-if="(plan.displayStatus ?? plan.status) === 4" class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <svg v-else-if="(plan.status) === 4" class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
                 </svg>
                 <svg v-else class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -168,8 +168,8 @@
                   <h3 class="font-display font-bold text-navy-800 text-lg group-hover:text-navy-600 transition-colors truncate" :title="plan.title || '未命名计划'">
                     {{ plan.title || '未命名计划' }}
                   </h3>
-                  <span class="text-[11px] px-2.5 py-0.5 rounded-full font-semibold flex-shrink-0 shadow-sm" :class="statusClass(plan.displayStatus ?? plan.status)">
-                    {{ statusText(plan.displayStatus ?? plan.status) }}
+                  <span class="text-[11px] px-2.5 py-0.5 rounded-full font-semibold flex-shrink-0 shadow-sm" :class="statusClass(plan.status)">
+                    {{ statusText(plan.status) }}
                   </span>
                 </div>
                 <div class="flex items-center gap-4 mt-2.5 text-xs text-navy-400 font-medium">
@@ -204,7 +204,7 @@
             <div class="absolute right-16 top-1/2 -translate-y-[44%] group-hover:-translate-y-1/2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-300 z-10">
               <!-- Complete button -->
               <button
-                v-if="(plan.displayStatus ?? plan.status) !== 4"
+                v-if="(plan.status) !== 4"
                 class="p-2 rounded-xl text-emerald-400 bg-emerald-50/50 border border-emerald-100/50 hover:text-white hover:bg-emerald-500 hover:border-emerald-500 transition-all shadow-sm"
                 @click.stop="confirmCompletePlan(plan.id)"
                 title="标记为已完成"
@@ -382,7 +382,6 @@ async function handleCompleteConfirm() {
   const planId = completingPlanId.value
   try {
     await markAllComplete(planId)
-    await updatePlan(planId, { status: 4, displayStatus: 4 })
     await loadPlans()
   } catch (e) {
     console.error('Failed to complete plan:', e)
@@ -399,11 +398,11 @@ function handleCompleteCancel() {
 
 function statusClass(status: number) {
   const map: Record<number, string> = {
-    0: 'bg-navy-100 text-navy-500',
-    1: 'bg-amber-100 text-amber-600',
-    2: 'bg-blue-100 text-blue-600',
-    3: 'bg-sage-100 text-sage-600',
-    4: 'bg-emerald-100 text-emerald-600',
+    0: 'bg-gray-100 text-gray-500',                        // 待规划 — 灰色
+    1: 'bg-amber-50 text-amber-700 border border-amber-200',  // 生成中 — 琥珀
+    2: 'bg-sky-50 text-sky-700 border border-sky-200',        // 待确认 — 天蓝
+    3: 'bg-orange-50 text-orange-700 border border-orange-200', // 学习中 — 橙色
+    4: 'bg-emerald-50 text-emerald-700 border border-emerald-200', // 已完成 — 翡翠绿
   }
   return map[status] || map[0]
 }

@@ -8,6 +8,8 @@ import com.aura.mas.data.repository.StatsRepository
 import com.aura.mas.data.repository.PlanRepository
 import com.aura.mas.data.api.PythonApiService
 import com.aura.mas.data.api.ApiService
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import com.aura.mas.data.offline.OfflineCacheManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -72,73 +74,100 @@ class DashboardViewModel @Inject constructor(
                 _uiState.value = DashboardUiState(isLoading = true)
             }
 
-            // Step 2: Fetch fresh data in background
-            try {
-                val statsResult = kotlinx.coroutines.withTimeout(8_000L) {
-                    statsRepo.getDashboardStats()
-                }
-                val stats = statsResult.data
+            // Step 2: Launch parallel requests, update UI incrementally
+            val hasCache = cachedPlans.isNotEmpty()
 
-                val plansResult = api.getPlans(size = 50)
-                val plans = plansResult.data?.records ?: emptyList()
+            // 2a. Stats (update stats cards as soon as ready)
+            val statsJob = async {
+                try {
+                    kotlinx.coroutines.withTimeout(8_000L) { statsRepo.getDashboardStats() }.data
+                } catch (_: Exception) { null }
+            }
 
-                // Cache plans
-                offlineCache.cachePlans(plans)
+            // 2b. Plans (update plan list as soon as ready)
+            val plansJob = async {
+                try {
+                    val plansResult = api.getPlans(size = 50)
+                    val plansList = plansResult.data?.records ?: emptyList()
+                    offlineCache.cachePlans(plansList)
+                    plansList
+                } catch (_: Exception) { null }
+            }
 
-                // Batch fetch progress for all plans (1 API call instead of N*2)
-                val planIds = plans.map { it.id }
-                val progressMap = if (planIds.isNotEmpty()) {
-                    try {
-                        api.getBatchProgress(planIds).data ?: emptyMap()
-                    } catch (_: Exception) { emptyMap() }
-                } else emptyMap()
+            // 2c. Heatmap (update heatmap independently)
+            val heatmapJob = async {
+                try { statsRepo.getStudyHeatmap().data?.dailyData } catch (_: Exception) { null }
+            }
 
-                val plansWithProgress = plans.map { plan ->
-                    val summary = progressMap[plan.id.toString()]
-                    plan.copy(progress = summary?.progress?.toDouble() ?: 0.0)
-                }
+            // 2d. AI greeting (fire and forget)
+            loadAiGreeting()
 
-                // Cache resources for each plan (can be parallelized later)
-                plans.forEach { plan ->
-                    try {
-                        val res = api.getResourcesByPlan(plan.id)
-                        if (res.isSuccess && res.data != null) {
-                            offlineCache.cacheResources(res.data)
-                        }
-                    } catch (_: Exception) {}
-                }
+            // --- Update stats cards as soon as ready ---
+            val stats = statsJob.await()
+            if (stats != null) {
+                _uiState.value = _uiState.value.copy(
+                    totalPlans = stats.totalPlans.toInt(),
+                    completedPlans = stats.completedPlans.toInt(),
+                    totalResources = stats.totalResources,
+                    totalStudyHours = stats.totalStudyHours,
+                    weeklyMinutes = stats.weeklyMinutes,
+                    recentActivity = stats.recentActivity
+                )
+            }
 
-                val heatmapResult = statsRepo.getStudyHeatmap()
-
-                _uiState.value = DashboardUiState(
-                    isLoading = false,
-                    isRefreshing = false,
-                    greeting = buildGreeting(),
-                    totalPlans = stats?.totalPlans?.toInt() ?: plans.size,
-                    completedPlans = stats?.completedPlans?.toInt() ?: plans.count { it.status == LearningPlan.STATUS_COMPLETED },
-                    totalResources = stats?.totalResources?.toInt() ?: 0,
-                    totalStudyHours = stats?.totalStudyHours ?: 0.0,
-                    weeklyMinutes = stats?.weeklyMinutes ?: emptyList(),
-                    recentPlans = plansWithProgress.take(10),
-                    heatmapData = heatmapResult.data?.dailyData ?: emptyList(),
-                    recentActivity = stats?.recentActivity ?: emptyList()
+            // --- Update plan list as soon as ready ---
+            val freshPlans = plansJob.await()
+            if (freshPlans != null) {
+                _uiState.value = _uiState.value.copy(
+                    recentPlans = freshPlans.take(10),
+                    totalPlans = freshPlans.size,
+                    completedPlans = freshPlans.count { it.status == LearningPlan.STATUS_COMPLETED },
+                    isLoading = false
                 )
 
-                loadAiGreeting()
-            } catch (e: Exception) {
-                if (cachedPlans.isNotEmpty()) {
-                    _uiState.value = _uiState.value.copy(isRefreshing = false)
-                    retryJob = viewModelScope.launch {
-                        kotlinx.coroutines.delay(30_000L) // Retry after 30 seconds
-                        loadDashboardInternal()
+                // Fetch progress in background (doesn't block UI)
+                val planIds = freshPlans.map { it.id }
+                if (planIds.isNotEmpty()) {
+                    launch {
+                        try {
+                            val progressMap = api.getBatchProgress(planIds).data ?: emptyMap()
+                            val plansWithProgress = freshPlans.map { plan ->
+                                val summary = progressMap[plan.id.toString()]
+                                plan.copy(progress = summary?.progress?.toDouble() ?: 0.0)
+                            }
+                            _uiState.value = _uiState.value.copy(recentPlans = plansWithProgress.take(10))
+                        } catch (_: Exception) {}
                     }
-                } else {
-                    _uiState.value = DashboardUiState(
-                        isLoading = false,
-                        isRefreshing = false,
-                        error = e.message ?: "网络连接失败，请检查网络设置"
-                    )
                 }
+
+                // Cache resources in background (doesn't block UI)
+                launch {
+                    freshPlans.forEach { plan ->
+                        try {
+                            val res = api.getResourcesByPlan(plan.id)
+                            if (res.isSuccess && res.data != null) {
+                                offlineCache.cacheResources(res.data)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+
+            // --- Update heatmap as soon as ready ---
+            val heatmapData = heatmapJob.await()
+            if (heatmapData != null) {
+                _uiState.value = _uiState.value.copy(heatmapData = heatmapData)
+            }
+
+            // Done refreshing
+            _uiState.value = _uiState.value.copy(isRefreshing = false)
+
+            // Fallback: if no cache and all requests failed
+            if (!hasCache && freshPlans == null && stats == null) {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = "网络连接失败，请检查网络设置"
+                )
             }
         }
     }
@@ -166,6 +195,15 @@ class DashboardViewModel @Inject constructor(
             hour < 14 -> "中午好，$name"
             hour < 18 -> "下午好，$name"
             else -> "晚上好，$name"
+        }
+    }
+
+    fun markAllComplete(planId: Long) {
+        viewModelScope.launch {
+            try {
+                api.markAllComplete(planId)
+                loadDashboard()
+            } catch (_: Exception) {}
         }
     }
 }

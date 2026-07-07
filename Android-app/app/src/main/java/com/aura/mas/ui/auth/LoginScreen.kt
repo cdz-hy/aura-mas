@@ -31,6 +31,7 @@ import com.aura.mas.ui.theme.*
 fun LoginScreen(
     onNavigateToRegister: () -> Unit,
     onLoginSuccess: () -> Unit,
+    onServerSettings: () -> Unit = {},
     viewModel: AuthViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -182,6 +183,20 @@ fun LoginScreen(
                     TextButton(onClick = onNavigateToRegister) {
                         Text("没有账号？立即注册", color = MaterialTheme.colorScheme.primary)
                     }
+                }
+            }
+
+            // Server settings button (bottom-right corner)
+            Box(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                contentAlignment = Alignment.BottomEnd
+            ) {
+                TextButton(onClick = onServerSettings) {
+                    Text(
+                        "服务器设置",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f)
+                    )
                 }
             }
 

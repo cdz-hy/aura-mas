@@ -22,6 +22,7 @@ data class AuthUiState(
 @HiltViewModel
 class AuthViewModel @Inject constructor(
     val authStore: AuthStore,
+    val serverConfig: com.aura.mas.data.repository.ServerConfig,
     private val api: ApiService
 ) : ViewModel() {
 
@@ -30,6 +31,7 @@ class AuthViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            serverConfig.load() // Load custom server URLs before anything else
             authStore.restoreSession()
         }
     }

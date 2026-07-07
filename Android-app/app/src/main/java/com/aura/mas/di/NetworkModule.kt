@@ -3,6 +3,7 @@ package com.aura.mas.di
 import com.aura.mas.data.api.ApiService
 import com.aura.mas.data.api.AuthInterceptor
 import com.aura.mas.data.api.PythonApiService
+import com.aura.mas.data.repository.ServerConfig
 import com.aura.mas.util.Constants
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
@@ -50,14 +51,34 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideOkHttpClient(authInterceptor: AuthInterceptor): OkHttpClient {
+    fun provideOkHttpClient(authInterceptor: AuthInterceptor, serverConfig: ServerConfig): OkHttpClient {
         val logging = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BODY
         }
+        // Interceptor that rewrites URLs from default to custom server address
+        val serverRewrite = okhttp3.Interceptor { chain ->
+            val request = chain.request()
+            val currentJavaUrl = serverConfig.javaUrl.value
+            val currentPythonUrl = serverConfig.pythonUrl.value
+            val url = request.url.toString()
+            val newUrl = when {
+                url.startsWith(Constants.JAVA_BASE_URL) && currentJavaUrl != Constants.JAVA_BASE_URL ->
+                    url.replaceFirst(Constants.JAVA_BASE_URL, currentJavaUrl)
+                url.startsWith(Constants.PYTHON_BASE_URL) && currentPythonUrl != Constants.PYTHON_BASE_URL ->
+                    url.replaceFirst(Constants.PYTHON_BASE_URL, currentPythonUrl)
+                else -> null
+            }
+            if (newUrl != null) {
+                chain.proceed(request.newBuilder().url(newUrl).build())
+            } else {
+                chain.proceed(request)
+            }
+        }
         return OkHttpClient.Builder()
+            .addInterceptor(serverRewrite)
             .addInterceptor(authInterceptor)
             .addInterceptor(logging)
-            .connectTimeout(3, TimeUnit.SECONDS)  // fast fail to cache on offline
+            .connectTimeout(3, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
             .build()

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.learning.entity.DailyStudyTime;
 import com.learning.entity.LearningResource;
 import com.learning.entity.UserLearningProgress;
+import com.learning.entity.LearningPlan;
 import com.learning.mapper.DailyStudyTimeMapper;
 import com.learning.mapper.LearningResourceMapper;
 import com.learning.mapper.UserLearningProgressMapper;
@@ -269,7 +270,7 @@ public class UserLearningProgressService {
     @Transactional
     public void recalculatePlanProgress(Long userId, Long planId) {
         List<UserLearningProgress> all = getByPlan(userId, planId);
-        
+
         java.util.Set<Long> validResourceIds = new java.util.HashSet<>();
         List<LearningResource> resources = resourceMapper.selectList(
                 new LambdaQueryWrapper<LearningResource>()
@@ -278,20 +279,32 @@ public class UserLearningProgressService {
         for (LearningResource r : resources) {
             validResourceIds.add(r.getId());
         }
-        
+
         long completed = 0;
         for (UserLearningProgress p : all) {
             if (p.getStatus() != null && p.getStatus() == 2 && validResourceIds.contains(p.getResourceId())) {
                 completed++;
             }
         }
-        
+
         long total = validResourceIds.size();
-        float progress = total > 0 ? (float) completed / total : 0.0f;
-        if (progress > 1.0f) {
-            progress = 1.0f;
-        }
-        
+        float progress = total > 0 ? Math.min(1.0f, (float) completed / total) : 0.0f;
+
         planService.updatePlanProgress(planId, progress);
+
+        // Auto-manage plan status based on progress
+        // All resources complete → status=4 (completed)
+        // Some resources unmarked while status=4 → revert to 3 (learning)
+        if (total > 0) {
+            LearningPlan plan = planService.getPlanByIdInternal(planId);
+            if (plan != null) {
+                int currentStatus = plan.getStatus() != null ? plan.getStatus() : 0;
+                if (progress >= 1.0f && currentStatus != 4) {
+                    planService.updatePlanStatus(planId, 4);
+                } else if (progress < 1.0f && currentStatus == 4) {
+                    planService.updatePlanStatus(planId, 3);
+                }
+            }
+        }
     }
 }

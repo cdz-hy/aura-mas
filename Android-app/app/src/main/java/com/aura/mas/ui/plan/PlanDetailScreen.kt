@@ -456,6 +456,22 @@ class PlanDetailViewModel @Inject constructor(
         }
     }
 
+    fun unmarkComplete(resourceId: Long) {
+        if (!networkUtil.isOnline()) {
+            _uiState.value = _uiState.value.copy(error = "离线状态，无法更新进度")
+            return
+        }
+        viewModelScope.launch {
+            planRepo.unmarkComplete(planId, resourceId)
+            loadPlan(planId)
+        }
+    }
+
+    fun toggleComplete(resourceId: Long) {
+        val isCompleted = _uiState.value.progress.any { it.resourceId == resourceId && it.completed }
+        if (isCompleted) unmarkComplete(resourceId) else markComplete(resourceId)
+    }
+
     fun retryTask(resourceId: Long) {
         viewModelScope.launch {
             try {
@@ -503,6 +519,28 @@ fun PlanDetailScreen(
                     val completed = uiState.progress.count { it.completed }
                     val total = uiState.resources.count { it.status >= LearningResource.STATUS_READY }
                     val percent = if (total > 0) (completed * 100 / total).coerceIn(0, 100) else 0
+                    val planStatus = plan?.status ?: 0
+                    val statusColor = when (planStatus) {
+                        LearningPlan.STATUS_COMPLETED -> Emerald700
+                        LearningPlan.STATUS_GENERATING -> Amber700
+                        LearningPlan.STATUS_CONFIRMING -> Sky700
+                        LearningPlan.STATUS_LEARNING -> Teal700
+                        else -> Gray500
+                    }
+                    // Status badge
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = statusColor.copy(alpha = 0.12f),
+                        modifier = Modifier.padding(end = 4.dp)
+                    ) {
+                        Text(
+                            plan?.getStatusText() ?: "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = statusColor,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    // Progress badge
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.primaryContainer,
@@ -592,7 +630,7 @@ fun PlanDetailScreen(
                             viewModel.selectResource(it)
                             viewModel.toggleResourceTree()
                         },
-                        onComplete = { viewModel.markComplete(it) },
+                        onComplete = { viewModel.toggleComplete(it) },
                         onRetry = { viewModel.retryTask(it) }
                     )
                 }
@@ -736,9 +774,14 @@ private fun ResourceTreePanel(
                     }
                 }
             }
-            if (isReady && !isCompleted) {
+            if (isReady) {
                 IconButton(onClick = onComplete, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.CheckCircleOutline, "完成", modifier = Modifier.size(18.dp))
+                    Icon(
+                        if (isCompleted) Icons.Default.CheckCircle else Icons.Default.CheckCircleOutline,
+                        if (isCompleted) "取消完成" else "标记完成",
+                        tint = if (isCompleted) Sage500 else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
             if (isGenerating) {
