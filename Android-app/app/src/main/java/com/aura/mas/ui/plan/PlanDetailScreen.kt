@@ -501,8 +501,8 @@ fun PlanDetailScreen(
                 onBack = onBack,
                 actions = {
                     val completed = uiState.progress.count { it.completed }
-                    val total = uiState.resources.count { it.status >= LearningResource.STATUS_READY }.coerceAtLeast(1)
-                    val percent = (completed * 100 / total)
+                    val total = uiState.resources.count { it.status >= LearningResource.STATUS_READY }
+                    val percent = if (total > 0) (completed * 100 / total).coerceIn(0, 100) else 0
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.primaryContainer,

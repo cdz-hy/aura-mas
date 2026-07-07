@@ -17,11 +17,8 @@ data class LearningPlan(
     val progress: Double = 0.0
 ) {
     fun getPercentProgress(): Int {
-        return if (progress in 0.0001..1.0) {
-            (progress * 100).toInt()
-        } else {
-            progress.toInt()
-        }
+        // Backend stores progress as 0.0-1.0 float
+        return (progress * 100).toInt().coerceIn(0, 100)
     }
 
     companion object {
@@ -306,4 +303,13 @@ data class ResourceProgress(
     val durationSeconds: Int = 0
 ) {
     val completed: Boolean get() = status == 2
+}
+
+data class PlanProgressSummary(
+    val completed: Int = 0,
+    val total: Int = 0,
+    val progress: Float = 0f,
+    val isCompleted: Boolean = false
+) {
+    val percent: Int get() = (progress * 100).toInt().coerceIn(0, 100)
 }

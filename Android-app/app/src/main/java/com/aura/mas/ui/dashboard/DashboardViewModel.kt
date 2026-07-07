@@ -85,21 +85,20 @@ class DashboardViewModel @Inject constructor(
                 // Cache plans
                 offlineCache.cachePlans(plans)
 
-                val plansWithProgress = plans.map { plan ->
+                // Batch fetch progress for all plans (1 API call instead of N*2)
+                val planIds = plans.map { it.id }
+                val progressMap = if (planIds.isNotEmpty()) {
                     try {
-                        val resResult = api.getResourcesByPlan(plan.id)
-                        val progResult = planRepo.getProgress(plan.id)
-                        val resources = resResult.data ?: emptyList()
-                        val progress = progResult.data ?: emptyList()
-                        val validIds = resources.filter { it.status >= LearningResource.STATUS_READY }.map { it.id }.toSet()
-                        val completed = progress.count { it.completed && it.resourceId in validIds }
-                        val total = validIds.size
-                        val pct = if (total > 0) (completed * 100.0 / total).coerceIn(0.0, 100.0) else 0.0
-                        plan.copy(progress = pct / 100.0)
-                    } catch (_: Exception) { plan }
+                        api.getBatchProgress(planIds).data ?: emptyMap()
+                    } catch (_: Exception) { emptyMap() }
+                } else emptyMap()
+
+                val plansWithProgress = plans.map { plan ->
+                    val summary = progressMap[plan.id.toString()]
+                    plan.copy(progress = summary?.progress?.toDouble() ?: 0.0)
                 }
 
-                // Cache resources for each plan
+                // Cache resources for each plan (can be parallelized later)
                 plans.forEach { plan ->
                     try {
                         val res = api.getResourcesByPlan(plan.id)

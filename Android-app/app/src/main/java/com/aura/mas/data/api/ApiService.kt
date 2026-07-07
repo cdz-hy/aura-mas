@@ -108,6 +108,15 @@ interface ApiService {
     @GET("/api/progress/plan")
     suspend fun getProgress(@Query("planId") planId: Long): ApiResponse<List<ResourceProgress>>
 
+    @POST("/api/progress/complete-all")
+    suspend fun markAllComplete(@Query("planId") planId: Long): ApiResponse<Unit>
+
+    @GET("/api/progress/batch")
+    suspend fun getBatchProgress(@Query("planIds") planIds: List<Long>): ApiResponse<Map<String, PlanProgressSummary>>
+
+    @GET("/api/progress/plan/summary")
+    suspend fun getPlanProgressSummary(@Query("planId") planId: Long): ApiResponse<Map<String, PlanProgressSummary>>
+
     // ── Notes ─────────────────────────────────────────────────
     @GET("/api/note/list")
     suspend fun getNotes(

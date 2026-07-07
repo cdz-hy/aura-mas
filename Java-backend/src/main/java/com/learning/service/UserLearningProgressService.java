@@ -130,6 +130,7 @@ public class UserLearningProgressService {
                         .eq(UserLearningProgress::getResourceId, resourceId));
         if (existing != null) {
             existing.setStatus(2);
+            existing.setCompleteTime(LocalDateTime.now());
             existing.setLastAccessTime(LocalDateTime.now());
             existing.setUpdatedAt(LocalDateTime.now());
             progressMapper.updateById(existing);
@@ -154,6 +155,115 @@ public class UserLearningProgressService {
     public void unmarkComplete(Long userId, Long planId, Long resourceId) {
         updateStatus(userId, planId, resourceId, 1);
         recalculatePlanProgress(userId, planId);
+    }
+
+    /**
+     * 一键标记计划下所有已生成资源为完成
+     * 只标记 status >= 2（已就绪）的资源，排除正在生成和失败的
+     * 批量更新后只重算一次进度，避免 O(N^2)
+     */
+    @Transactional
+    public void markAllComplete(Long userId, Long planId) {
+        List<LearningResource> resources = resourceMapper.selectList(
+                new LambdaQueryWrapper<LearningResource>()
+                        .eq(LearningResource::getPlanId, planId)
+                        .ge(LearningResource::getStatus, 2));
+        if (resources.isEmpty()) return;
+
+        // Batch upsert all resource progress records
+        for (LearningResource r : resources) {
+            UserLearningProgress existing = progressMapper.selectOne(
+                    new LambdaQueryWrapper<UserLearningProgress>()
+                            .eq(UserLearningProgress::getUserId, userId)
+                            .eq(UserLearningProgress::getPlanId, planId)
+                            .eq(UserLearningProgress::getResourceId, r.getId()));
+            if (existing != null) {
+                if (existing.getStatus() != null && existing.getStatus() == 2) continue; // already complete
+                existing.setStatus(2);
+                existing.setCompleteTime(LocalDateTime.now());
+                existing.setLastAccessTime(LocalDateTime.now());
+                existing.setUpdatedAt(LocalDateTime.now());
+                progressMapper.updateById(existing);
+            } else {
+                UserLearningProgress progress = new UserLearningProgress();
+                progress.setUserId(userId);
+                progress.setPlanId(planId);
+                progress.setResourceId(r.getId());
+                progress.setStatus(2);
+                progress.setDurationSeconds(0);
+                progress.setStartTime(LocalDateTime.now());
+                progress.setCompleteTime(LocalDateTime.now());
+                progress.setLastAccessTime(LocalDateTime.now());
+                progress.setCreatedAt(LocalDateTime.now());
+                progress.setUpdatedAt(LocalDateTime.now());
+                progressMapper.insert(progress);
+            }
+        }
+        // Recalculate only once at the end
+        recalculatePlanProgress(userId, planId);
+    }
+
+    /**
+     * 批量获取多个计划的进度摘要
+     * 返回 planId -> {completed, total, progress(0-1.0), isCompleted}
+     * 使用 IN 批量查询，仅 2 次 SQL（不论多少个 plan）
+     */
+    public java.util.Map<String, Object> getProgressSummary(Long userId, List<Long> planIds) {
+        java.util.Map<String, Object> result = new java.util.HashMap<>();
+        if (planIds == null || planIds.isEmpty()) return result;
+
+        // 1. Batch fetch all valid resources (status >= 2) for all plans
+        List<LearningResource> allResources = resourceMapper.selectList(
+                new LambdaQueryWrapper<LearningResource>()
+                        .in(LearningResource::getPlanId, planIds)
+                        .ge(LearningResource::getStatus, 2));
+
+        // Group by planId
+        java.util.Map<Long, java.util.Set<Long>> planValidIds = new java.util.HashMap<>();
+        for (LearningResource r : allResources) {
+            planValidIds.computeIfAbsent(r.getPlanId(), k -> new java.util.HashSet<>()).add(r.getId());
+        }
+
+        // 2. Batch fetch all completed progress for all plans
+        List<UserLearningProgress> allProgress = progressMapper.selectList(
+                new LambdaQueryWrapper<UserLearningProgress>()
+                        .eq(UserLearningProgress::getUserId, userId)
+                        .in(UserLearningProgress::getPlanId, planIds)
+                        .eq(UserLearningProgress::getStatus, 2));
+
+        // Group by planId
+        java.util.Map<Long, List<UserLearningProgress>> planProgress = new java.util.HashMap<>();
+        for (UserLearningProgress p : allProgress) {
+            planProgress.computeIfAbsent(p.getPlanId(), k -> new java.util.ArrayList<>()).add(p);
+        }
+
+        // 3. Build summary for each plan
+        for (Long planId : planIds) {
+            java.util.Map<String, Object> summary = new java.util.HashMap<>();
+            java.util.Set<Long> validIds = planValidIds.getOrDefault(planId, java.util.Collections.emptySet());
+            int total = validIds.size();
+
+            int completed = 0;
+            List<UserLearningProgress> progresses = planProgress.getOrDefault(planId, java.util.Collections.emptyList());
+            for (UserLearningProgress p : progresses) {
+                if (validIds.contains(p.getResourceId())) completed++;
+            }
+
+            float progress = total > 0 ? Math.min(1.0f, (float) completed / total) : 0.0f;
+            summary.put("completed", completed);
+            summary.put("total", total);
+            summary.put("progress", progress);
+            summary.put("isCompleted", progress >= 1.0f && total > 0);
+            result.put(String.valueOf(planId), summary);
+        }
+        return result;
+    }
+
+    /**
+     * 查询单个计划进度
+     */
+    public java.util.Map<String, Object> getPlanProgress(Long userId, Long planId) {
+        return getProgressSummary(userId, java.util.List.of(planId));
     }
 
     @Transactional

@@ -199,7 +199,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { getPlans, deletePlan, updatePlan } from '@/api/plan'
 import { getDashboardStats, getGreeting } from '@/api/stats'
-import { getPlanResources, getProgressByPlan, markResourceComplete } from '@/api/resource'
+import { getPlanResources, getProgressByPlan, markResourceComplete, getBatchProgress, markAllComplete } from '@/api/resource'
 import type { DashboardStats } from '@/api/stats'
 import type { LearningPlan } from '@/types/plan'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -294,9 +294,7 @@ async function handleCompleteConfirm() {
   if (!completingPlanId.value) return
   const planId = completingPlanId.value
   try {
-    const resRes = await getPlanResources(planId)
-    const resources = resRes.data || []
-    await Promise.all(resources.map(r => markResourceComplete(planId, r.id).catch(() => {})))
+    await markAllComplete(planId)
     await updatePlan(planId, { status: 4, displayStatus: 4 })
     await loadDashboard()
   } catch (e) {
@@ -374,26 +372,17 @@ function typewriterEffect(text: string) {
 
 async function loadAllProgress() {
   const map: Record<number, number> = {}
-  await Promise.all(plans.value.map(async (plan) => {
-    try {
-      const [resRes, progRes] = await Promise.all([
-        getPlanResources(plan.id),
-        getProgressByPlan(plan.id),
-      ])
-      const validResourceIds = new Set(
-        (resRes.data || [])
-          .filter((r: any) => r.status >= 2)
-          .map((r: any) => r.id)
-      )
-      const total = validResourceIds.size
-      const completed = (progRes.data || []).filter(
-        (p: any) => p.status === 2 && validResourceIds.has(p.resourceId)
-      ).length
-      map[plan.id] = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
-    } catch {
-      map[plan.id] = 0
+  const planIds = plans.value.map(p => p.id)
+  if (planIds.length === 0) { planProgressMap.value = map; return }
+  try {
+    const res = await getBatchProgress(planIds)
+    for (const [id, summary] of Object.entries(res.data || {})) {
+      map[Number(id)] = Math.min(100, Math.round((summary as any).progress * 100))
     }
-  }))
+  } catch {
+    // Fallback: set all to 0
+    for (const id of planIds) map[id] = 0
+  }
   planProgressMap.value = map
 }
 

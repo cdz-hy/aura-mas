@@ -100,9 +100,11 @@ public class StatsService {
 
         long totalResources = 0;
         if (!planIds.isEmpty()) {
+            // Only count generated resources (status >= 2), consistent with progress calculation
             totalResources = resourceMapper.selectCount(
                     new LambdaQueryWrapper<LearningResource>()
-                            .in(LearningResource::getPlanId, planIds));
+                            .in(LearningResource::getPlanId, planIds)
+                            .ge(LearningResource::getStatus, 2));
         }
         stats.put("totalResources", totalResources);
 

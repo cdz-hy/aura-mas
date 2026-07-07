@@ -62,4 +62,32 @@ public class DurationController {
         Long userId = AuthUtils.getCurrentUserId(authentication);
         return Result.success(progressService.getByPlan(userId, planId));
     }
+
+    @Operation(summary = "一键标记计划下所有已生成资源为完成")
+    @PostMapping("/complete-all")
+    public Result<Void> markAllComplete(
+            Authentication authentication,
+            @RequestParam Long planId) {
+        Long userId = AuthUtils.getCurrentUserId(authentication);
+        progressService.markAllComplete(userId, planId);
+        return Result.success(null);
+    }
+
+    @Operation(summary = "批量获取多个计划的进度摘要")
+    @GetMapping("/batch")
+    public Result<?> getBatchProgress(
+            Authentication authentication,
+            @RequestParam List<Long> planIds) {
+        Long userId = AuthUtils.getCurrentUserId(authentication);
+        return Result.success(progressService.getProgressSummary(userId, planIds));
+    }
+
+    @Operation(summary = "查询单个计划进度")
+    @GetMapping("/plan/summary")
+    public Result<?> getPlanProgress(
+            Authentication authentication,
+            @RequestParam Long planId) {
+        Long userId = AuthUtils.getCurrentUserId(authentication);
+        return Result.success(progressService.getPlanProgress(userId, planId));
+    }
 }

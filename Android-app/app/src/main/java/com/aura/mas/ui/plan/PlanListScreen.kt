@@ -90,23 +90,18 @@ class PlanListViewModel @Inject constructor(
 
     private fun loadProgressForPlans(plans: List<LearningPlan>) {
         viewModelScope.launch {
-            val updatedPlans = plans.toMutableList()
-            plans.forEachIndexed { index, plan ->
-                try {
-                    val resResult = api.getResourcesByPlan(plan.id)
-                    val progResult = planRepo.getProgress(plan.id)
-                    val resources = resResult.data ?: emptyList()
-                    val progress = progResult.data ?: emptyList()
-                    val validIds = resources.filter { it.status >= LearningResource.STATUS_READY }.map { it.id }.toSet()
-                    val completed = progress.count { it.completed && it.resourceId in validIds }
-                    val total = validIds.size
-                    val pct = if (total > 0) (completed * 100 / total).coerceIn(0, 100) else 0
-                    updatedPlans[index] = plan.copy(progress = pct.toDouble())
-                    // Update UI incrementally
-                    _uiState.value = _uiState.value.copy(plans = updatedPlans.toList())
-                } catch (_: Exception) {}
+            try {
+                val planIds = plans.map { it.id }
+                val progressResult = api.getBatchProgress(planIds)
+                val progressMap = progressResult.data ?: emptyMap()
+                val updatedPlans = plans.map { plan ->
+                    val summary = progressMap[plan.id.toString()]
+                    plan.copy(progress = summary?.progress?.toDouble() ?: 0.0)
+                }
+                _uiState.value = _uiState.value.copy(plans = updatedPlans, isRefreshing = false)
+            } catch (_: Exception) {
+                _uiState.value = _uiState.value.copy(isRefreshing = false)
             }
-            _uiState.value = _uiState.value.copy(isRefreshing = false)
         }
     }
 
