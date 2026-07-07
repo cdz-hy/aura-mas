@@ -130,4 +130,42 @@ class ChatRepository @Inject constructor(
     }
 
     suspend fun issueTicket() = api.issueTicket()
+
+    /**
+     * Query stream state for a session (used for refresh recovery).
+     * Returns pending confirmation info if the graph is paused at a checkpoint.
+     */
+    suspend fun getStreamState(sessionId: String): StreamStateResult {
+        return try {
+            val ticket = getTicket()
+            val body = pythonApi.getStreamState(sessionId, ticket).string()
+            val json = com.google.gson.Gson().fromJson(body, com.google.gson.JsonObject::class.java)
+            val pending = json.getAsJsonObject("pending_confirmation")
+            if (pending != null && !pending.isJsonNull) {
+                StreamStateResult(
+                    pendingConfirmation = PendingConfirmation(
+                        type = pending.get("type")?.asString ?: "task_breakdown",
+                        message = pending.get("message")?.asString ?: "",
+                        taskBreakdown = pending.get("task_breakdown")?.let {
+                            try { com.google.gson.Gson().fromJson(it, TaskBreakdown::class.java) } catch (_: Exception) { null }
+                        }
+                    )
+                )
+            } else {
+                StreamStateResult()
+            }
+        } catch (_: Exception) {
+            StreamStateResult()
+        }
+    }
 }
+
+data class StreamStateResult(
+    val pendingConfirmation: PendingConfirmation? = null
+)
+
+data class PendingConfirmation(
+    val type: String = "task_breakdown",
+    val message: String = "",
+    val taskBreakdown: TaskBreakdown? = null
+)

@@ -34,7 +34,7 @@ export interface SSEHandlers {
   onResourceTypeGenerated?: (resource: GeneratedResourceRef) => void
   onStreamingResource?: (resource: { id: number; type: string; title: string }, content: string) => void
   onRecommendations?: (data: any[]) => void
-  onNeedConfirmation?: (message: string, taskBreakdown: any) => void
+  onNeedConfirmation?: (message: string, taskBreakdown: any, confirmationType?: string) => void
   onDone?: () => void
   onError?: (error: string) => void
 }
@@ -120,7 +120,7 @@ export function createSSEConnection(
           source.close()
           break
         case 'need_confirmation':
-          handlers.onNeedConfirmation?.(data.message || '请确认', data.task_breakdown)
+          handlers.onNeedConfirmation?.(data.message || '请确认', data.task_breakdown, data.confirmation_type)
           break
         case 'resource_generated':
           handlers.onResourceGenerated?.(data.resources || [])

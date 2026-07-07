@@ -10,7 +10,7 @@ from app.agents.schemas import (
     AgentState, NODE_CONTROLLER, NODE_TASK_DECOMPOSER, NODE_SIMPLE_ANSWER,
     NODE_RAG_RETRIEVER, NODE_QUIZ_GENERATOR, NODE_QUIZ_GRADER,
     NODE_RESOURCE_GENERATOR, NODE_RESOURCE_TYPE_GENERATOR, NODE_ANIMATION_SKILL_GENERATOR,
-    NODE_HUMAN_CONFIRM,
+    NODE_HUMAN_CONFIRM, NODE_KB_CONFIRM, NODE_WAIT_USER_REPLY,
     INTENT_GENERATE_RESOURCE, INTENT_SIMPLE_QA, INTENT_GENERATE_QUIZ,
     INTENT_GRADE_QUIZ, INTENT_AMBIGUOUS, INTENT_FOLLOW_UP,
     INTENT_CANCEL,
@@ -362,7 +362,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
     if asked_profile_question:
         context_info += f"\n[系统状态] 上一轮简答智能体询问了用户关于「{asked_profile_question}」的画像问题，用户当前输入很可能是回答，应归类为 simple_qa 而非生成资源。"
     elif pending_question:
-        context_info += "\n[系统状态] 上一轮简答智能体主动向用户提出了澄清、追问或跟进问题，用户当前输入很可能是对该问题的回答。如果用户提供了具体的知识点、模块名等补充信息以回应上一轮的澄清追问，你应该根据其补充的主题识别为对应的生成意图（如 generate_quiz / generate_resource / generate_type_resource 等），否则应当维持在简答对话（归类为 simple_qa）。"
+        context_info += f"\n[系统状态] 上一轮系统向用户提出了追问：「{pending_question[:100]}」。用户当前输入很可能是对该问题的回答。如果用户提供了具体的学习主题、知识点或补充信息，你应该根据其内容识别为对应的生成意图（如 generate_resource / generate_quiz 等），否则归类为 simple_qa。"
 
     if context_info:
         logger.info(f"  [主控智能体] 系统状态: {context_info.strip()}")
@@ -377,12 +377,14 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         "get_plan_modules": "获取计划模块列表",
         "get_user_profile_fields": "获取用户画像",
         "get_user_quiz_stats": "获取答题统计",
+        "get_knowledge_base_docs": "查询知识库文档",
     }
 
     intent = INTENT_AMBIGUOUS
     reasoning = ""
     managed_learning_goal = None
     resource_type = None
+    kb_relevant = True  # 默认知识库有相关资料
     new_events = []
 
     # 语言指令触发时，主控通过工具查询到的模块详情（用于更新状态）
@@ -523,6 +525,19 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
                             react_history.append(f"工具 get_user_quiz_stats 失败: {e}")
                             _emit_thinking(f"{tool_cn_name}失败: {e}")
 
+                    elif act_name == "get_knowledge_base_docs":
+                        try:
+                            docs = java_client.get_indexed_kb_documents()
+                            doc_summary = []
+                            for d in docs:
+                                doc_summary.append(f"- {d.get('docName', '未知')} (chunks={d.get('chunkCount', 0)})")
+                            docs_text = "\n".join(doc_summary) if doc_summary else "（暂无已入库文档）"
+                            react_history.append(f"工具 get_knowledge_base_docs 结果: 共{len(docs)}个已入库文档:\n{docs_text}")
+                            _emit_thinking(f"{tool_cn_name}完成: 知识库中共{len(docs)}个已入库文档")
+                        except Exception as e:
+                            react_history.append(f"工具 get_knowledge_base_docs 失败: {e}")
+                            _emit_thinking(f"{tool_cn_name}失败: {e}")
+
                 # stream_events 仍保留（已被 resource_chat.py 过滤掉 thinking，不会重复推送）
                 new_events.append({
                     "event_type": "thinking",
@@ -539,7 +554,8 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
                 managed_learning_goal = str(react_result.get("learning_goal", "")).strip()
                 reasoning = react_result.get("reasoning", "")
                 resource_type = react_result.get("resource_type")
-                logger.info(f"  [主控智能体] ReAct 结束，最终意图: {intent}")
+                kb_relevant = react_result.get("kb_relevant", True)
+                logger.info(f"  [主控智能体] ReAct 结束，最终意图: {intent}, KB相关: {kb_relevant}")
                 # 推送最终决策
                 _emit_thinking(f"决策完成: 意图={intent}，目标={managed_learning_goal or '未明确'}")
                 break
@@ -557,24 +573,59 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         intent = "clarify"
         reasoning = "用户请求生成动画、导图、播客、题目等特定类型资源，但在当前的对话上下文中，由于没有明确挂载之前的资源文本，系统处于'空载'状态。请委婉地询问用户：具体想要基于哪个知识点或刚刚学过的哪个主题来生成？并建议用户先选择一个具体的模块资源。"
 
+    # 【知识库相关性检查】：如果主控判断知识库无相关资料，路由到知识库确认节点
+    # 已确认使用网络资源时跳过，避免循环触发
+    if intent == INTENT_GENERATE_RESOURCE and not kb_relevant and not state.get("web_search_fallback"):
+        logger.info(f"  [主控智能体] 知识库无相关资料，路由到知识库确认节点")
+        # 用 LLM 生成的 reasoning 作为面向用户的个性化提示
+        kb_message = reasoning or "知识库中暂无与该主题直接相关的资料，生成内容将主要参考网络资源。是否继续？"
+        # 流式推送确认消息（逐 token 打出，给用户阅读感）
+        _emit_thinking_start("主控智能体", "提示: ")
+        _emit_thinking_chunk(kb_message)
+        # 发送确认事件（触发前端按钮）
+        new_events.append({
+            "event_type": "confirm_needed",
+            "data": {
+                "message": kb_message,
+                "confirmation_type": "kb_check",
+            },
+        })
+        return {
+            "intent": intent,
+            "next_node": NODE_KB_CONFIRM,
+            "needs_human_confirm": True,
+            "learning_goal": managed_learning_goal or state.get("learning_goal", ""),
+            "kb_check_message": kb_message,
+            "reasoning": reasoning,
+            "current_step": "主控智能体: 知识库无相关资料，等待用户确认是否使用网络资源",
+            "iteration_count": iteration + 1,
+            "stream_events": new_events,
+        }
+
     next_node = _route_by_intent(intent, state)
-    
+
     if intent == "clarify":
-        # 委托给简答智能体进行真流式生成和追问
-        logger.info(f"  [主控智能体] 决定追问，委托给简答智能体处理")
+        # 直接追问并通过 NODE_WAIT_USER_REPLY checkpoint 暂停，等待用户回答后恢复图
+        question = reasoning or "请补充说明你具体想学习哪方面内容？"
+        logger.info(f"  [主控智能体] 决定追问并进入 checkpoint 暂停: {question[:80]}")
+        try:
+            _emit_thinking_start("主控智能体", "追问: ")
+            _emit_thinking_chunk(question)
+            if _sse_cb:
+                _sse_cb(f'data: {json.dumps({"type": "chunk", "content": question}, ensure_ascii=False)}\n\n')
+        except Exception:
+            pass
         return {
             "intent": "clarify",
-            "next_node": NODE_SIMPLE_ANSWER,
-            "anomaly_clarify": True,
-            "anomaly_reason": reasoning,
-            "current_step": "主控智能体决定追问澄清",
+            "next_node": NODE_WAIT_USER_REPLY,
+            "_pending_question": question,
+            "needs_human_confirm": True,
+            "current_step": "主控智能体决定追问澄清，等待用户回复",
             "iteration_count": iteration + 1,
-            "stream_events": [{
-                "event_type": "thinking",
-                "agent": "controller",
-                "data": {"message": f"需要澄清需求: {reasoning[:20]}..."},
-                "step_description": "准备向用户追问"
-            }]
+            "stream_events": [
+                {"event_type": "content", "agent": "controller", "data": {"text": question}},
+                {"event_type": "thinking", "agent": "controller", "data": {"message": f"需要澄清需求: {question[:20]}..."}, "step_description": "准备向用户追问"},
+            ],
         }
         
     logger.info(f"  [主控智能体] 路由决策: {intent} -> {next_node}")

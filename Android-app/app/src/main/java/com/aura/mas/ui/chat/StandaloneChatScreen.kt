@@ -1,6 +1,7 @@
 package com.aura.mas.ui.chat
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -54,6 +55,9 @@ data class StandaloneChatUiState(
     val thinkingSteps: List<ThinkingStep> = emptyList(),
     val searchSources: List<SearchSource> = emptyList(),
     val isSearching: Boolean = false,
+    val awaitingConfirmation: Boolean = false,
+    val confirmationType: String = "task_breakdown", // "task_breakdown" | "kb_check"
+    val pendingTaskBreakdown: TaskBreakdown? = null,
     val error: String? = null
 )
 
@@ -122,7 +126,40 @@ class StandaloneChatViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(messages = result.data.map { it.normalize() })
                 }
             } catch (_: Exception) {}
+            // Check for pending confirmation (refresh recovery)
+            recoverPendingConfirmation(sessionId)
         }
+    }
+
+    private suspend fun recoverPendingConfirmation(sessionId: String) {
+        try {
+            val streamState = chatRepo.getStreamState(sessionId)
+            val pc = streamState.pendingConfirmation ?: return
+            // Check if DB messages already contain a confirm card (avoid duplicate)
+            val hasConfirm = _uiState.value.messages.any { it.type == "confirm" }
+            if (!hasConfirm) {
+                val confirmMsg = ChatMessage(
+                    role = ChatMessage.ROLE_ASSISTANT,
+                    content = pc.message.ifBlank { "请确认" },
+                    type = "confirm",
+                    confirmationType = pc.type,
+                    breakdown = if (pc.type != "kb_check") pc.taskBreakdown else null
+                )
+                _uiState.value = _uiState.value.copy(
+                    messages = _uiState.value.messages + confirmMsg,
+                    awaitingConfirmation = true,
+                    confirmationType = pc.type,
+                    pendingTaskBreakdown = if (pc.type != "kb_check") pc.taskBreakdown else null
+                )
+            } else {
+                // Already has confirm card from DB, just restore state
+                _uiState.value = _uiState.value.copy(
+                    awaitingConfirmation = true,
+                    confirmationType = pc.type,
+                    pendingTaskBreakdown = if (pc.type != "kb_check") pc.taskBreakdown else null
+                )
+            }
+        } catch (_: Exception) {}
     }
 
     fun deleteSession(sessionId: String) {
@@ -137,8 +174,13 @@ class StandaloneChatViewModel @Inject constructor(
     }
 
     fun confirmBreakdown() {
-        val lastMsg = _uiState.value.messages.lastOrNull()
-        if (lastMsg != null && lastMsg.type == "confirm" && lastMsg.breakdown != null) {
+        val lastMsg = _uiState.value.messages.lastOrNull() ?: return
+        if (lastMsg.type != "confirm") return
+        val isKbCheck = _uiState.value.confirmationType == "kb_check" || lastMsg.confirmationType == "kb_check"
+        _uiState.value = _uiState.value.copy(awaitingConfirmation = false, confirmationType = "task_breakdown")
+        if (isKbCheck) {
+            sendMessage("继续生成")
+        } else if (lastMsg.breakdown != null) {
             val breakdownJson = com.google.gson.Gson().toJson(lastMsg.breakdown)
             sendMessage("确认，开始生成学习资源", mapOf("task_breakdown" to breakdownJson))
         }
@@ -146,8 +188,13 @@ class StandaloneChatViewModel @Inject constructor(
 
     fun modifyBreakdown(feedback: String) {
         if (feedback.isBlank()) return
-        val lastMsg = _uiState.value.messages.lastOrNull()
-        if (lastMsg != null && lastMsg.type == "confirm" && lastMsg.breakdown != null) {
+        val lastMsg = _uiState.value.messages.lastOrNull() ?: return
+        if (lastMsg.type != "confirm") return
+        val isKbCheck = _uiState.value.confirmationType == "kb_check" || lastMsg.confirmationType == "kb_check"
+        _uiState.value = _uiState.value.copy(awaitingConfirmation = false, confirmationType = "task_breakdown")
+        if (isKbCheck) {
+            sendMessage(feedback)
+        } else if (lastMsg.breakdown != null) {
             val breakdownJson = com.google.gson.Gson().toJson(lastMsg.breakdown)
             sendMessage(feedback, mapOf("task_breakdown" to breakdownJson))
         }
@@ -229,6 +276,30 @@ class StandaloneChatViewModel @Inject constructor(
             }
             "search_done" -> {
                 _uiState.value = _uiState.value.copy(isSearching = false)
+            }
+            "need_confirmation" -> {
+                val message = data?.get("message")?.asString ?: "请确认"
+                val confirmType = data?.get("confirmation_type")?.asString ?: "task_breakdown"
+                val taskBreakdown = data?.get("task_breakdown")?.let {
+                    try { com.google.gson.Gson().fromJson(it, TaskBreakdown::class.java) } catch (_: Exception) { null }
+                }
+                flushStreamBuffer()
+                val confirmMsg = ChatMessage(
+                    role = ChatMessage.ROLE_ASSISTANT,
+                    content = message,
+                    type = "confirm",
+                    confirmationType = confirmType,
+                    breakdown = if (confirmType != "kb_check") taskBreakdown else null
+                )
+                _uiState.value = _uiState.value.copy(
+                    messages = _uiState.value.messages + confirmMsg,
+                    awaitingConfirmation = true,
+                    confirmationType = confirmType,
+                    pendingTaskBreakdown = if (confirmType != "kb_check") taskBreakdown else null,
+                    isStreaming = false,
+                    streamContent = "",
+                    thinkingSteps = emptyList()
+                )
             }
             "done" -> {
                 flushStreamBuffer()
@@ -376,26 +447,43 @@ fun StandaloneChatScreen(
 
                     // Confirm action buttons
                     val lastMsg = messages.lastOrNull()
-                    if (lastMsg != null && lastMsg.type == "confirm" && !isStreaming) {
+                    val awaitingConfirm = uiState.awaitingConfirmation || (lastMsg != null && lastMsg.type == "confirm" && !isStreaming)
+                    if (awaitingConfirm && lastMsg != null && lastMsg.type == "confirm" && !isStreaming) {
                         item {
-                            Row(
+                            val isKbCheck = uiState.confirmationType == "kb_check" || lastMsg.confirmationType == "kb_check"
+                            Column(
                                 modifier = Modifier.fillMaxWidth().padding(start = 40.dp, top = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Button(
-                                    onClick = { viewModel.confirmBreakdown() },
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Text("确认并生成", style = MaterialTheme.typography.labelMedium)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = { viewModel.confirmBreakdown() },
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        Text(if (isKbCheck) "继续生成" else "确认并生成", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            input = if (isKbCheck) "取消，暂不生成" else "补充说明："
+                                            if (isKbCheck) viewModel.modifyBreakdown("取消，暂不生成")
+                                        },
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        Text(if (isKbCheck) "取消" else "反馈修改", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    if (isKbCheck) {
+                                        OutlinedButton(
+                                            onClick = { input = "" },
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Text("说点别的...", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    }
                                 }
-                                OutlinedButton(
-                                    onClick = { 
-                                        input = "补充说明："
-                                    },
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Text("反馈修改", style = MaterialTheme.typography.labelMedium)
+                                // Natural language input for KB check "说点别的..."
+                                if (isKbCheck && input.isEmpty()) {
+                                    // Show nothing extra; user can type in the main input bar
                                 }
                             }
                         }
@@ -566,7 +654,41 @@ private fun MessageBubble(
                     Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                         when (message.type) {
                             "confirm" -> {
-                                Text(displayContent, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                val isKbCheck = message.confirmationType == "kb_check"
+                                if (isKbCheck) {
+                                    // KB check confirmation card - amber warning style
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color(0xFFFFF8E1), // amber-50
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFE082)) // amber-200
+                                    ) {
+                                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+                                            Icon(
+                                                Icons.Default.Warning,
+                                                contentDescription = null,
+                                                tint = Color(0xFFF59E0B), // amber-500
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    "知识库内容提示",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = Color(0xFF92400E) // amber-800
+                                                )
+                                                Spacer(Modifier.height(4.dp))
+                                                Text(
+                                                    displayContent,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = Color(0xFFB45309) // amber-700
+                                                )
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Text(displayContent, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                }
                                 message.breakdown?.modules?.let { modules ->
                                     Spacer(Modifier.height(8.dp))
                                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

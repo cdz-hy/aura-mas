@@ -37,6 +37,11 @@ fun DashboardScreen(
     val uiState by viewModel.uiState.collectAsState()
     val user by viewModel.currentUser.collectAsState()
 
+    // Refresh on every recomposition where data is stale (handles 401 recovery)
+    LaunchedEffect(Unit) {
+        viewModel.loadDashboard()
+    }
+
     if (uiState.isLoading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()

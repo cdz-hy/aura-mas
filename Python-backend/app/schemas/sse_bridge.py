@@ -84,11 +84,14 @@ def graph_event_to_sse(evt: Dict[str, Any]) -> str:
 
     elif event_type == "confirm_needed":
         # confirm_needed -> need_confirmation
-        return _sse({
+        result = {
             "type": "need_confirmation",
             "message": data.get("message", "请确认或补充说明"),
             "task_breakdown": data.get("task_breakdown"),
-        })
+        }
+        if data.get("confirmation_type"):
+            result["confirmation_type"] = data["confirmation_type"]
+        return _sse(result)
 
     elif event_type == "profile_update":
         # profile_update 直接透传

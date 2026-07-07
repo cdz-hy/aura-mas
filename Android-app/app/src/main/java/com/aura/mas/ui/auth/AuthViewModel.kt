@@ -34,13 +34,13 @@ class AuthViewModel @Inject constructor(
         }
     }
 
-    fun login(loginName: String, password: String) {
+    fun login(loginName: String, password: String, remember: Boolean = false) {
         viewModelScope.launch {
             _uiState.value = AuthUiState(isLoading = true)
             try {
                 val response = api.login(LoginRequest(loginName, password))
                 if (response.isSuccess && response.data != null) {
-                    authStore.saveSession(response.data.token, response.data.user)
+                    authStore.saveSession(response.data.token, response.data.user, loginName, password, remember)
                     _uiState.value = AuthUiState(success = true)
                 } else {
                     _uiState.value = AuthUiState(error = response.message.ifEmpty { "登录失败" })

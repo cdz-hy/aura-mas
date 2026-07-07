@@ -74,7 +74,7 @@ class DashboardViewModel @Inject constructor(
 
             // Step 2: Fetch fresh data in background
             try {
-                val statsResult = kotlinx.coroutines.withTimeout(15_000L) {
+                val statsResult = kotlinx.coroutines.withTimeout(8_000L) {
                     statsRepo.getDashboardStats()
                 }
                 val stats = statsResult.data
