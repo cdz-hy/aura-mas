@@ -21,7 +21,8 @@ data class RegisterRequest(
     @SerializedName("loginName") val loginName: String,
     val password: String,
     val nickname: String,
-    val email: String = ""
+    val email: String,
+    val emailCode: String
 )
 
 data class LoginResponse(

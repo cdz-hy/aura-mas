@@ -53,11 +53,26 @@ class AuthViewModel @Inject constructor(
         }
     }
 
-    fun register(loginName: String, password: String, nickname: String, email: String) {
+    fun sendVerificationCode(email: String, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = api.sendVerificationCode(mapOf("email" to email))
+                if (response.isSuccess) {
+                    onResult(true, null)
+                } else {
+                    onResult(false, response.message.ifEmpty { "发送失败" })
+                }
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "网络错误")
+            }
+        }
+    }
+
+    fun register(loginName: String, password: String, nickname: String, email: String, emailCode: String) {
         viewModelScope.launch {
             _uiState.value = AuthUiState(isLoading = true)
             try {
-                val response = api.register(RegisterRequest(loginName, password, nickname, email))
+                val response = api.register(RegisterRequest(loginName, password, nickname, email, emailCode))
                 if (response.isSuccess) {
                     _uiState.value = AuthUiState(success = true)
                 } else {

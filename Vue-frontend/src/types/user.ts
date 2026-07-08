@@ -22,6 +22,7 @@ export interface RegisterRequest {
   password: string
   nickname: string
   email: string
+  emailCode: string
 }
 
 export interface LoginResponse {

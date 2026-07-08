@@ -9,6 +9,10 @@ export function register(data: RegisterRequest) {
   return request.post<any, { data: LoginResponse }>('/auth/register', data)
 }
 
+export function sendVerificationCode(email: string) {
+  return request.post<any, { data: null }>('/auth/send-code', { email })
+}
+
 export function refreshToken() {
   return request.post<any, { data: { token: string } }>('/auth/refresh')
 }

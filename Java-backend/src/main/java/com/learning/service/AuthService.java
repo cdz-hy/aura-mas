@@ -26,13 +26,23 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final MenuService menuService;
+    private final LoginRateLimitService loginRateLimitService;
 
     @Transactional
     public LoginResponse register(RegisterRequest request) {
+        // 检查登录名唯一
         User existing = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getLoginName, request.getLoginName()));
         if (existing != null) {
             throw new BusinessException(ErrorCode.USER_ALREADY_EXISTS);
+        }
+        // 检查邮箱唯一
+        if (request.getEmail() != null && !request.getEmail().isBlank()) {
+            Long emailCount = userMapper.selectCount(
+                    new LambdaQueryWrapper<User>().eq(User::getEmail, request.getEmail()));
+            if (emailCount > 0) {
+                throw new BusinessException(400, "该邮箱已被注册");
+            }
         }
 
         User user = new User();
@@ -55,11 +65,20 @@ public class AuthService {
                 .build();
     }
 
-    public LoginResponse login(LoginRequest request) {
+    public LoginResponse login(LoginRequest request, String clientIp) {
+        // 限流检查：账号锁定 + IP 限流
+        String limitError = loginRateLimitService.checkLimit(request.getLoginName(), clientIp);
+        if (limitError != null) {
+            throw new BusinessException(429, limitError);
+        }
+        // 记录 IP 登录尝试
+        loginRateLimitService.recordIpAttempt(clientIp);
+
         User user = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getLoginName, request.getLoginName()));
 
         if (user == null) {
+            loginRateLimitService.recordFailure(request.getLoginName(), clientIp);
             throw new BusinessException(ErrorCode.USER_NOT_FOUND);
         }
 
@@ -68,8 +87,12 @@ public class AuthService {
         }
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+            loginRateLimitService.recordFailure(request.getLoginName(), clientIp);
             throw new BusinessException(ErrorCode.PASSWORD_ERROR);
         }
+
+        // 登录成功，清除失败计数
+        loginRateLimitService.clearFailures(request.getLoginName());
 
         user.setLastLoginTime(LocalDateTime.now());
         userMapper.updateById(user);

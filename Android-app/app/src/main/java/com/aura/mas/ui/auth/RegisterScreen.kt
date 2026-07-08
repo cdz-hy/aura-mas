@@ -35,10 +35,22 @@ fun RegisterScreen(
     var loginName by remember { mutableStateOf("") }
     var nickname by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
+    var emailCode by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+    var codeCooldown by remember { mutableIntStateOf(0) }
+    var sendingCode by remember { mutableStateOf(false) }
+    var codeSent by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
+
+    // Cooldown timer
+    LaunchedEffect(codeCooldown) {
+        if (codeCooldown > 0) {
+            kotlinx.coroutines.delay(1000)
+            codeCooldown--
+        }
+    }
 
     LaunchedEffect(uiState.success) {
         if (uiState.success) onRegisterSuccess()
@@ -76,6 +88,7 @@ fun RegisterScreen(
                     Text("创建账号", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(20.dp))
 
+                    // Login name
                     OutlinedTextField(
                         value = loginName, onValueChange = { loginName = it },
                         label = { Text("用户名") }, leadingIcon = { Icon(Icons.Default.Person, null) },
@@ -85,6 +98,8 @@ fun RegisterScreen(
                         modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)
                     )
                     Spacer(Modifier.height(12.dp))
+
+                    // Nickname
                     OutlinedTextField(
                         value = nickname, onValueChange = { nickname = it },
                         label = { Text("昵称") }, leadingIcon = { Icon(Icons.Default.Badge, null) },
@@ -94,15 +109,63 @@ fun RegisterScreen(
                         modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)
                     )
                     Spacer(Modifier.height(12.dp))
+
+                    // Email (required)
                     OutlinedTextField(
                         value = email, onValueChange = { email = it },
-                        label = { Text("邮箱（选填）") }, leadingIcon = { Icon(Icons.Default.Email, null) },
+                        label = { Text("邮箱 *") }, leadingIcon = { Icon(Icons.Default.Email, null) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
                         modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)
                     )
                     Spacer(Modifier.height(12.dp))
+
+                    // Email verification code
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        OutlinedTextField(
+                            value = emailCode, onValueChange = { emailCode = it },
+                            label = { Text("验证码 *") },
+                            leadingIcon = { Icon(Icons.Default.Security, null) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                            modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)
+                        )
+                        Button(
+                            onClick = {
+                                sendingCode = true
+                                viewModel.sendVerificationCode(email) { success, error ->
+                                    sendingCode = false
+                                    if (success) {
+                                        codeSent = true
+                                        codeCooldown = 60
+                                    } else {
+                                        // error is handled via uiState.error or we can show a toast
+                                    }
+                                }
+                            },
+                            enabled = email.isNotBlank() && codeCooldown == 0 && !sendingCode,
+                            modifier = Modifier.height(56.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            if (sendingCode) {
+                                CircularProgressIndicator(Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                            } else {
+                                Text(
+                                    if (codeCooldown > 0) "${codeCooldown}s" else "获取",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+
+                    // Password
                     OutlinedTextField(
                         value = password, onValueChange = { password = it },
                         label = { Text("密码") }, leadingIcon = { Icon(Icons.Default.Lock, null) },
@@ -118,6 +181,8 @@ fun RegisterScreen(
                         modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)
                     )
                     Spacer(Modifier.height(12.dp))
+
+                    // Confirm password
                     OutlinedTextField(
                         value = confirmPassword, onValueChange = { confirmPassword = it },
                         label = { Text("确认密码") }, leadingIcon = { Icon(Icons.Default.Lock, null) },
@@ -126,8 +191,9 @@ fun RegisterScreen(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = {
                             focusManager.clearFocus()
-                            if (loginName.isNotBlank() && nickname.isNotBlank() && password.isNotBlank() && password == confirmPassword) {
-                                viewModel.register(loginName, password, nickname, email)
+                            if (loginName.isNotBlank() && nickname.isNotBlank() && email.isNotBlank() &&
+                                emailCode.isNotBlank() && password.isNotBlank() && password == confirmPassword) {
+                                viewModel.register(loginName, password, nickname, email, emailCode)
                             }
                         }),
                         isError = confirmPassword.isNotEmpty() && password != confirmPassword,
@@ -139,10 +205,12 @@ fun RegisterScreen(
 
                     Spacer(Modifier.height(24.dp))
 
+                    // Register button
                     Button(
-                        onClick = { viewModel.register(loginName, password, nickname, email) },
+                        onClick = { viewModel.register(loginName, password, nickname, email, emailCode) },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         enabled = !uiState.isLoading && loginName.isNotBlank() && nickname.isNotBlank() &&
+                                email.isNotBlank() && emailCode.isNotBlank() &&
                                 password.isNotBlank() && password == confirmPassword,
                         shape = RoundedCornerShape(12.dp)
                     ) {

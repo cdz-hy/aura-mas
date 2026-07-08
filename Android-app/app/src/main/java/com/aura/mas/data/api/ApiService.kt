@@ -12,6 +12,9 @@ interface ApiService {
     @POST("/api/auth/register")
     suspend fun register(@Body request: RegisterRequest): ApiResponse<User>
 
+    @POST("/api/auth/send-code")
+    suspend fun sendVerificationCode(@Body request: Map<String, String>): ApiResponse<Unit>
+
     @POST("/api/ticket/issue")
     suspend fun issueTicket(): ApiResponse<Map<String, String>>
 

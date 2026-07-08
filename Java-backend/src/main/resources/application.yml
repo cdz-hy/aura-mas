@@ -22,6 +22,11 @@ spring:
     multipart:
       max-file-size: 50MB
       max-request-size: 100MB
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 3000
   rabbitmq:
     host: localhost
     port: 5672
@@ -67,6 +72,19 @@ qiniu:
   secret-key: ${QINIU_SECRET_KEY:your-qiniu-secret-key}
   bucket-name: ${QINIU_BUCKET_NAME:your-bucket-name}
   domain: ${QINIU_DOMAIN:http://your-qiniu-domain}
+
+mail:
+  host: ${MAIL_HOST:smtp.qq.com}
+  port: ${MAIL_PORT:587}
+  username: ${MAIL_USERNAME:your-email@qq.com}
+  password: ${MAIL_PASSWORD:your-smtp-password}
+  from: ${MAIL_FROM:your-email@qq.com}
+
+verification:
+  code-length: 6
+  expire-seconds: 300
+  cooldown-seconds: 60
+  max-attempts: 5
 
 logging:
   level:
