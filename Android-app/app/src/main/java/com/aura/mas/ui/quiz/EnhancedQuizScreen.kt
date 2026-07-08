@@ -17,6 +17,23 @@ import androidx.compose.ui.unit.dp
 import com.aura.mas.data.model.QuizQuestion
 import com.aura.mas.ui.theme.*
 
+/**
+ * Format correct answer for display. Handles arrays, indices, letters, and plain text.
+ */
+private fun formatCorrectAnswer(question: QuizQuestion): String {
+    val raw = question.correctAnswer ?: return ""
+    val indices = question.getCorrectIndices()
+    if (indices.isEmpty()) {
+        val str = raw.toString()
+        if (str == "null" || str.isBlank()) return ""
+        return str
+    }
+    val options = question.getOptionsOrDefault()
+    return indices.sorted().joinToString("、") { idx ->
+        if (idx in options.indices) options[idx] else idx.toString()
+    }
+}
+
 @Composable
 fun QuizQuestionView(
     question: QuizQuestion,
@@ -118,19 +135,55 @@ fun QuizQuestionView(
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold
                         )
+                        if (question.perQuestionScore != null) {
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                "${(question.perQuestionScore!! * 100).toInt()}分",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                     if (question.feedback.isNotBlank()) {
                         Spacer(Modifier.height(8.dp))
                         Text(question.feedback, style = MaterialTheme.typography.bodySmall)
                     }
-                    if (question.isCorrect != true && question.correctAnswer.isNotBlank()) {
+                    val correctAnsStr = formatCorrectAnswer(question)
+                    if (question.isCorrect != true && correctAnsStr.isNotBlank()) {
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "正确答案: ${question.correctAnswer}",
+                            "正确答案: $correctAnsStr",
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.secondary
                         )
+                    }
+                    // Grading details
+                    if (!question.keyPointsHit.isNullOrEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("掌握的知识点:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                        question.keyPointsHit!!.forEach { point ->
+                            Text("  · $point", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                        }
+                    }
+                    if (!question.keyPointsMissed.isNullOrEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text("未掌握的知识点:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                        question.keyPointsMissed!!.forEach { point ->
+                            Text("  · $point", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    if (!question.improvementSuggestions.isNullOrEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text("改进建议:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                        question.improvementSuggestions!!.forEach { suggestion ->
+                            Text("  · $suggestion", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (question.explanation.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("解析:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                        Text(question.explanation, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -187,20 +240,17 @@ private fun SingleChoiceOptions(
     onAnswer: (Any) -> Unit,
     showResult: Boolean
 ) {
-    val options = question.options ?: listOf("A", "B", "C", "D")
+    val options = question.getOptionsOrDefault().ifEmpty { listOf("A", "B", "C", "D") }
+    val correctIndices = question.getCorrectIndices()
     val selectedIndex = when (selectedAnswer) {
         is Number -> selectedAnswer.toInt()
-        is String -> options.indexOf(selectedAnswer)
+        is String -> selectedAnswer.toIntOrNull() ?: options.indexOf(selectedAnswer)
         else -> -1
     }
 
     options.forEachIndexed { index, option ->
         val isSelected = selectedIndex == index
-        val isCorrect = showResult && (
-            question.correctAnswer == option || 
-            question.correctAnswer == index.toString() || 
-            (question.correctAnswer.toIntOrNull() == index)
-        )
+        val isCorrect = showResult && index in correctIndices
         val isWrong = showResult && isSelected && !isCorrect
 
         Card(
@@ -250,7 +300,8 @@ private fun MultipleChoiceOptions(
     onAnswer: (Any) -> Unit,
     showResult: Boolean
 ) {
-    val options = question.options ?: listOf("A", "B", "C", "D")
+    val options = question.getOptionsOrDefault().ifEmpty { listOf("A", "B", "C", "D") }
+    val correctIndices = question.getCorrectIndices()
     val selectedIndices = remember(selectedAnswer) {
         when (selectedAnswer) {
             is List<*> -> selectedAnswer.mapNotNull { (it as? Number)?.toInt() }.toSet()
@@ -265,6 +316,8 @@ private fun MultipleChoiceOptions(
 
     options.forEachIndexed { index, option ->
         val isSelected = selectedIndices.contains(index)
+        val isCorrect = showResult && index in correctIndices
+        val isWrong = showResult && isSelected && !isCorrect
         Card(
             onClick = {
                 if (!showResult) {
@@ -275,8 +328,12 @@ private fun MultipleChoiceOptions(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(
-                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surface
+                containerColor = when {
+                    isCorrect -> MaterialTheme.colorScheme.secondaryContainer
+                    isWrong -> MaterialTheme.colorScheme.errorContainer
+                    isSelected -> MaterialTheme.colorScheme.primaryContainer
+                    else -> MaterialTheme.colorScheme.surface
+                }
             )
         ) {
             Row(
@@ -295,6 +352,14 @@ private fun MultipleChoiceOptions(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(option, style = MaterialTheme.typography.bodyMedium)
+                if (isCorrect) {
+                    Spacer(Modifier.weight(1f))
+                    Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(20.dp))
+                }
+                if (isWrong) {
+                    Spacer(Modifier.weight(1f))
+                    Icon(Icons.Default.Cancel, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+                }
             }
         }
     }

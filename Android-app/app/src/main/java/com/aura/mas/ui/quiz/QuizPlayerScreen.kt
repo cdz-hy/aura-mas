@@ -41,7 +41,9 @@ data class QuizUiState(
     val score: Int = 0,
     val total: Int = 0,
     val planId: Long = 0L,
-    val error: String? = null
+    val error: String? = null,
+    val gradingStreamText: String = "",       // Streaming grading feedback text
+    val gradingProgress: Pair<Int, Int>? = null  // (current, total) grading progress
 )
 
 @HiltViewModel
@@ -71,9 +73,9 @@ class QuizViewModel @Inject constructor(
                         QuizQuestion(
                             id = idx.toLong(),
                             resourceId = resourceId,
-                            questionType = qMap["type"]?.toString() ?: qMap["questionType"]?.toString() ?: "short_answer",
-                            questionText = qMap["question"]?.toString() ?: qMap["question_text"]?.toString() ?: "",
-                            correctAnswer = qMap["correctAnswer"]?.toString() ?: qMap["correct_answer"]?.toString() ?: "",
+                            questionType = qMap["questionType"]?.toString() ?: qMap["question_type"]?.toString() ?: qMap["type"]?.toString() ?: "single_choice",
+                            questionText = qMap["questionText"]?.toString() ?: qMap["question_text"]?.toString() ?: qMap["question"]?.toString() ?: "",
+                            correctAnswer = qMap["correctAnswer"] ?: qMap["correct_answer"] ?: qMap["answer"],
                             options = options
                         )
                     } ?: emptyList()
@@ -134,6 +136,20 @@ class QuizViewModel @Inject constructor(
         }
     }
 
+    fun resetQuiz() {
+        val state = _uiState.value
+        _uiState.value = state.copy(
+            answers = emptyMap(),
+            results = null,
+            score = 0,
+            total = 0,
+            currentIndex = 0,
+            gradingStreamText = "",
+            gradingProgress = null,
+            error = null
+        )
+    }
+
     fun selectAnswer(questionIndex: Int, answer: Any) {
         val answers = _uiState.value.answers.toMutableMap()
         answers[questionIndex] = answer
@@ -186,7 +202,7 @@ class QuizViewModel @Inject constructor(
                         "&answers=${URLEncoder.encode(answersJson, "UTF-8")}"
 
                 val questionResultsMap = mutableMapOf<Int, QuizQuestion>()
-                var finalScore = 0
+                var scoreAccumulator = 0f
                 var finalTotal = state.questions.size
                 var finalCorrect = 0
 
@@ -194,36 +210,65 @@ class QuizViewModel @Inject constructor(
                     val json = sseClient.parseEventData(event.data)
                     if (json != null) {
                         when (json.get("type")?.asString) {
+                            "grading_started" -> {
+                                val total = json.get("total")?.asInt ?: state.questions.size
+                                _uiState.value = _uiState.value.copy(
+                                    gradingProgress = Pair(0, total),
+                                    gradingStreamText = ""
+                                )
+                            }
+                            "grading_token" -> {
+                                val token = json.get("token")?.asString ?: ""
+                                val idx = json.get("index")?.asInt ?: 0
+                                _uiState.value = _uiState.value.copy(
+                                    gradingStreamText = _uiState.value.gradingStreamText + token,
+                                    gradingProgress = _uiState.value.gradingProgress?.let { Pair(idx, it.second) }
+                                )
+                            }
                             "quiz_question_result" -> {
                                 val idx = json.get("index")?.asInt ?: 0
                                 val resultObj = json.getAsJsonObject("result")
                                 if (resultObj != null && idx >= 0 && idx < state.questions.size) {
                                     val isCorrect = resultObj.get("is_correct")?.asBoolean ?: false
                                     val feedback = resultObj.get("feedback")?.asString ?: ""
+                                    val score = resultObj.get("score")?.asFloat ?: (if (isCorrect) 1f else 0f)
+                                    scoreAccumulator += score
+                                    if (isCorrect) finalCorrect++
+                                    val keyPointsHit = resultObj.getAsJsonArray("key_points_hit")?.map { it.asString }
+                                    val keyPointsMissed = resultObj.getAsJsonArray("key_points_missed")?.map { it.asString }
+                                    val improvementSuggestions = resultObj.getAsJsonArray("improvement_suggestions")?.map { it.asString }
+                                    val explanation = resultObj.get("explanation")?.asString ?: ""
                                     val updatedQ = state.questions[idx].copy(
                                         isCorrect = isCorrect,
-                                        feedback = feedback
+                                        feedback = feedback,
+                                        perQuestionScore = score,
+                                        keyPointsHit = keyPointsHit,
+                                        keyPointsMissed = keyPointsMissed,
+                                        improvementSuggestions = improvementSuggestions,
+                                        explanation = explanation
                                     )
                                     questionResultsMap[idx] = updatedQ
-                                    updateQuestionInState(idx, isCorrect, feedback)
+                                    updateQuestionInStateFull(idx, updatedQ)
+                                    _uiState.value = _uiState.value.copy(
+                                        gradingProgress = _uiState.value.gradingProgress?.let { Pair(idx + 1, it.second) }
+                                    )
                                 }
                             }
                             "quiz_result" -> {
                                 val resultObj = json.getAsJsonObject("result")
                                 if (resultObj != null) {
-                                    finalScore = resultObj.get("score")?.asInt ?: 0
                                     finalTotal = resultObj.get("total")?.asInt ?: state.questions.size
-                                    finalCorrect = resultObj.get("correct")?.asInt ?: 0
                                 }
                             }
                             "done" -> {
+                                val percentageScore = if (finalTotal > 0) (scoreAccumulator / finalTotal * 100).toInt() else 0
                                 val response = api.getResource(resourceId)
                                 val resource = response.data
                                 if (resource != null) {
                                     val parsed = resource.getParsedModuleData().toMutableMap()
                                     parsed["latestResult"] = mapOf(
                                         "answers" to answersMap,
-                                        "score" to finalScore,
+                                        "score" to percentageScore,
                                         "total" to finalTotal,
                                         "correct" to finalCorrect,
                                         "details" to questionResultsMap.map { (idx, q) ->
@@ -231,7 +276,12 @@ class QuizViewModel @Inject constructor(
                                                 "index" to idx,
                                                 "question" to q.questionText,
                                                 "is_correct" to q.isCorrect,
-                                                "feedback" to q.feedback
+                                                "feedback" to q.feedback,
+                                                "score" to q.perQuestionScore,
+                                                "key_points_hit" to q.keyPointsHit,
+                                                "key_points_missed" to q.keyPointsMissed,
+                                                "improvement_suggestions" to q.improvementSuggestions,
+                                                "explanation" to q.explanation
                                             )
                                         }
                                     )
@@ -243,14 +293,16 @@ class QuizViewModel @Inject constructor(
 
                                 _uiState.value = _uiState.value.copy(
                                     isSubmitting = false,
-                                    score = finalScore,
+                                    score = percentageScore,
                                     total = finalTotal,
-                                    results = questionResultsMap.toMap()
+                                    results = questionResultsMap.toMap(),
+                                    gradingStreamText = "",
+                                    gradingProgress = null
                                 )
                             }
                             "error" -> {
                                 val content = json.get("content")?.asString ?: "判分出错"
-                                _uiState.value = _uiState.value.copy(isSubmitting = false, error = content)
+                                _uiState.value = _uiState.value.copy(isSubmitting = false, error = content, gradingStreamText = "", gradingProgress = null)
                             }
                         }
                     }
@@ -268,6 +320,14 @@ class QuizViewModel @Inject constructor(
                 isCorrect = isCorrect,
                 feedback = feedback
             )
+            _uiState.value = _uiState.value.copy(questions = questions)
+        }
+    }
+
+    private fun updateQuestionInStateFull(index: Int, updated: QuizQuestion) {
+        val questions = _uiState.value.questions.toMutableList()
+        if (index >= 0 && index < questions.size) {
+            questions[index] = updated
             _uiState.value = _uiState.value.copy(questions = questions)
         }
     }
@@ -304,7 +364,34 @@ fun QuizPlayerScreen(
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)
         ) {
+            // Streaming grading progress
+            val gp = uiState.gradingProgress
+            if (uiState.isSubmitting && gp != null) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            val progressText = "AI 正在批改中 (${gp.first}/${gp.second})..."
+                            Text(progressText, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium)
+                        }
+                        val streamTxt = uiState.gradingStreamText
+                        if (streamTxt.isNotBlank()) {
+                            Spacer(Modifier.height(8.dp))
+                            val displayTxt = streamTxt.take(200) + if (streamTxt.length > 200) "..." else ""
+                            Text(displayTxt, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f))
+                        }
+                    }
+                }
+            }
+
+            // Results summary + retake button
             if (uiState.results != null) {
+                val correctCount = uiState.questions.count { it.isCorrect == true }
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
                     shape = RoundedCornerShape(16.dp),
@@ -317,18 +404,24 @@ fun QuizPlayerScreen(
                             Text("测验已评分", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                         Spacer(Modifier.height(8.dp))
-                        Text(
-                            "得分: ${uiState.score} / ${uiState.total} 分",
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+                        val scoreText = "${uiState.score}分"
+                        Text(scoreText, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold,
+                            color = if (uiState.score >= 80) MaterialTheme.colorScheme.secondary
+                            else if (uiState.score >= 60) MaterialTheme.colorScheme.tertiary
+                            else MaterialTheme.colorScheme.error)
                         Spacer(Modifier.height(4.dp))
-                        Text(
-                            "你可以通过下方的“上一题/下一题”翻看 AI 对每一道题目的详细解析反馈。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                        )
+                        Text("答对 $correctCount / ${uiState.total} 题", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { viewModel.resetQuiz() },
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("重新作答", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
                     }
                 }
             }

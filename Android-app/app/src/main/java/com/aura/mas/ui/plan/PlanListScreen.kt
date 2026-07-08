@@ -50,6 +50,8 @@ data class PlanListUiState(
 class PlanListViewModel @Inject constructor(
     private val planRepo: PlanRepository,
     private val api: ApiService,
+    private val pythonApi: com.aura.mas.data.api.PythonApiService,
+    private val authStore: com.aura.mas.data.repository.AuthStore,
     private val offlineCache: com.aura.mas.data.offline.OfflineCacheManager,
     private val networkUtil: com.aura.mas.util.NetworkUtil
 ) : ViewModel() {
@@ -156,6 +158,8 @@ class PlanListViewModel @Inject constructor(
                     _uiState.value = _uiState.value.copy(
                         plans = _uiState.value.plans.map { if (it.id == plan.id) updated else it }
                     )
+                    // Async: generate AI plan icon based on new title
+                    regeneratePlanIcon(plan.id, newTitle)
                 } else {
                     _uiState.value = _uiState.value.copy(error = result.message.ifEmpty { "更新失败" })
                 }
@@ -163,6 +167,56 @@ class PlanListViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(error = e.message ?: "更新失败")
             }
         }
+    }
+
+    private suspend fun regeneratePlanIcon(planId: Long, planTitle: String) {
+        try {
+            // Get resource titles for icon context
+            val resources = api.getResourcesByPlan(planId)
+            val resourceTitles = resources.data?.mapNotNull { res ->
+                try {
+                    val md = res.moduleData
+                    if (md == null || md.toString().isBlank()) return@mapNotNull res.title
+                    val mdStr = if (md is String) md else md.toString()
+                    val json = com.google.gson.Gson().fromJson(mdStr, com.google.gson.JsonObject::class.java)
+                    json?.get("title")?.asString ?: res.title
+                } catch (_: Exception) { res.title }
+            }?.filter { it.isNotBlank() } ?: emptyList()
+
+            val ticketResp = api.issueTicket()
+            val ticket = ticketResp.data?.get("ticket") ?: return
+            val requestMap = mapOf(
+                "plan_id" to planId,
+                "plan_title" to planTitle,
+                "resource_titles" to resourceTitles
+            )
+            val response = pythonApi.generatePlanIcon(requestMap, ticket)
+            val json = com.google.gson.Gson().fromJson(response.string(), com.google.gson.JsonObject::class.java)
+            val svg = json?.get("svg")?.asString
+            if (!svg.isNullOrBlank()) {
+                // Update local plan with new icon
+                val currentPlans = _uiState.value.plans.toMutableList()
+                val idx = currentPlans.indexOfFirst { it.id == planId }
+                if (idx >= 0) {
+                    val oldPlan = currentPlans[idx]
+                    val configMap = try {
+                        if (oldPlan.planConfig.isNullOrBlank()) mutableMapOf()
+                        else com.google.gson.Gson().fromJson(oldPlan.planConfig, com.google.gson.JsonObject::class.java).let { obj ->
+                            val map = mutableMapOf<String, Any>()
+                            obj.entrySet().forEach { (k, v) -> map[k] = v }
+                            map
+                        }
+                    } catch (_: Exception) { mutableMapOf<String, Any>() }
+                    configMap["iconSvg"] = svg
+                    json?.get("description")?.asString?.let { configMap["iconDescription"] = it }
+                    val newConfig = com.google.gson.Gson().toJson(configMap)
+                    currentPlans[idx] = oldPlan.copy(planConfig = newConfig)
+                    _uiState.value = _uiState.value.copy(plans = currentPlans)
+                    // Persist to backend
+                    api.updatePlan(planId, currentPlans[idx])
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     fun createNewPlan(onSuccess: (Long) -> Unit) {

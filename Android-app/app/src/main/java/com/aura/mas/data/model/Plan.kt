@@ -119,9 +119,9 @@ data class LearningResource(
             questionsArray.forEach { q ->
                 if (q is Map<*, *>) {
                     questions.add(QuizQuestion(
-                        questionType = q["questionType"]?.toString() ?: q["type"]?.toString() ?: "single_choice",
-                        questionText = q["questionText"]?.toString() ?: q["question"]?.toString() ?: "",
-                        correctAnswer = q["correctAnswer"]?.toString() ?: q["answer"]?.toString() ?: "",
+                        questionType = q["questionType"]?.toString() ?: q["question_type"]?.toString() ?: q["type"]?.toString() ?: "single_choice",
+                        questionText = q["questionText"]?.toString() ?: q["question_text"]?.toString() ?: q["question"]?.toString() ?: "",
+                        correctAnswer = q["correctAnswer"] ?: q["correct_answer"] ?: q["answer"],
                         options = (q["options"] as? List<*>)?.map { it.toString() },
                         difficulty = (q["difficulty"] as? Number)?.toInt() ?: 1
                     ))
@@ -139,9 +139,9 @@ data class LearningResource(
                     if (element.isJsonObject) {
                         val q = element.asJsonObject
                         questions.add(QuizQuestion(
-                            questionType = q.get("questionType")?.asString ?: q.get("type")?.asString ?: "single_choice",
-                            questionText = q.get("questionText")?.asString ?: q.get("question")?.asString ?: "",
-                            correctAnswer = q.get("correctAnswer")?.asString ?: q.get("answer")?.asString ?: "",
+                            questionType = q.get("questionType")?.asString ?: q.get("question_type")?.asString ?: q.get("type")?.asString ?: "single_choice",
+                            questionText = q.get("questionText")?.asString ?: q.get("question_text")?.asString ?: q.get("question")?.asString ?: "",
+                            correctAnswer = q.get("correctAnswer") ?: q.get("correct_answer") ?: q.get("answer"),
                             options = q.getAsJsonArray("options")?.map { it.asString },
                             difficulty = q.get("difficulty")?.asInt ?: 1
                         ))

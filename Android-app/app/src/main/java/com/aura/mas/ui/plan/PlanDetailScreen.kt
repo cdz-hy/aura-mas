@@ -90,7 +90,8 @@ class PlanDetailViewModel @Inject constructor(
     private val api: ApiService,
     private val chatRepo: ChatRepository,
     private val sseClient: SseClient,
-    private val networkUtil: com.aura.mas.util.NetworkUtil
+    private val networkUtil: com.aura.mas.util.NetworkUtil,
+    private val heartbeatManager: com.aura.mas.service.HeartbeatManager
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(PlanDetailUiState())
     val uiState: StateFlow<PlanDetailUiState> = _uiState.asStateFlow()
@@ -200,6 +201,18 @@ class PlanDetailViewModel @Inject constructor(
 
     fun selectResource(resource: LearningResource) {
         _uiState.value = _uiState.value.copy(selectedResource = resource)
+        // Start heartbeat tracking for this resource
+        heartbeatManager.startTracking(planId, resource.id)
+    }
+
+    fun clearSelectedResource() {
+        heartbeatManager.flushAndStop()
+        _uiState.value = _uiState.value.copy(selectedResource = null)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        heartbeatManager.flushAndStop()
     }
 
     fun toggleChat() {
