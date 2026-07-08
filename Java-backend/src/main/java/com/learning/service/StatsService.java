@@ -1,6 +1,8 @@
 package com.learning.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.learning.entity.*;
 import com.learning.mapper.*;
 import lombok.RequiredArgsConstructor;
@@ -74,11 +76,11 @@ public class StatsService {
                 ? todayDaily.getDurationSeconds() : 0;
         stats.put("todayDurationSeconds", todaySeconds);
 
-        List<LearningDuration> allDurations = durationMapper.selectList(
-                new LambdaQueryWrapper<LearningDuration>()
-                        .eq(LearningDuration::getUserId, userId));
-
-        int totalSeconds = allDurations.stream()
+        // 累计学习时长（统一从 DailyStudyTime 取，与 todayDurationSeconds 同源）
+        List<DailyStudyTime> allDailyForTotal = dailyStudyTimeMapper.selectList(
+                new LambdaQueryWrapper<DailyStudyTime>()
+                        .eq(DailyStudyTime::getUserId, userId));
+        int totalSeconds = allDailyForTotal.stream()
                 .mapToInt(d -> d.getDurationSeconds() != null ? d.getDurationSeconds() : 0)
                 .sum();
         stats.put("totalDurationSeconds", totalSeconds);
@@ -107,6 +109,12 @@ public class StatsService {
                             .ge(LearningResource::getStatus, 2));
         }
         stats.put("totalResources", totalResources);
+
+        // 资源完成率
+        double resourceCompletionRate = totalResources > 0
+                ? Math.round((double) completedResources / totalResources * 1000) / 10.0
+                : 0;
+        stats.put("resourceCompletionRate", resourceCompletionRate);
 
         // 学习时长（从 daily_study_time 累计）
         try {
@@ -754,7 +762,7 @@ public class StatsService {
     }
 
     // ======================== 聚合全部分析数据 ========================
-    public Map<String, Object> getAnalyticsData(Long userId) {
+    public Map<String, Object> getAnalyticsData(Long userId, int days) {
         Map<String, Object> result = new HashMap<>();
 
         try {
@@ -772,7 +780,7 @@ public class StatsService {
         }
 
         try {
-            result.put("heatmap", getStudyHeatmap(userId, 180));
+            result.put("heatmap", getStudyHeatmap(userId, days));
         } catch (Exception e) {
             log.error("获取heatmap失败", e);
             result.put("heatmap", new HashMap<>());
@@ -817,63 +825,48 @@ public class StatsService {
     }
 
     // ======================== JSON解析辅助方法 ========================
+    private static final ObjectMapper objectMapper = new ObjectMapper();
+
+    @SuppressWarnings("unchecked")
     private List<String> extractJsonArray(String json, String key) {
-        List<String> result = new ArrayList<>();
         try {
-            int start = json.indexOf("\"" + key + "\"");
-            if (start < 0) return result;
-            start = json.indexOf("[", start);
-            int end = json.indexOf("]", start);
-            if (start < 0 || end < 0) return result;
-            String arrayStr = json.substring(start + 1, end).trim();
-            if (arrayStr.isEmpty()) return result;
-            // 分割引号包围的字符串
-            String[] items = arrayStr.split(",");
-            for (String item : items) {
-                String trimmed = item.trim().replace("\"", "");
-                if (!trimmed.isEmpty()) {
-                    result.add(trimmed);
-                }
+            Map<String, Object> map = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+            Object val = map.get(key);
+            if (val instanceof List) {
+                return ((List<Object>) val).stream().map(Object::toString).collect(Collectors.toList());
             }
         } catch (Exception e) {
             log.error("解析JSON数组失败: " + key, e);
         }
-        return result;
+        return new ArrayList<>();
     }
 
     private double extractJsonDouble(String json, String key, double defaultValue) {
         try {
-            int start = json.indexOf("\"" + key + "\"");
-            if (start < 0) return defaultValue;
-            start = json.indexOf(":", start);
-            if (start < 0) return defaultValue;
-            start++;
-            int end = start;
-            while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '.' || json.charAt(end) == '-')) {
-                end++;
+            Map<String, Object> map = objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+            Object val = map.get(key);
+            if (val instanceof Number) {
+                return ((Number) val).doubleValue();
             }
-            String numStr = json.substring(start, end).trim();
-            return Double.parseDouble(numStr);
         } catch (Exception e) {
-            return defaultValue;
+            // 忽略解析失败
         }
+        return defaultValue;
     }
 
     private String _getResourceTitle(Long resourceId) {
         if (resourceId == null) return "未知资源";
         LearningResource resource = resourceMapper.selectById(resourceId);
         if (resource == null) return "未知资源";
-        String moduleData = resource.getModuleData();
-        if (moduleData != null && moduleData.contains("\"title\"")) {
-            int start = moduleData.indexOf("\"title\"");
-            if (start >= 0) {
-                int colon = moduleData.indexOf(":", start);
-                int quoteStart = moduleData.indexOf("\"", colon + 1);
-                int quoteEnd = moduleData.indexOf("\"", quoteStart + 1);
-                if (quoteStart >= 0 && quoteEnd > quoteStart) {
-                    return moduleData.substring(quoteStart + 1, quoteEnd);
-                }
+        try {
+            String moduleData = resource.getModuleData();
+            if (moduleData != null) {
+                Map<String, Object> map = objectMapper.readValue(moduleData, new TypeReference<Map<String, Object>>() {});
+                Object title = map.get("title");
+                if (title != null) return title.toString();
             }
+        } catch (Exception e) {
+            // 忽略
         }
         return resource.getModuleType() != null ? resource.getModuleType() : "未知资源";
     }

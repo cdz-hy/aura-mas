@@ -47,6 +47,15 @@ export function getDialogueHistoryByPlan(planId: number, limit = 200) {
 }
 
 /**
+ * 按 intent_type 获取对话历史
+ */
+export function getDialogueHistoryByIntent(intentType: string, limit = 20) {
+  return request.get<any, { data: ChatMessage[] }>('/dialogue/history', {
+    params: { intentType, limit },
+  })
+}
+
+/**
  * 查询会话的流式输出状态（用于刷新后恢复流式动画）
  * 直接调用 Python 后端，不经过 Java 代理
  */

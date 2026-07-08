@@ -80,6 +80,13 @@ function buildImplicitRoutes(menuCodes: Set<string>): RouteRecordRaw[] {
     component: () => import('@/views/UserSettingsView.vue'),
   })
 
+  // Flashcard review page
+  routes.push({
+    path: 'flashcard/review',
+    name: 'FlashcardReview',
+    component: () => import('@/views/FlashcardReviewView.vue'),
+  })
+
   return routes
 }
 

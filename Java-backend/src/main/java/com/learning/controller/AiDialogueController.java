@@ -81,10 +81,14 @@ public class AiDialogueController {
     @GetMapping("/api/dialogue/history")
     public Result<List<AiDialogue>> getDialogueHistory(
             Authentication authentication,
-            @RequestParam Long planId,
+            @RequestParam(required = false) Long planId,
+            @RequestParam(required = false) String intentType,
             @RequestParam(defaultValue = "200") int limit) {
         Long userId = (Long) authentication.getPrincipal();
-        return Result.success(dialogueService.getHistoryByPlan(userId, planId, limit));
+        if (intentType != null && !intentType.isEmpty()) {
+            return Result.success(dialogueService.getHistory(userId, null, intentType, limit));
+        }
+        return Result.success(dialogueService.getHistoryByPlan(userId, planId != null ? planId : 0, limit));
     }
 
     @Operation(summary = "获取会话列表")

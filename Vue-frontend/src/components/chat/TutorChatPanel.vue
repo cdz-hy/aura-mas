@@ -161,6 +161,9 @@
           textarea-class="flex-1 px-4 py-2 text-sm border border-purple-200 rounded-xl outline-none focus:border-purple-400 transition-colors resize-none overflow-y-auto leading-relaxed"
           placeholder="输入你的问题..."
           :disabled="tutor.loading.value"
+          show-voice
+          :voice-recording="voice.isRecording.value"
+          @voice-toggle="voice.toggle"
         />
         <button
           type="submit"
@@ -178,6 +181,7 @@
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useTutor, pickFollowUp } from '@/composables/useTutor'
+import { useVoiceInput } from '@/composables/useVoiceInput'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { getCurrentProfile } from '@/api/user'
@@ -334,6 +338,12 @@ watch(() => route.path, async (path) => {
 const messagesContainer = ref<HTMLElement>()
 const inputText = ref('')
 const showSessionList = ref(false)
+
+// 语音输入
+const voice = useVoiceInput({
+  onText: (text) => { inputText.value += text },
+  onError: (err) => { console.error('[Voice]', err) },
+})
 const currentFollowUp = ref('有什么不懂的地方吗，我可以帮你哦')
 const isManageMode = ref(false)
 const selectedMessageIds = ref<number[]>([])

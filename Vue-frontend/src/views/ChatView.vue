@@ -141,6 +141,9 @@
             v-model="inputText"
             :placeholder="store.streaming ? 'AI回复中...' : store.awaitingConfirmation ? '输入补充说明或直接发送确认...' : '输入你的问题...'"
             :disabled="store.streaming"
+            show-voice
+            :voice-recording="voice.isRecording.value"
+            @voice-toggle="voice.toggle"
           />
           <button type="submit" class="btn-primary px-6" :disabled="!inputText.trim() || store.streaming">
             发送
@@ -169,6 +172,7 @@ import { useChatStore } from '@/stores/chat'
 import ChatSessionSidebar from '@/components/chat/ChatSessionSidebar.vue'
 import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
 import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
+import { useVoiceInput } from '@/composables/useVoiceInput'
 
 const route = useRoute()
 const planId = route.params.id as string
@@ -178,6 +182,12 @@ const messagesContainer = ref<HTMLElement>()
 const inputText = ref('')
 const showModifyInput = ref(false)
 const modifyText = ref('')
+
+// 语音输入
+const voice = useVoiceInput({
+  onText: (text) => { inputText.value += text },
+  onError: (err) => { console.error('[Voice]', err) },
+})
 
 const quickQuestions = [
   '这个知识点我不太理解，能详细解释一下吗？',

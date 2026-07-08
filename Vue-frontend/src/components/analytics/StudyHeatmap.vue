@@ -119,14 +119,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { getStudyHeatmap } from '@/api/stats'
+import { computed, ref } from 'vue'
 import type { StudyHeatmapData, HeatmapDay } from '@/api/stats'
+
+const props = defineProps<{
+  heatmapData?: StudyHeatmapData | null
+}>()
 
 const cellSize = 14
 const cellGap = 3
 
-const heatmapData = ref<StudyHeatmapData | null>(null)
+const heatmapData = computed(() => props.heatmapData ?? null)
 
 const tooltip = ref({ visible: false, x: 0, y: 0, date: '', minutes: 0 })
 
@@ -234,12 +237,4 @@ function formatDateLabel(dateStr: string): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${weekdays[d.getDay()]}`
 }
 
-onMounted(async () => {
-  try {
-    const res = await getStudyHeatmap(180)
-    heatmapData.value = res.data
-  } catch (e) {
-    console.error('Failed to load heatmap:', e)
-  }
-})
 </script>
