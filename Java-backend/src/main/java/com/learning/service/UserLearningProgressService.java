@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 @RequiredArgsConstructor
@@ -26,6 +27,44 @@ public class UserLearningProgressService {
     private final LearningResourceMapper resourceMapper;
     @Lazy
     private final LearningPlanService planService;
+
+    @org.springframework.beans.factory.annotation.Value("${python.backend.url:http://localhost:8002}")
+    private String pythonBackendUrl;
+
+    @org.springframework.beans.factory.annotation.Value("${internal.secret:change-this-internal-secret}")
+    private String internalSecret;
+
+    /**
+     * 异步触发知识图谱掌握度分析（fire-and-forget，不阻塞主流程）
+     */
+    private void triggerMasteryUpdate(Long userId, Long resourceId, boolean completed) {
+        triggerMasteryUpdateBatch(userId, java.util.List.of(resourceId), completed);
+    }
+
+    /**
+     * 批量触发掌握度分析（串行处理，避免并发冲突和 429 限流）
+     */
+    private void triggerMasteryUpdateBatch(Long userId, List<Long> resourceIds, boolean completed) {
+        if (resourceIds.isEmpty()) return;
+        CompletableFuture.runAsync(() -> {
+            try {
+                var restTemplate = new org.springframework.web.client.RestTemplate();
+                var headers = new org.springframework.http.HttpHeaders();
+                headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+                headers.set("X-Service-Secret", internalSecret);
+                var body = new java.util.HashMap<String, Object>();
+                body.put("user_id", userId);
+                body.put("resource_ids", resourceIds);
+                body.put("completed", completed);
+                var entity = new org.springframework.http.HttpEntity<>(body, headers);
+                restTemplate.postForEntity(
+                        pythonBackendUrl + "/api/ai/knowledge-graph/update-mastery-batch",
+                        entity, String.class);
+            } catch (Exception e) {
+                // 非关键路径，静默失败
+            }
+        });
+    }
 
     public List<UserLearningProgress> getByPlan(Long userId, Long planId) {
         return progressMapper.selectList(
@@ -150,12 +189,16 @@ public class UserLearningProgressService {
             progressMapper.insert(progress);
         }
         recalculatePlanProgress(userId, planId);
+        // 异步触发知识图谱掌握度分析
+        triggerMasteryUpdate(userId, resourceId, true);
     }
 
     @Transactional
     public void unmarkComplete(Long userId, Long planId, Long resourceId) {
         updateStatus(userId, planId, resourceId, 1);
         recalculatePlanProgress(userId, planId);
+        // 异步触发知识图谱掌握度分析
+        triggerMasteryUpdate(userId, resourceId, false);
     }
 
     /**
@@ -172,6 +215,7 @@ public class UserLearningProgressService {
         if (resources.isEmpty()) return;
 
         // Batch upsert all resource progress records
+        List<Long> updatedResourceIds = new java.util.ArrayList<>();
         for (LearningResource r : resources) {
             UserLearningProgress existing = progressMapper.selectOne(
                     new LambdaQueryWrapper<UserLearningProgress>()
@@ -185,6 +229,7 @@ public class UserLearningProgressService {
                 existing.setLastAccessTime(LocalDateTime.now());
                 existing.setUpdatedAt(LocalDateTime.now());
                 progressMapper.updateById(existing);
+                updatedResourceIds.add(r.getId());
             } else {
                 UserLearningProgress progress = new UserLearningProgress();
                 progress.setUserId(userId);
@@ -198,10 +243,13 @@ public class UserLearningProgressService {
                 progress.setCreatedAt(LocalDateTime.now());
                 progress.setUpdatedAt(LocalDateTime.now());
                 progressMapper.insert(progress);
+                updatedResourceIds.add(r.getId());
             }
         }
         // Recalculate only once at the end
         recalculatePlanProgress(userId, planId);
+        // Async trigger mastery analysis (single batch, serial processing)
+        triggerMasteryUpdateBatch(userId, updatedResourceIds, true);
     }
 
     /**

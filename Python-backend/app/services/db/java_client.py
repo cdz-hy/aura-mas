@@ -234,6 +234,22 @@ class JavaBackendClient:
             body["importance"] = importance
         return self._request("PATCH", f"/api/knowledge-graph/domain/{domain_id}/node/{node_id}", json=body)
 
+    def trigger_mastery_update(self, user_id: int, resource_id: int, completed: bool):
+        """触发单个资源的异步掌握度分析"""
+        self.trigger_mastery_update_batch(user_id, [resource_id], completed)
+
+    def trigger_mastery_update_batch(self, user_id: int, resource_ids: list, completed: bool):
+        """批量触发掌握度分析（串行处理，避免并发冲突和 429）"""
+        try:
+            import requests as _req
+            _req.post(
+                f"http://localhost:8002/api/ai/knowledge-graph/update-mastery-batch",
+                json={"user_id": user_id, "resource_ids": resource_ids, "completed": completed},
+                timeout=5,
+            )
+        except Exception:
+            pass  # 非阻塞，失败不影响主流程
+
     # ==================== 知识树 ====================
 
     def get_or_create_tree(self, plan_id: int, user_id: int) -> dict:
