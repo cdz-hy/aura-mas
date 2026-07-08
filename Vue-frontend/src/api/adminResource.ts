@@ -46,6 +46,10 @@ export function getAdminResource(id: number) {
 
 /** 保存草稿 */
 export function saveDraft(data: Partial<ResourceLibrary>) {
+  // 截断 title 防止超出数据库列宽
+  if (data.title && data.title.length > 200) {
+    data = { ...data, title: data.title.slice(0, 200) }
+  }
   return request.post<any, { data: ResourceLibrary }>('/admin/resource/save-draft', data)
 }
 

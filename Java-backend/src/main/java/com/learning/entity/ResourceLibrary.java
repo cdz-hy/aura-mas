@@ -15,7 +15,7 @@ public class ResourceLibrary {
     /** 资源标题 */
     private String title;
 
-    /** 内容类型: text / image */
+    /** 内容类型: text / image / rich */
     private String contentType;
 
     /** 文本内容 (text 类型) */

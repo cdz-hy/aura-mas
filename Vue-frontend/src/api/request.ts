@@ -41,4 +41,5 @@ request.interceptors.response.use(
 export default request
 
 // Python SSE base URL (direct connection, bypassing Java proxy)
-export const PYTHON_AI_BASE = 'http://localhost:8002'
+// Configure via .env: VITE_PYTHON_AI_BASE=http://your-server:8002
+export const PYTHON_AI_BASE = import.meta.env.VITE_PYTHON_AI_BASE || 'http://localhost:8002'

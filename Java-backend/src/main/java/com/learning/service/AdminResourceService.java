@@ -76,6 +76,10 @@ public class AdminResourceService {
     }
 
     public ResourceLibrary saveDraft(ResourceLibrary resource) {
+        // 截断 title 防止超出数据库列宽
+        if (resource.getTitle() != null && resource.getTitle().length() > 200) {
+            resource.setTitle(resource.getTitle().substring(0, 200));
+        }
         resource.setStatus(0); // 待审核
         resource.setCreatedAt(LocalDateTime.now());
         resource.setUpdatedAt(LocalDateTime.now());
@@ -88,7 +92,8 @@ public class AdminResourceService {
         ResourceLibrary existing = getById(id);
         // 只更新允许修改的字段
         if (resource.getTitle() != null) {
-            existing.setTitle(resource.getTitle());
+            String title = resource.getTitle();
+            existing.setTitle(title.length() > 200 ? title.substring(0, 200) : title);
         }
         if (resource.getContent() != null) {
             existing.setContent(resource.getContent());
@@ -135,7 +140,8 @@ public class AdminResourceService {
 
         // 调用 Python 后端入库
         Map<String, Object> result;
-        if ("text".equals(resource.getContentType())) {
+        if ("text".equals(resource.getContentType()) || "rich".equals(resource.getContentType())) {
+            // text 和 rich 类型都是文本内容，走文本入库
             result = callPythonIngestText(resource.getTitle(), resource.getContent(), docId);
         } else {
             result = callPythonIngestImage(resource.getImageUrl(), resource.getImageCaption(), docId);

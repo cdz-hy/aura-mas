@@ -714,7 +714,7 @@ const tabs = [
     icon: '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><rect x="8" y="12" width="8" height="6" rx="1"/><circle cx="10.5" cy="15" r="1"/></svg>',
   },
 ]
-const activeTab = ref<'text' | 'image'>('text')
+const activeTab = ref<'text' | 'image' | 'rich'>('text')
 
 // ==================== 文本生成 ====================
 const textForm = reactive({ topic: '', prompt: '' })
