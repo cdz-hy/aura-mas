@@ -251,47 +251,10 @@
       @cancel="handleCompleteCancel"
     />
 
-    <!-- AI 学习顾问主动提示 -->
-    <transition name="slide-up">
-      <div
-        v-if="showAdvisorHint"
-        class="fixed bottom-6 right-6 z-50 max-w-sm bg-white rounded-2xl shadow-2xl border border-emerald-100 p-4"
-      >
-        <div class="flex items-start gap-3">
-          <div class="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center flex-shrink-0">
-            <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
-            </svg>
-          </div>
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-medium text-navy-800">AI 学习顾问</p>
-            <p class="text-sm text-navy-700 mt-2 leading-relaxed">{{ advisorSuggestion }}</p>
-            <div class="flex items-center gap-2 mt-3">
-              <button
-                class="px-3 py-1.5 bg-emerald-600 text-white text-xs rounded-lg hover:bg-emerald-700 transition-colors"
-                @click="openAdvisor"
-              >
-                继续对话
-              </button>
-              <button
-                class="px-3 py-1.5 bg-navy-100 text-navy-600 text-xs rounded-lg hover:bg-navy-200 transition-colors"
-                @click="showAdvisorHint = false"
-              >
-                知道了
-              </button>
-            </div>
-          </div>
-          <button
-            class="p-1 rounded text-navy-300 hover:text-navy-500 transition-colors flex-shrink-0"
-            @click="showAdvisorHint = false"
-          >
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-      </div>
-    </transition>
+    <!-- AI 学习顾问建议云朵（Teleport 到 body，避免被父容器 transform 影响 fixed 定位） -->
+    <Teleport to="body">
+      <AdvisorSuggestionCloud @open-chat="openAdvisor" />
+    </Teleport>
 
     <!-- AI 学习顾问 -->
     <PlanAdvisorChat ref="planAdvisorRef" />
@@ -304,9 +267,11 @@ import { useRouter } from 'vue-router'
 import { getPlans, createPlan, deletePlan, updatePlan } from '@/api/plan'
 import { getPlanResources, getProgressByPlan, markResourceComplete, getBatchProgress, markAllComplete } from '@/api/resource'
 import { getDashboardStats } from '@/api/stats'
+import { tracker } from '@/utils/tracker'
 import type { LearningPlan } from '@/types/plan'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import PlanAdvisorChat from '@/components/plan/PlanAdvisorChat.vue'
+import AdvisorSuggestionCloud from '@/components/plan/AdvisorSuggestionCloud.vue'
 
 const router = useRouter()
 const plans = ref<LearningPlan[]>([])
@@ -387,7 +352,10 @@ async function createNewPlan() {
     })
     const planId = res.data?.id
     if (planId) {
-      router.push(`/plan/${planId}`)
+      // 通知学习顾问：计划已创建
+      localStorage.setItem('advisor_plan_created', '新创建了学习计划，请分析并给出后续学习建议')
+      // 使用 location.href 确保页面完全刷新，信号不会丢失
+      window.location.href = `/plan/${planId}`
     }
   } catch (e) {
     console.error('Failed to create plan:', e)
@@ -477,104 +445,21 @@ function handlePlanIconUpdated(e: Event) {
   }
 }
 
-// 检测学习变化并主动给出建议
-const showAdvisorHint = ref(false)
-const advisorHintText = ref('')
-const advisorSuggestion = ref('')
+// AI 学习顾问
 const planAdvisorRef = ref<any>(null)
 
 async function openAdvisor() {
-  showAdvisorHint.value = false
   if (planAdvisorRef.value) {
     planAdvisorRef.value.openChat()
   }
 }
 
-async function checkLearningChanges() {
-  try {
-    const lastCheckKey = 'advisor_last_check'
-    const lastCheckStr = localStorage.getItem(lastCheckKey)
-    const lastCheck = lastCheckStr ? JSON.parse(lastCheckStr) : null
-
-    const statsRes = await getDashboardStats().catch(() => ({ data: null }))
-    const stats = statsRes.data
-
-    let hasChange = false
-    let changeReason = ''
-
-    if (lastCheck && stats) {
-      const lastSeconds = lastCheck.todayDurationSeconds || 0
-      const currentSeconds = stats.todayDurationSeconds || 0
-      const lastMinutes = Math.floor(lastSeconds / 60)
-      const currentMinutes = Math.floor(currentSeconds / 60)
-      if (currentMinutes - lastMinutes > 30) {
-        hasChange = true
-        changeReason = `学习时长增加了 ${currentMinutes - lastMinutes} 分钟`
-      }
-
-      const lastStudyHours = lastCheck.totalStudyHours || 0
-      const currentStudyHours = stats.totalStudyHours || 0
-      if (currentStudyHours > lastStudyHours) {
-        hasChange = true
-        changeReason = `总学习时长增加到 ${currentStudyHours} 小时`
-      }
-
-      const lastPlanCount = lastCheck.planCount || 0
-      const currentPlanCount = plans.value.length
-      if (currentPlanCount > lastPlanCount) {
-        hasChange = true
-        changeReason = `新增了 ${currentPlanCount - lastPlanCount} 个学习计划`
-      }
-    } else if (!lastCheck && plans.value.length > 0) {
-      hasChange = true
-      changeReason = '发现你有学习计划'
-    }
-
-    localStorage.setItem(lastCheckKey, JSON.stringify({
-      todayDurationSeconds: stats?.todayDurationSeconds || 0,
-      totalStudyHours: stats?.totalStudyHours || 0,
-      planCount: plans.value.length,
-      timestamp: Date.now()
-    }))
-
-    // 如果有变化，调用 AI 分析并给出建议
-    if (hasChange) {
-      try {
-        const { issueTicket } = await import('@/api/auth')
-        const ticketRes = await issueTicket()
-        const ticket = ticketRes.data.ticket
-
-        const response = await fetch(`http://localhost:8002/api/ai/plan-advisor/chat`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${ticket}`
-          },
-          body: JSON.stringify({
-            stats: stats,
-            plans: plans.value,
-            userMessage: `[系统自动触发] 检测到学生学习情况变化：${changeReason}。请主动分析学生的学习情况，根据学习计划和资源内容，主动提出问题或建议。回复要简洁，控制在100字以内。`
-          })
-        })
-
-        if (response.ok) {
-          const data = await response.json()
-          advisorHintText.value = changeReason
-          advisorSuggestion.value = data.message || '你最近学习很努力，继续保持！'
-          showAdvisorHint.value = true
-        }
-      } catch (e) {
-        console.error('AI analysis failed:', e)
-      }
-    }
-  } catch (e) {
-    console.error('Check learning changes failed:', e)
-  }
-}
-
 onMounted(async () => {
   await loadPlans()
-  checkLearningChanges()
+
+  // 追踪页面浏览
+  tracker.trackPageView({ page: 'plans' })
+
   window.addEventListener('plan-icon-updated', handlePlanIconUpdated)
 })
 

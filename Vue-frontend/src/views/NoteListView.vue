@@ -249,6 +249,7 @@ import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getNotes, deleteNote as deleteNoteApi, updateNote } from '@/api/note'
 import { getFlashcardsByNote, getDueFlashcardCount } from '@/api/flashcard'
+import { tracker } from '@/utils/tracker'
 import type { Note } from '@/types/note'
 import type { Flashcard } from '@/types/flashcard'
 
@@ -392,6 +393,10 @@ function handleClickOutside(event: MouseEvent) {
 
 onMounted(() => {
   loadNotes()
+
+  // 追踪页面浏览
+  tracker.trackPageView({ page: 'notes' })
+
   document.addEventListener('mousedown', handleClickOutside)
 })
 

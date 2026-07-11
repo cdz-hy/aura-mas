@@ -77,6 +77,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
 import { getAnalyticsData, type AnalyticsData } from '@/api/analytics'
+import { tracker } from '@/utils/tracker'
 import WeekComparison from '@/components/analytics/WeekComparison.vue'
 
 // Async tab components
@@ -192,5 +193,10 @@ async function fetchData(days?: number) {
   }
 }
 
-onMounted(() => fetchData())
+onMounted(() => {
+  fetchData()
+
+  // 追踪页面浏览
+  tracker.trackPageView({ page: 'analytics' })
+})
 </script>

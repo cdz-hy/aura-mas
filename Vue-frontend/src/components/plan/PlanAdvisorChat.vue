@@ -7,9 +7,7 @@
       @click="openChat"
       :class="{ 'has-notification': hasNotification }"
     >
-      <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
-      </svg>
+      <img src="/学习顾问.png" alt="AI学习顾问" class="w-full h-full rounded-full object-cover" />
       <span v-if="hasNotification" class="notification-dot"></span>
     </button>
 
@@ -23,29 +21,13 @@
           @touchstart.prevent="startDragTouch"
         >
           <div class="flex items-center gap-2">
-            <div class="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
-              <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
-              </svg>
-            </div>
+            <img src="/学习顾问.png" alt="AI学习顾问" class="w-8 h-8 rounded-full object-cover" />
             <div>
               <h3 class="font-semibold text-navy-800 text-sm">AI 学习顾问</h3>
-              <p class="text-xs text-navy-400">{{ isListening ? '正在聆听...' : (isSpeaking ? '正在说话...' : '随时为你服务') }}</p>
+              <p class="text-xs text-navy-400">{{ isListening ? '正在聆听...' : '随时为你服务' }}</p>
             </div>
           </div>
           <div class="flex items-center gap-2">
-            <!-- 语音开关 -->
-            <button
-              class="p-1.5 rounded-lg transition-colors"
-              :class="voiceEnabled ? 'bg-emerald-100 text-emerald-600' : 'bg-navy-100 text-navy-400'"
-              @click="voiceEnabled = !voiceEnabled"
-              title="语音播报"
-            >
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                <path v-if="voiceEnabled" d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
-              </svg>
-            </button>
             <!-- 关闭按钮 -->
             <button
               class="p-1.5 rounded-lg text-navy-400 hover:text-navy-600 hover:bg-navy-100 transition-colors"
@@ -116,21 +98,9 @@
                 </div>
               </div>
 
-              <!-- 语音播放按钮 -->
-              <div v-else class="flex items-start gap-2">
-                <div class="flex-1">
-                  <div class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
-                </div>
-                <button
-                  v-if="msg.role === 'assistant' && voiceEnabled"
-                  class="p-1 rounded text-navy-300 hover:text-navy-500 transition-colors flex-shrink-0"
-                  @click="speakText(msg.content)"
-                  :disabled="isSpeaking"
-                >
-                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  </svg>
-                </button>
+              <!-- 消息内容 -->
+              <div v-else>
+                <div class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
               </div>
             </div>
           </div>
@@ -196,7 +166,7 @@
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { parseMarkdown } from '@/utils/markdown'
-import { getDashboardStats } from '@/api/stats'
+import { getDashboardStats, getStudyHeatmap } from '@/api/stats'
 import { getDueFlashcardCount } from '@/api/flashcard'
 import { getPlans } from '@/api/plan'
 import { getDialogueHistoryByIntent } from '@/api/chat'
@@ -226,9 +196,7 @@ const loading = ref(false)
 const hasNotification = ref(false)
 
 // 语音状态
-const voiceEnabled = ref(true)
 const isListening = ref(false)
-const isSpeaking = ref(false)
 const mediaRecorder = ref<MediaRecorder | null>(null)
 const audioChunks = ref<Blob[]>([])
 
@@ -251,9 +219,16 @@ const messagesContainer = ref<HTMLElement | null>(null)
 async function openChat() {
   isOpen.value = true
   hasNotification.value = false
-  // 加载历史对话
+
+  // 检查是否有检测到的变化
+  const changeReason = localStorage.getItem('advisor_change_reason')
+
   if (messages.value.length === 0) {
+    // 没有历史对话，加载历史或主动问候
     await loadHistory()
+  } else if (changeReason) {
+    // 有历史对话且检测到新变化，主动发起分析
+    await proactiveGreeting()
   }
 }
 
@@ -335,55 +310,82 @@ function stopDrag() {
 // 检测学习变化并主动提示
 async function checkLearningChanges() {
   try {
-    // 获取上次检查的学习数据
-    const lastCheckKey = 'advisor_last_check'
+    // 使用独立 key，避免与 AdvisorSuggestionCloud 竞态
+    const lastCheckKey = 'advisor_chat_last_check'
     const lastCheckStr = localStorage.getItem(lastCheckKey)
     const lastCheck = lastCheckStr ? JSON.parse(lastCheckStr) : null
 
     // 获取当前学习数据
-    const [statsRes, plansRes] = await Promise.all([
+    const [statsRes, plansRes, heatmapRes] = await Promise.all([
       getDashboardStats().catch(() => ({ data: null })),
-      getPlans({ page: 1, size: 10 }).catch(() => ({ data: { records: [] } }))
+      getPlans({ page: 1, size: 10 }).catch(() => ({ data: { records: [] } })),
+      getStudyHeatmap(30).catch(() => ({ data: null }))
     ])
 
     const stats = statsRes.data
     const plans = plansRes.data?.records || []
+    const streakDays = heatmapRes.data?.currentStreak || 0
 
-    // 检测是否有明显变化
-    let hasChange = false
-    let changeReason = ''
+    console.log('[AdvisorChat] checkLearningChanges', {
+      lastCheck,
+      currentPlanCount: plans.length,
+      streakDays,
+      quizAccuracy: stats?.quizAccuracy,
+      completedResources: stats?.completedResources,
+    })
+
+    const changes: string[] = []
 
     if (lastCheck) {
-      // 检查学习时长变化
-      const lastSeconds = lastCheck.todayDurationSeconds || 0
-      const currentSeconds = stats?.todayDurationSeconds || 0
-      const lastMinutes = Math.floor(lastSeconds / 60)
-      const currentMinutes = Math.floor(currentSeconds / 60)
+      // 1. 学习时长变化（增加超过 30 分钟）
+      const lastMinutes = Math.floor((lastCheck.todayDurationSeconds || 0) / 60)
+      const currentMinutes = Math.floor((stats?.todayDurationSeconds || 0) / 60)
       if (currentMinutes - lastMinutes > 30) {
-        hasChange = true
-        changeReason = `学习时长增加了 ${currentMinutes - lastMinutes} 分钟`
+        changes.push(`今日学习时长增加了 ${currentMinutes - lastMinutes} 分钟`)
       }
 
-      // 检查计划数量变化
+      // 2. 计划数量变化
       const lastPlanCount = lastCheck.planCount || 0
       const currentPlanCount = plans.length
-      if (currentPlanCount !== lastPlanCount) {
-        hasChange = true
-        changeReason = `学习计划数量变化：${lastPlanCount} -> ${currentPlanCount}`
+      if (currentPlanCount > lastPlanCount) {
+        changes.push(`新增了 ${currentPlanCount - lastPlanCount} 个学习计划`)
+      } else if (currentPlanCount < lastPlanCount) {
+        changes.push(`学习计划减少了 ${lastPlanCount - currentPlanCount} 个`)
       }
 
-      // 检查总学习时长变化
-      const lastStudyHours = lastCheck.totalStudyHours || 0
-      const currentStudyHours = stats?.totalStudyHours || 0
-      if (currentStudyHours > lastStudyHours) {
-        hasChange = true
-        changeReason = `总学习时长增加到 ${currentStudyHours} 小时`
+      // 3. 答题正确率变化（波动超过 5%）
+      const lastAccuracy = lastCheck.quizAccuracy || 0
+      const currentAccuracy = stats?.quizAccuracy || 0
+      if (lastAccuracy > 0 && Math.abs(currentAccuracy - lastAccuracy) > 5) {
+        const direction = currentAccuracy > lastAccuracy ? '提升' : '下降'
+        changes.push(`答题正确率${direction}了 ${Math.abs(currentAccuracy - lastAccuracy).toFixed(1)}%`)
+      }
+
+      // 4. 连续学习天数变化
+      const lastStreak = lastCheck.streakDays || 0
+      if (streakDays > lastStreak && streakDays >= 3) {
+        changes.push(`连续学习天数达到 ${streakDays} 天`)
+      } else if (lastStreak >= 3 && streakDays === 0) {
+        changes.push('连续学习中断了')
+      }
+
+      // 5. 完成资源数变化
+      const lastCompleted = lastCheck.completedResources || 0
+      const currentCompleted = stats?.completedResources || 0
+      if (currentCompleted > lastCompleted) {
+        changes.push(`新完成了 ${currentCompleted - lastCompleted} 个学习资源`)
+      }
+
+      // 6. 总学习时长里程碑（每 10 小时一个节点）
+      const lastHours = lastCheck.totalStudyHours || 0
+      const currentHours = stats?.totalStudyHours || 0
+      if (currentHours > lastHours && Math.floor(currentHours / 10) > Math.floor(lastHours / 10)) {
+        changes.push(`累计学习时长突破 ${Math.floor(currentHours / 10) * 10} 小时`)
       }
     } else {
-      // 首次检查，如果有数据则提示
+      // 首次检查
       if (plans.length > 0) {
-        hasChange = true
-        changeReason = '首次分析学习情况'
+        changes.push('首次分析学习情况')
       }
     }
 
@@ -391,18 +393,20 @@ async function checkLearningChanges() {
     localStorage.setItem(lastCheckKey, JSON.stringify({
       todayDurationSeconds: stats?.todayDurationSeconds || 0,
       totalStudyHours: stats?.totalStudyHours || 0,
+      quizAccuracy: stats?.quizAccuracy || 0,
+      streakDays: streakDays,
+      completedResources: stats?.completedResources || 0,
       planCount: plans.length,
       timestamp: Date.now()
     }))
 
     // 如果有变化，显示通知
-    if (hasChange) {
+    if (changes.length > 0) {
       hasNotification.value = true
-      // 保存变化原因，打开对话时使用
-      localStorage.setItem('advisor_change_reason', changeReason)
+      localStorage.setItem('advisor_change_reason', changes.join('；'))
     }
 
-    return hasChange
+    return changes.length > 0
   } catch (e) {
     console.error('Check learning changes failed:', e)
     return false
@@ -419,9 +423,21 @@ async function proactiveGreeting() {
       getPlans({ page: 1, size: 10 }).catch(() => ({ data: { records: [] } }))
     ])
 
-    const stats = statsRes.data
+    const rawStats = statsRes.data
     const dueCount = flashcardRes.data || 0
     const plans = plansRes.data?.records || []
+
+    // 转换字段名，与后端 _format_stats 对齐
+    const stats = rawStats ? {
+      todayStudyMinutes: Math.floor((rawStats.todayDurationSeconds || 0) / 60),
+      totalStudyMinutes: Math.floor((rawStats.totalDurationSeconds || 0) / 60),
+      totalStudyHours: rawStats.totalStudyHours || 0,
+      streakDays: 0, // 由后端从 heatmap 获取
+      quizAccuracy: rawStats.quizAccuracy || 0,
+      completedModules: rawStats.completedResources || 0,
+      totalModules: rawStats.totalResources || 0,
+      dueFlashcards: dueCount,
+    } : null
 
     // 获取变化原因
     const changeReason = localStorage.getItem('advisor_change_reason') || ''
@@ -476,11 +492,6 @@ function addMessage(role: 'user' | 'assistant', content: string, type: string = 
     suggestion
   })
   scrollToBottom()
-
-  // 如果是助手消息且语音开启，自动播放
-  if (role === 'assistant' && voiceEnabled.value && type === 'text') {
-    speakText(content)
-  }
 }
 
 // 发送消息
@@ -497,11 +508,26 @@ async function sendMessage() {
     const ticket = ticketRes.data.ticket
 
     // 获取学习数据上下文
-    const statsRes = await getDashboardStats().catch(() => ({ data: null }))
-    const plansRes = await getPlans({ page: 1, size: 10 }).catch(() => ({ data: { records: [] } }))
+    const [statsRes, plansRes, flashcardRes] = await Promise.all([
+      getDashboardStats().catch(() => ({ data: null })),
+      getPlans({ page: 1, size: 10 }).catch(() => ({ data: { records: [] } })),
+      getDueFlashcardCount().catch(() => ({ data: 0 }))
+    ])
+
+    const rawStats = statsRes.data
+    const dueCount = flashcardRes.data || 0
+    const stats = rawStats ? {
+      todayStudyMinutes: Math.floor((rawStats.todayDurationSeconds || 0) / 60),
+      totalStudyMinutes: Math.floor((rawStats.totalDurationSeconds || 0) / 60),
+      totalStudyHours: rawStats.totalStudyHours || 0,
+      quizAccuracy: rawStats.quizAccuracy || 0,
+      completedModules: rawStats.completedResources || 0,
+      totalModules: rawStats.totalResources || 0,
+      dueFlashcards: dueCount,
+    } : null
 
     const context = {
-      stats: statsRes.data,
+      stats: stats,
       plans: plansRes.data?.records || [],
       userMessage: text
     }
@@ -567,6 +593,8 @@ async function acceptPlanSuggestion(suggestion: any) {
 
     if (data.success) {
       addMessage('assistant', `✅ ${data.message}\n\n正在跳转到新计划...`)
+      // 通知学习顾问
+      localStorage.setItem('advisor_plan_created', `通过顾问建议创建了学习计划「${suggestion.title}」`)
 
       // 延迟后跳转到新计划
       setTimeout(() => {
@@ -633,66 +661,6 @@ function stopListening() {
   isListening.value = false
 }
 
-// 语音合成 - 使用小米 MiMo TTS
-async function speakText(text: string) {
-  if (isSpeaking.value) return
-
-  isSpeaking.value = true
-
-  try {
-    const ticketRes = await issueTicket()
-    const ticket = ticketRes.data.ticket
-
-    // 调用后端 TTS API
-    const response = await fetch(`${PYTHON_AI_BASE}/api/ai/plan-advisor/tts`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${ticket}`
-      },
-      body: JSON.stringify({
-        text: text,
-        voice: '冰糖'
-      })
-    })
-
-    if (!response.ok) {
-      throw new Error('语音合成失败')
-    }
-
-    // 获取音频数据
-    const audioBlob = await response.blob()
-    const audioUrl = URL.createObjectURL(audioBlob)
-
-    // 播放音频
-    const audio = new Audio(audioUrl)
-    audio.onended = () => {
-      isSpeaking.value = false
-      URL.revokeObjectURL(audioUrl)
-    }
-    audio.onerror = () => {
-      isSpeaking.value = false
-      URL.revokeObjectURL(audioUrl)
-    }
-    await audio.play()
-  } catch (e) {
-    console.error('Speak failed:', e)
-    isSpeaking.value = false
-    // 降级到浏览器原生 TTS
-    try {
-      const utterance = new SpeechSynthesisUtterance(text)
-      utterance.lang = 'zh-CN'
-      utterance.rate = 1.0
-      utterance.pitch = 1.0
-      utterance.onend = () => { isSpeaking.value = false }
-      utterance.onerror = () => { isSpeaking.value = false }
-      speechSynthesis.speak(utterance)
-    } catch (e2) {
-      console.error('Fallback TTS failed:', e2)
-    }
-  }
-}
-
 // 滚动到底部
 function scrollToBottom() {
   nextTick(() => {
@@ -709,12 +677,19 @@ defineExpose({
 
 // 生命周期
 onMounted(() => {
-  // 延迟后显示通知提示
+  // 检查是否有计划创建信号（由 PlanCreateView 写入）
+  const planCreated = localStorage.getItem('advisor_plan_created')
+  console.log('[AdvisorChat] onMounted 检查信号:', planCreated)
+  if (planCreated) {
+    hasNotification.value = true
+    localStorage.setItem('advisor_change_reason', planCreated)
+    console.log('[AdvisorChat] 检测到计划创建信号，已设通知')
+  }
+
+  // 页面加载后检测学习变化（延迟 4 秒，避免与 AdvisorSuggestionCloud 同时请求）
   setTimeout(() => {
-    if (!isOpen.value) {
-      hasNotification.value = true
-    }
-  }, 3000)
+    checkLearningChanges()
+  }, 4000)
 })
 </script>
 
@@ -730,19 +705,21 @@ onMounted(() => {
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #10b981, #0d9488);
-  color: white;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   transition: all 0.3s ease;
   position: relative;
+  padding: 0;
+  border: none;
+  cursor: pointer;
 }
 
 .advisor-trigger:hover {
   transform: scale(1.1);
-  box-shadow: 0 6px 25px rgba(16, 185, 129, 0.4);
+  box-shadow: 0 6px 25px rgba(0, 0, 0, 0.2);
 }
 
 .advisor-trigger.has-notification {

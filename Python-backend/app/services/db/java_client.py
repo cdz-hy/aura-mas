@@ -195,6 +195,15 @@ class JavaBackendClient:
         """获取学习计划"""
         return self._request("GET", f"/api/plan/internal/{plan_id}")
 
+    def adjust_plan(self, plan_id: int, action: str, reason: str, modules: List[str] = None) -> Dict[str, Any]:
+        """调整学习计划（加速/减速/重排等）"""
+        body = {
+            "action": action,
+            "reason": reason,
+            "modules_to_adjust": modules or []
+        }
+        return self._request("POST", f"/api/plan/internal/{plan_id}/adjust", json=body)
+
     def get_generation_task(self, task_id: int) -> Dict[str, Any]:
         """获取资源生成任务"""
         return self._request("GET", f"/api/resource-generation/internal/{task_id}")

@@ -35,8 +35,13 @@ public class StatsService {
     private final UserProfileMapper userProfileMapper;
 
     public Map<String, Object> getDashboardStats(Long userId) {
+        return getDashboardStats(userId, 0);
+    }
+
+    public Map<String, Object> getDashboardStats(Long userId, int days) {
         Map<String, Object> stats = new HashMap<>();
 
+        // 计划数量（状态类，不过滤日期）
         long planCount = planMapper.selectCount(
                 new LambdaQueryWrapper<LearningPlan>().eq(LearningPlan::getUserId, userId));
         stats.put("totalPlans", planCount);
@@ -57,14 +62,22 @@ public class StatsService {
                 new LambdaQueryWrapper<Note>().eq(Note::getUserId, userId));
         stats.put("totalNotes", noteCount);
 
-        long quizCount = quizRecordMapper.selectCount(
-                new LambdaQueryWrapper<QuizRecord>().eq(QuizRecord::getUserId, userId));
+        // 答题统计（按 days 过滤）
+        LambdaQueryWrapper<QuizRecord> quizQw = new LambdaQueryWrapper<QuizRecord>()
+                .eq(QuizRecord::getUserId, userId);
+        if (days > 0) {
+            quizQw.ge(QuizRecord::getAnswerTime, LocalDateTime.now().minusDays(days));
+        }
+        long quizCount = quizRecordMapper.selectCount(quizQw);
         stats.put("totalQuizzes", quizCount);
 
-        long correctQuizCount = quizRecordMapper.selectCount(
-                new LambdaQueryWrapper<QuizRecord>()
-                        .eq(QuizRecord::getUserId, userId)
-                        .eq(QuizRecord::getIsCorrect, 1));
+        LambdaQueryWrapper<QuizRecord> correctQw = new LambdaQueryWrapper<QuizRecord>()
+                .eq(QuizRecord::getUserId, userId)
+                .eq(QuizRecord::getIsCorrect, 1);
+        if (days > 0) {
+            correctQw.ge(QuizRecord::getAnswerTime, LocalDateTime.now().minusDays(days));
+        }
+        long correctQuizCount = quizRecordMapper.selectCount(correctQw);
         stats.put("correctQuizzes", correctQuizCount);
 
         // 今日学习时长（从 DailyStudyTime 表获取，与心跳写入一致）
@@ -76,19 +89,26 @@ public class StatsService {
                 ? todayDaily.getDurationSeconds() : 0;
         stats.put("todayDurationSeconds", todaySeconds);
 
-        // 累计学习时长（统一从 DailyStudyTime 取，与 todayDurationSeconds 同源）
-        List<DailyStudyTime> allDailyForTotal = dailyStudyTimeMapper.selectList(
-                new LambdaQueryWrapper<DailyStudyTime>()
-                        .eq(DailyStudyTime::getUserId, userId));
+        // 累计学习时长（按 days 过滤）
+        LambdaQueryWrapper<DailyStudyTime> dailyQw = new LambdaQueryWrapper<DailyStudyTime>()
+                .eq(DailyStudyTime::getUserId, userId);
+        if (days > 0) {
+            dailyQw.ge(DailyStudyTime::getStudyDate, LocalDate.now().minusDays(days));
+        }
+        List<DailyStudyTime> allDailyForTotal = dailyStudyTimeMapper.selectList(dailyQw);
         int totalSeconds = allDailyForTotal.stream()
                 .mapToInt(d -> d.getDurationSeconds() != null ? d.getDurationSeconds() : 0)
                 .sum();
         stats.put("totalDurationSeconds", totalSeconds);
 
-        long completedResources = progressMapper.selectCount(
-                new LambdaQueryWrapper<UserLearningProgress>()
-                        .eq(UserLearningProgress::getUserId, userId)
-                        .eq(UserLearningProgress::getStatus, 2));
+        // 完成资源数（按 days 过滤）
+        LambdaQueryWrapper<UserLearningProgress> progressQw = new LambdaQueryWrapper<UserLearningProgress>()
+                .eq(UserLearningProgress::getUserId, userId)
+                .eq(UserLearningProgress::getStatus, 2);
+        if (days > 0) {
+            progressQw.ge(UserLearningProgress::getCompleteTime, LocalDateTime.now().minusDays(days));
+        }
+        long completedResources = progressMapper.selectCount(progressQw);
         stats.put("completedResources", completedResources);
 
         // 用户所有学习计划对应的学习资源总数
@@ -262,12 +282,21 @@ public class StatsService {
 
     // ======================== 答题详细分析 ========================
     public Map<String, Object> getQuizAnalysis(Long userId) {
+        return getQuizAnalysis(userId, 0);
+    }
+
+    public Map<String, Object> getQuizAnalysis(Long userId, int days) {
         Map<String, Object> result = new HashMap<>();
 
-        List<QuizRecord> records = quizRecordMapper.selectList(
-                new LambdaQueryWrapper<QuizRecord>()
-                        .eq(QuizRecord::getUserId, userId)
-                        .orderByDesc(QuizRecord::getAnswerTime));
+        LambdaQueryWrapper<QuizRecord> qw = new LambdaQueryWrapper<QuizRecord>()
+                .eq(QuizRecord::getUserId, userId);
+        if (days > 0) {
+            LocalDateTime since = LocalDateTime.now().minusDays(days);
+            qw.ge(QuizRecord::getAnswerTime, since);
+        }
+        qw.orderByDesc(QuizRecord::getAnswerTime);
+
+        List<QuizRecord> records = quizRecordMapper.selectList(qw);
 
         if (records.isEmpty()) {
             result.put("byQuestionType", Collections.emptyList());
@@ -493,12 +522,20 @@ public class StatsService {
 
     // ======================== AI对话分析 ========================
     public Map<String, Object> getAiInteractionStats(Long userId) {
+        return getAiInteractionStats(userId, 0);
+    }
+
+    public Map<String, Object> getAiInteractionStats(Long userId, int days) {
         Map<String, Object> result = new HashMap<>();
 
-        List<AiDialogue> dialogues = aiDialogueMapper.selectList(
-                new LambdaQueryWrapper<AiDialogue>()
-                        .eq(AiDialogue::getUserId, userId)
-                        .orderByDesc(AiDialogue::getDialogueTime));
+        LambdaQueryWrapper<AiDialogue> qw = new LambdaQueryWrapper<AiDialogue>()
+                .eq(AiDialogue::getUserId, userId);
+        if (days > 0) {
+            qw.ge(AiDialogue::getDialogueTime, LocalDateTime.now().minusDays(days));
+        }
+        qw.orderByDesc(AiDialogue::getDialogueTime);
+
+        List<AiDialogue> dialogues = aiDialogueMapper.selectList(qw);
 
         long totalDialogues = dialogues.size();
         result.put("totalDialogues", totalDialogues);
@@ -611,28 +648,40 @@ public class StatsService {
 
     // ======================== 学习效率时段分析 ========================
     public Map<String, Object> getStudyEfficiency(Long userId) {
+        return getStudyEfficiency(userId, 0);
+    }
+
+    public Map<String, Object> getStudyEfficiency(Long userId, int days) {
         Map<String, Object> result = new HashMap<>();
 
-        // 按小时统计学习时长和会话次数（从 learning_duration 的 start_time 提取小时）
-        List<LearningDuration> allDurations = durationMapper.selectList(
-                new LambdaQueryWrapper<LearningDuration>()
-                        .eq(LearningDuration::getUserId, userId)
-                        .isNotNull(LearningDuration::getStartTime));
+        // 按小时统计学习时长和会话次数（从 user_learning_progress 的 start_time 提取小时）
+        LambdaQueryWrapper<UserLearningProgress> qw = new LambdaQueryWrapper<UserLearningProgress>()
+                .eq(UserLearningProgress::getUserId, userId)
+                .isNotNull(UserLearningProgress::getStartTime);
+        if (days > 0) {
+            LocalDateTime since = LocalDateTime.now().minusDays(days);
+            qw.ge(UserLearningProgress::getStartTime, since);
+        }
+        List<UserLearningProgress> allProgress = progressMapper.selectList(qw);
 
         // 按小时统计学习时长
         int[] studyMinutesByHour = new int[24];
         int[] sessionCountByHour = new int[24];
-        for (LearningDuration d : allDurations) {
-            int hour = d.getStartTime().getHour();
+        for (UserLearningProgress p : allProgress) {
+            int hour = p.getStartTime().getHour();
             sessionCountByHour[hour]++;
-            studyMinutesByHour[hour] += (d.getDurationSeconds() != null ? d.getDurationSeconds() : 0) / 60;
+            studyMinutesByHour[hour] += (p.getDurationSeconds() != null ? p.getDurationSeconds() : 0) / 60;
         }
 
         // 按小时统计答题正确率
-        List<QuizRecord> allQuizzes = quizRecordMapper.selectList(
-                new LambdaQueryWrapper<QuizRecord>()
-                        .eq(QuizRecord::getUserId, userId)
-                        .isNotNull(QuizRecord::getAnswerTime));
+        LambdaQueryWrapper<QuizRecord> quizQw = new LambdaQueryWrapper<QuizRecord>()
+                .eq(QuizRecord::getUserId, userId)
+                .isNotNull(QuizRecord::getAnswerTime);
+        if (days > 0) {
+            LocalDateTime since = LocalDateTime.now().minusDays(days);
+            quizQw.ge(QuizRecord::getAnswerTime, since);
+        }
+        List<QuizRecord> allQuizzes = quizRecordMapper.selectList(quizQw);
 
         int[] quizTotalByHour = new int[24];
         int[] quizCorrectByHour = new int[24];
@@ -766,14 +815,14 @@ public class StatsService {
         Map<String, Object> result = new HashMap<>();
 
         try {
-            result.put("overview", getDashboardStats(userId));
+            result.put("overview", getDashboardStats(userId, days));
         } catch (Exception e) {
             log.error("获取overview失败", e);
             result.put("overview", new HashMap<>());
         }
 
         try {
-            result.put("quizAnalysis", getQuizAnalysis(userId));
+            result.put("quizAnalysis", getQuizAnalysis(userId, days));
         } catch (Exception e) {
             log.error("获取quizAnalysis失败", e);
             result.put("quizAnalysis", new HashMap<>());
@@ -794,7 +843,7 @@ public class StatsService {
         }
 
         try {
-            result.put("aiInteraction", getAiInteractionStats(userId));
+            result.put("aiInteraction", getAiInteractionStats(userId, days));
         } catch (Exception e) {
             log.error("获取aiInteraction失败", e);
             result.put("aiInteraction", new HashMap<>());
@@ -808,7 +857,7 @@ public class StatsService {
         }
 
         try {
-            result.put("studyEfficiency", getStudyEfficiency(userId));
+            result.put("studyEfficiency", getStudyEfficiency(userId, days));
         } catch (Exception e) {
             log.error("获取studyEfficiency失败", e);
             result.put("studyEfficiency", new HashMap<>());

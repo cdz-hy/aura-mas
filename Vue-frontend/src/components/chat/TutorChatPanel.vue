@@ -187,6 +187,8 @@ import { useAuthStore } from '@/stores/auth'
 import { getCurrentProfile } from '@/api/user'
 import { getDashboardStats } from '@/api/stats'
 import { getKnowledgeMastery, getWeekComparison } from '@/api/analytics'
+import { getPlans, getPlan } from '@/api/plan'
+import { getPlanResources } from '@/api/resource'
 import { parseMarkdown } from '@/utils/markdown'
 import { felderAxisLabel } from '@/types/profile'
 import type { StudentProfile } from '@/types/profile'
@@ -311,14 +313,87 @@ async function fetchAnalyticsContext(): Promise<{ type: string; data: Record<str
   }
 }
 
+// 缓存计划数据（5 分钟 TTL）
+let cachedPlans: any[] | null = null
+let cachedPlansAt = 0
+
+async function fetchPlansContext(): Promise<Record<string, any>> {
+  try {
+    if (!cachedPlans || Date.now() - cachedPlansAt > CACHE_TTL) {
+      const res = await getPlans({ page: 1, size: 50 })
+      cachedPlans = res.data?.records || []
+      cachedPlansAt = Date.now()
+    }
+    const plans = cachedPlans
+    if (!plans.length) return { 学习计划: '暂无学习计划' }
+
+    const planList: Record<string, any> = {}
+    for (const p of plans.slice(0, 10)) {
+      const key = `计划「${p.title || '未命名'}」`
+      planList[key] = {
+        状态: p.status === 3 ? '进行中' : p.status === 4 ? '已完成' : '待开始',
+        进度: p.progress ? `${(p.progress * 100).toFixed(0)}%` : '',
+      }
+      // 尝试获取该计划的详细信息（包含模块列表）
+      try {
+        const detail = await getPlan(p.id)
+        const planData = detail.data as any
+        const modules = planData?.modules || planData?.planConfig?.modules || []
+        if (modules.length) {
+          planList[key]['模块'] = modules.map((m: any) => ({
+            标题: m.title,
+            描述: m.description?.slice(0, 60) || '',
+          }))
+        }
+      } catch {}
+    }
+    return { 我的学习计划: planList }
+  } catch {
+    return { 学习计划: '加载失败' }
+  }
+}
+
 async function gatherContext(): Promise<{ type: string; data: Record<string, any> }> {
   const path = route.path
-  if (path === '/dashboard') return fetchDashboardContext()
-  if (path === '/analytics' || path.startsWith('/analytics/')) return fetchAnalyticsContext()
-  if (path === '/profile') return fetchProfileContext()
-  if (path === '/notes' || path.startsWith('/notes/')) return { type: 'notes', data: { 页面: '我的笔记' } }
-  if (path === '/settings') return { type: 'settings', data: { 页面: '个人设置' } }
-  return { type: '', data: {} }
+  let pageCtx: { type: string; data: Record<string, any> }
+
+  if (path === '/dashboard') pageCtx = await fetchDashboardContext()
+  else if (path === '/analytics' || path.startsWith('/analytics/')) pageCtx = await fetchAnalyticsContext()
+  else if (path === '/profile') pageCtx = await fetchProfileContext()
+  else if (path === '/notes' || path.startsWith('/notes/')) pageCtx = { type: 'notes', data: { 页面: '我的笔记' } }
+  else if (path === '/settings') pageCtx = { type: 'settings', data: { 页面: '个人设置' } }
+  else if (path.startsWith('/plan/')) {
+    // 用户在计划详情页，提取当前计划信息
+    const planId = Number(path.split('/')[2])
+    if (planId) {
+      try {
+        const res = await getPlan(planId)
+        const p = res.data as any
+        const modules = p?.modules || p?.planConfig?.modules || []
+        pageCtx = {
+          type: 'plan_detail',
+          data: {
+            页面: '学习计划详情',
+            计划标题: p.title,
+            状态: p.status === 3 ? '进行中' : p.status === 4 ? '已完成' : '待开始',
+            模块列表: modules.map((m: any) => ({
+              标题: m.title,
+              描述: m.description?.slice(0, 80) || '',
+            })),
+          },
+        }
+      } catch {
+        pageCtx = { type: 'plan_detail', data: { 页面: '学习计划详情' } }
+      }
+    } else {
+      pageCtx = { type: 'plans', data: { 页面: '学习计划列表' } }
+    }
+  }
+  else pageCtx = { type: 'general', data: { 页面: '通用对话' } }
+
+  // 始终附加用户的学习计划概览
+  const plansCtx = await fetchPlansContext()
+  return { type: pageCtx.type, data: { ...pageCtx.data, ...plansCtx } }
 }
 
 // 路由变化时更新上下文：先同步设置页面类型，再异步获取详细数据
@@ -328,8 +403,15 @@ watch(() => route.path, async (path) => {
     '/dashboard': 'dashboard', '/analytics': 'analytics', '/profile': 'profile',
     '/notes': 'notes', '/settings': 'settings',
   }
-  const syncType = pageTypeMap[path] || (path.startsWith('/notes/') ? 'notes' : '') || (path.startsWith('/analytics/') ? 'analytics' : '')
+  const syncType = pageTypeMap[path]
+    || (path.startsWith('/notes/') ? 'notes' : '')
+    || (path.startsWith('/analytics/') ? 'analytics' : '')
+    || (path.startsWith('/plan/') ? 'plan_detail' : '')
   if (syncType) tutor.setPageContext(syncType, { 页面: '加载中...' })
+
+  // 路由变化时清除计划缓存，确保获取最新数据
+  cachedPlans = null
+  cachedPlansAt = 0
 
   const ctx = await gatherContext()
   tutor.setPageContext(ctx.type, ctx.data)

@@ -94,4 +94,18 @@ public class StatsController {
         Long userId = AuthUtils.getCurrentUserId(authentication);
         return Result.success(statsService.getWeekComparison(userId));
     }
+
+    @Operation(summary = "内部接口：获取答题详细分析")
+    @GetMapping("/internal/quiz-analysis")
+    public Result<Map<String, Object>> getQuizAnalysisInternal(@RequestParam Long userId) {
+        return Result.success(statsService.getQuizAnalysis(userId));
+    }
+
+    @Operation(summary = "内部接口：获取学习热力图数据")
+    @GetMapping("/internal/study-heatmap")
+    public Result<Map<String, Object>> getStudyHeatmapInternal(
+            @RequestParam Long userId,
+            @RequestParam(defaultValue = "180") int days) {
+        return Result.success(statsService.getStudyHeatmap(userId, days));
+    }
 }

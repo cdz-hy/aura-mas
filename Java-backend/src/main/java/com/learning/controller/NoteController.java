@@ -119,4 +119,13 @@ public class NoteController {
     public Result<Note> getNoteInternal(@PathVariable Long noteId) {
         return Result.success(noteService.getNoteById(noteId));
     }
+
+    @Operation(summary = "内部接口：获取用户笔记列表")
+    @GetMapping("/internal/list")
+    public Result<PageResult<Note>> getNotesInternal(
+            @RequestParam Long userId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        return Result.success(noteService.getUserNotes(userId, page, size, null));
+    }
 }

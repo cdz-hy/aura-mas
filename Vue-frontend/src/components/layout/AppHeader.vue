@@ -1,5 +1,5 @@
 <template>
-  <header class="h-16 border-b border-navy-100/50 bg-white/80 backdrop-blur-sm flex items-center justify-between px-6 flex-shrink-0">
+  <header class="h-16 border-b border-navy-100/50 bg-white/80 backdrop-blur-sm flex items-center justify-between px-6 flex-shrink-0 relative z-50">
     <!-- Left: collapse toggle + breadcrumb -->
     <div class="flex items-center gap-4">
       <button
@@ -20,7 +20,7 @@
       </nav>
     </div>
 
-    <!-- Right: notes toggle + tutor toggle + user actions -->
+    <!-- Right: notes toggle + tutor toggle + strategy notification + user actions -->
     <div class="flex items-center gap-3">
       <template v-if="!authStore.isAdmin">
         <button
@@ -43,6 +43,7 @@
           <img :src="tutorGif" alt="" class="w-4 h-4 rounded object-cover" />
           智能辅导
         </button>
+        <StrategyNotification />
         <div class="w-px h-6 bg-navy-100"></div>
       </template>
 
@@ -67,6 +68,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import tutorGif from '@/image/智能辅导.gif'
+import StrategyNotification from '@/components/common/StrategyNotification.vue'
 
 const route = useRoute()
 const router = useRouter()

@@ -71,6 +71,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getDueFlashcards, getFlashcardsByNote } from '@/api/flashcard'
 import FlashcardPlayer from '@/components/flashcard/FlashcardPlayer.vue'
+import { tracker } from '@/utils/tracker'
 import type { Flashcard } from '@/types/flashcard'
 
 const router = useRouter()
@@ -87,6 +88,14 @@ function goBack() {
 
 function onReviewed(cardId: number, quality: number) {
   reviewedCount.value++
+
+  // 追踪闪卡复习事件
+  tracker.trackFlashcardReview({
+    cardId: cardId,
+    quality: quality,
+    isCorrect: quality >= 3
+  })
+
   // 移除已复习的卡片
   cards.value = cards.value.filter(c => c.id !== cardId)
 

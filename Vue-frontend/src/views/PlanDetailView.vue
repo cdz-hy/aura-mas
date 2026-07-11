@@ -680,6 +680,7 @@ import { PYTHON_AI_BASE } from '@/api/request'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useHeartbeat } from '@/composables/useHeartbeat'
+import { tracker } from '@/utils/tracker'
 import { showToast } from '@/composables/useToast'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
@@ -1262,6 +1263,13 @@ async function toggleResourceComplete(res: LearningResource, e: Event) {
     } else {
       await markResourceComplete(planIdVal, res.id)
       progressMap.value = { ...progressMap.value, [res.id]: 2 }
+
+      // 追踪资源完成事件
+      tracker.trackResourceComplete({
+        resourceId: res.id,
+        resourceType: res.moduleType || 'text',
+        planId: planIdVal
+      })
     }
   } catch (err) {
     console.error('[PlanDetail] 更新完成状态失败:', err)
@@ -1277,6 +1285,13 @@ function handleKeyDown(e: KeyboardEvent) {
 onMounted(async () => {
   loadPlan()
   await loadResources()
+
+  // 追踪页面浏览
+  tracker.trackPageView({
+    page: 'plan_detail',
+    planId: planId.value
+  })
+
   window.addEventListener('keydown', handleKeyDown)
   document.addEventListener('mousedown', onDocumentMouseDown)
   // 支持 ?resource=xxx 跳转自动打开对应资源
@@ -2562,6 +2577,14 @@ function toggleResource(res: LearningResource, options: ToggleResourceOptions = 
 
   // Start heartbeat for this resource
   heartbeat.start(planId.value, res.id)
+
+  // 追踪资源查看事件
+  tracker.trackResourceView({
+    resourceId: res.id,
+    resourceType: res.moduleType || 'text',
+    planId: planId.value
+  })
+
   gradingResult.value = null
   quizSubmittedAnswers.value = null
   showExplanations.value = false
@@ -2883,6 +2906,16 @@ function onQuizSubmit(userAnswers: Record<number, any>) {
             correct: result.correct,
             details: result.details,
           }
+
+          // 追踪测验提交事件
+          tracker.trackQuizSubmit({
+            resourceId: selectedResource.value!.id,
+            planId: planId.value,
+            score: result.score,
+            totalQuestions: result.total,
+            correctAnswers: result.correct
+          })
+
           // 同步更新本地资源的 moduleData.latestResult，避免重新打开时再请求
           const res = selectedResource.value
           if (res && res.moduleData) {
