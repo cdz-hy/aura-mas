@@ -199,6 +199,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { getPlans, deletePlan, updatePlan } from '@/api/plan'
 import { getDashboardStats, getGreeting } from '@/api/stats'
+import { tracker } from '@/utils/tracker'
 import { getPlanResources, getProgressByPlan, markResourceComplete, getBatchProgress, markAllComplete } from '@/api/resource'
 import type { DashboardStats } from '@/api/stats'
 import type { LearningPlan } from '@/types/plan'
@@ -414,6 +415,12 @@ function onVisibilityChange() {
 
 onMounted(() => {
   loadDashboard()
+
+  // 追踪页面浏览
+  tracker.trackPageView({
+    page: 'dashboard'
+  })
+
   document.addEventListener('visibilitychange', onVisibilityChange)
 })
 

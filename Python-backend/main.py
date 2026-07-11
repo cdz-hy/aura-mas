@@ -54,6 +54,11 @@ async def lifespan(app: FastAPI):
     await mq_consumer.start()
     await cache_consumer.start()
 
+    # 启动定时任务调度器
+    from app.services.scheduler import start_scheduler
+    start_scheduler()
+    logger.info("定时任务调度器已启动")
+
     # 预热：提前构建 LangGraph 图 + 检查 Redis，避免首次请求卡顿
     logger.info("正在预热系统资源...")
     _get_redis()  # 触发一次 Redis 连接检查，失败则永久降级
@@ -77,6 +82,10 @@ async def lifespan(app: FastAPI):
             await keepalive_task
         except asyncio.CancelledError:
             pass
+
+    # 停止定时任务调度器
+    from app.services.scheduler import stop_scheduler
+    stop_scheduler()
 
     await cache_consumer.stop()
     await mq_consumer.stop()

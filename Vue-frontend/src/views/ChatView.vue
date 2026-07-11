@@ -169,6 +169,7 @@ import { ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { parseMarkdown } from '@/utils/markdown'
 import { useChatStore } from '@/stores/chat'
+import { tracker } from '@/utils/tracker'
 import ChatSessionSidebar from '@/components/chat/ChatSessionSidebar.vue'
 import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
 import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
@@ -223,6 +224,14 @@ function sendMessage() {
   if (!text) return
   inputText.value = ''
   showModifyInput.value = false
+
+  // 追踪 AI 对话事件
+  tracker.trackAiChat({
+    sessionId: store.activeSessionId || '',
+    planId: Number(planId) || undefined,
+    messageLength: text.length
+  })
+
   // 确认状态下，底部输入也走 confirmBreakdown 以携带 task_breakdown 上下文
   if (store.awaitingConfirmation && store.pendingTaskBreakdown) {
     store.confirmBreakdown(planId, text)

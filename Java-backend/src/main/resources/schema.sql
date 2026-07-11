@@ -418,3 +418,35 @@ CREATE TABLE IF NOT EXISTS `resource_library` (
     KEY `idx_status` (`status`),
     KEY `idx_created_by` (`created_by`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='资源库表';
+
+-- 学习行为追踪表
+CREATE TABLE IF NOT EXISTS `learning_events` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `event_type` VARCHAR(50) NOT NULL,
+    `event_data` JSON,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_user_time` (`user_id`, `created_at`),
+    KEY `idx_event_type` (`event_type`),
+    KEY `idx_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学习行为追踪表';
+
+-- 学习策略推送表
+CREATE TABLE IF NOT EXISTS `learning_strategies` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `strategy_type` VARCHAR(50) NOT NULL,
+    `title` VARCHAR(200) NOT NULL,
+    `description` TEXT,
+    `strategy_data` JSON NOT NULL,
+    `status` VARCHAR(20) DEFAULT 'pending',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `expires_at` DATETIME,
+    `accepted_at` DATETIME,
+    PRIMARY KEY (`id`),
+    KEY `idx_user_status` (`user_id`, `status`),
+    KEY `idx_user_time` (`user_id`, `created_at`),
+    KEY `idx_status` (`status`),
+    KEY `idx_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学习策略推送表';

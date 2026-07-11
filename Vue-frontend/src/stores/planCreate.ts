@@ -334,6 +334,13 @@ export const usePlanCreateStore = defineStore('planCreate', () => {
                   await bulkCreateResources(resourcesToCreate)
                   progressLogs.value.push(`已保存 ${resourcesToCreate.length} 个资源条目`)
                 }
+
+                // 通知学习顾问：计划已创建
+                const planTitle = planData.summary || goal.substring(0, 50)
+                const modCount = modules.length
+                const signalMsg = `新创建了学习计划「${planTitle}」，包含 ${modCount} 个模块，请分析并给出后续学习建议`
+                localStorage.setItem('advisor_plan_created', signalMsg)
+                console.log('[PlanCreate] 写入 advisor_plan_created 信号:', signalMsg)
               } catch (e: any) {
                 console.error('Failed to persist plan data:', e)
                 progressLogs.value.push(`保存失败: ${e.message}`)

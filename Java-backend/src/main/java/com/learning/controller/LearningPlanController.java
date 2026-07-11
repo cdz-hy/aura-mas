@@ -11,9 +11,11 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+@Slf4j
 @Tag(name = "学习计划管理")
 @RestController
 @RequestMapping("/api/plan")
@@ -125,6 +127,23 @@ public class LearningPlanController {
         if (planConfig != null) {
             planService.updatePlanConfig(planId, planConfig);
         }
+        return Result.success();
+    }
+
+    @Operation(summary = "内部接口：调整计划（加速/减速/重排等）")
+    @PostMapping("/internal/{planId}/adjust")
+    public Result<Void> adjustPlanInternal(@PathVariable Long planId,
+                                            @RequestBody java.util.Map<String, Object> body) {
+        String action = (String) body.get("action");
+        String reason = (String) body.get("reason");
+        @SuppressWarnings("unchecked")
+        java.util.List<String> modules = (java.util.List<String>) body.get("modules_to_adjust");
+
+        // 这里可以根据 action 执行不同的调整逻辑
+        // 例如：accelerate, decelerate, reorder, add_review, skip
+        log.info("[计划调整] planId={}, action={}, reason={}, modules={}", planId, action, reason, modules);
+
+        // 目前只记录日志，后续可以实现具体的调整逻辑
         return Result.success();
     }
 }

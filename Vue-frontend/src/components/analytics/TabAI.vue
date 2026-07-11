@@ -81,12 +81,15 @@ import { Chart as ChartJS, CategoryScale, LinearScale, ArcElement, BarElement, T
 import { Doughnut, Bar } from 'vue-chartjs'
 import type { AnalyticsData } from '@/api/analytics'
 import { PYTHON_AI_BASE } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
 
 ChartJS.register(CategoryScale, LinearScale, ArcElement, BarElement, Title, Tooltip, Legend)
 
 const props = defineProps<{
   data: AnalyticsData
 }>()
+
+const authStore = useAuthStore()
 
 const reportLoading = ref(false)
 const reportContent = ref('')
@@ -197,6 +200,7 @@ async function generateReport() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        user_id: authStore.user?.id || 0,
         overview: data.overview || {},
         quiz_analysis: data.quizAnalysis || {},
         heatmap: data.heatmap || {},
