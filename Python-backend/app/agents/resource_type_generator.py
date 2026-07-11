@@ -825,7 +825,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
                 audio.pause();
                 isPlaying = false;
             }} else {{
-                audio.play().catch(err => console.log("播放失败: ", err));
+                audio.play().catch(err => console.log("播放失败: ", err && err.message ? err.message : String(err)));
                 isPlaying = true;
             }}
             updatePlayerState();
@@ -847,6 +847,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
             if (!audio) return;
             const cur = audio.currentTime;
             const dur = audio.duration || 1;
+            if (!isFinite(dur) || dur <= 0) return;
             const pct = (cur / dur) * 100;
             document.getElementById('progressFill').style.width = `${{pct}}%`;
             document.getElementById('currentTime').innerText = formatTime(cur);
@@ -854,6 +855,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
         
         function seekAudio(e) {{
             if (!audio) return;
+            if (!isFinite(audio.duration) || audio.duration <= 0) return;
             const bar = document.getElementById('progressBar');
             const rect = bar.getBoundingClientRect();
             const clickX = e.clientX - rect.left;

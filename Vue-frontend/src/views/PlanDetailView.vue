@@ -374,7 +374,15 @@
           <!-- 动画类型 -->
           <template v-else-if="selectedResource.moduleType === 'animation'">
             <div v-if="animationHtml" class="animation-stage" :style="isFullscreen ? { width: 'min(100%, calc((100vh - 80px) * 16 / 9))' } : {}">
+              <AnimationPlayer
+                v-if="selectedResource.moduleData?.narration?.version === 1"
+                :resource-id="selectedResource.id"
+                :html="animationHtml"
+                :narration="selectedResource.moduleData.narration"
+                :video-exports="selectedResource.moduleData.videoExports"
+              />
               <iframe
+                v-else
                 class="animation-frame"
                 :class="{ 'pointer-events-none': isDragging }"
                 :srcdoc="animationHtml"
@@ -393,7 +401,7 @@
               <iframe
                 class="podcast-frame"
                 :class="{ 'pointer-events-none': isDragging }"
-                :srcdoc="selectedResource.moduleData?.content || selectedResource.moduleData?.html"
+                :srcdoc="podcastHtml"
                 sandbox="allow-scripts allow-same-origin allow-downloads"
                 title="播客节目"
               ></iframe>
@@ -672,7 +680,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { getPlan, updatePlan, generatePlanIcon } from '@/api/plan'
 import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi, deleteResource as deleteResourceApi, markResourceComplete, unmarkResourceComplete, getProgressByPlan, updateResourceContent, bulkCreateResources } from '@/api/resource'
 import { parseMarkdown, extractCitations, normalizeMermaidCode } from '@/utils/markdown'
-import { normalizeAnimationHtml } from '@/utils/animationHtml'
+import { normalizeAnimationHtml, prepareAnimationHtmlForPlayer } from '@/utils/animationHtml'
+import { rewriteEmbeddedAudioUrls } from '@/utils/animationPlayback'
 import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
 import { issueTicket } from '@/api/auth'
@@ -688,6 +697,7 @@ import QuizStreamPreview from '@/components/resource/QuizStreamPreview.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import VideoPlayer from '@/components/resource/VideoPlayer.vue'
 import PptxViewer from '@/components/resource/PptxViewer.vue'
+import AnimationPlayer from '@/components/resource/AnimationPlayer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
 import KnowledgeTreeCanvas from '@/components/tree/KnowledgeTreeCanvas.vue'
 import PlanResourceOutline from '@/components/plan/PlanResourceOutline.vue'
@@ -1578,7 +1588,7 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
 }
 
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客', pptx: 'PPT',
+  document: '文档', text: '正文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客', pptx: 'PPT',
 }
 
 // ==================== 计算属性 ====================
@@ -2437,7 +2447,18 @@ function handleCitationClick(e: MouseEvent) {
 const animationHtml = computed(() => {
   const md = selectedResource.value?.moduleData
   if (!md) return ''
-  return normalizeAnimationHtml(md.html || md.content || '')
+  const raw = md.html || md.content || ''
+  if (selectedResource.value?.moduleType === 'animation' && md.narration?.version === 1) {
+    return prepareAnimationHtmlForPlayer(raw)
+  }
+  return normalizeAnimationHtml(raw)
+})
+
+const podcastHtml = computed(() => {
+  const md = selectedResource.value?.moduleData
+  if (!md) return ''
+  const raw = md.content || md.html || ''
+  return rewriteEmbeddedAudioUrls(raw, PYTHON_AI_BASE)
 })
 
 // ==================== 资源详情 ====================
@@ -2569,14 +2590,27 @@ function toggleResource(res: LearningResource, options: ToggleResourceOptions = 
   selectedResourceId.value = res.id
   selectedResource.value = res
 
+  // #region agent log
+  {
+    const md = res.moduleData || {}
+    const narration = md.narration || null
+    const htmlSnippet = String(md.content || md.html || '').slice(0, 200)
+    fetch('http://127.0.0.1:7296/ingest/e9514b2d-72ba-413a-b7bd-0ae318ec510a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '84be90' }, body: JSON.stringify({ sessionId: '84be90', runId: 'pre-fix', hypothesisId: 'B,C', location: 'PlanDetailView.vue:selectResource', message: 'resource selected for preview', data: { resourceId: res.id, moduleType: res.moduleType, hasNarrationV1: narration?.version === 1, narrationAudioUrl: narration?.audioUrl || null, narrationAudioStatus: narration?.audioStatus || null, htmlHasPodcastAudio: /podcast-audio/.test(htmlSnippet) || /podcast-audio/.test(String(md.content || md.html || '')), audioUrlInHtml: (String(md.content || md.html || '').match(/https?:\/\/[^"'\\s]+(?:podcast-audio|wav|mp3)[^"'\\s]*/i) || [null])[0] }, timestamp: Date.now() }) }).catch(() => {})
+  }
+  // #endregion
+
   // 联动左侧大纲：找到资源对应的节点并高亮
   const nodeId = findNodeIdForResource(res)
   if (nodeId) {
     knowledgeTreeStore.currentNodeId = nodeId
   }
 
-  // Start heartbeat for this resource
-  heartbeat.start(planId.value, res.id)
+    // Start heartbeat for this resource (skip temp/placeholder ids)
+    if (typeof res.id === 'number' && res.id > 0) {
+      heartbeat.start(planId.value, res.id)
+    } else {
+      heartbeat.stop()
+    }
 
   // 追踪资源查看事件
   tracker.trackResourceView({

@@ -114,6 +114,11 @@ public class UserLearningProgressService {
     @Transactional
     public void heartbeat(Long userId, Long planId, Long resourceId, int elapsedSeconds) {
         if (elapsedSeconds <= 0) return;
+        // resource_id is BIGINT UNSIGNED — reject temp/placeholder negative ids from the client
+        if (userId == null || userId <= 0 || planId == null || planId <= 0
+                || resourceId == null || resourceId <= 0) {
+            return;
+        }
         UserLearningProgress existing = progressMapper.selectOne(
                 new LambdaQueryWrapper<UserLearningProgress>()
                         .eq(UserLearningProgress::getUserId, userId)

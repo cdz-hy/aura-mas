@@ -306,7 +306,7 @@
             <p class="text-navy-700">你正在查看「<span class="font-medium">{{ moduleContextMessage.title }}</span>」，如需为该模块生成补充资源，请点击：</p>
             <div class="mt-3 flex flex-wrap gap-2">
               <button
-                v-for="opt in resourceOptions" :key="opt.type"
+                v-for="opt in resourceGenerationOptions" :key="opt.type"
                 class="text-xs px-3 py-1.5 rounded-full border transition-colors"
                 :class="generatingType === opt.type ? 'bg-navy-600 text-white border-navy-600' : 'bg-white text-navy-600 border-navy-200 hover:bg-navy-50'"
                 :disabled="!!generatingType"
@@ -475,6 +475,7 @@ import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
 import tutorGif from '@/image/智能辅导.gif'
 import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
 import { useVoiceInput } from '@/composables/useVoiceInput'
+import { resourceGenerationOptions } from '@/constants/resourceGenerationOptions'
 
 const props = defineProps<{
   planId: string
@@ -577,19 +578,8 @@ const quickQuestions = [
   '这个知识点不太理解',
 ]
 
-const resourceOptions = [
-  { type: 'quiz', label: '测验' },
-  { type: 'mindmap', label: '思维导图' },
-  { type: 'code', label: '代码示例' },
-  { type: 'summary', label: '总结' },
-  { type: 'video', label: '教学视频' },
-  { type: 'animation', label: '动画' },
-  { type: 'podcast', label: '播客' },
-  { type: 'pptx', label: 'PPT' },
-]
-
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客', pptx: 'PPT',
+  document: '文档', text: '正文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客', pptx: 'PPT',
 }
 
 const moduleContextMessage = computed(() => chatStore.selectedModuleContext ? { title: chatStore.selectedModuleContext.title } : null)

@@ -2,6 +2,15 @@
 
 交付前逐条检查，不通过则自动修复。
 
+## AURA 结构契约（任何一项失败都不得交付）
+
+- 2-12 个互为兄弟的 `section.beat`，仅第一个初始包含 `active`，无嵌套 beat
+- 每个 beat 都有 30-220 字的中文 `data-narration`，无 HTML/CSS/JS/GSAP 代码
+- 只有一个 GSAP CDN 外链 script 和一个位于 `</body>` 前的内联 script
+- 内联脚本只定义 `window.animateBeat(index)`，不自行调用、不切页、不修改 active class
+- 不存在 nav/button/audio/video、播放控件、点击/键盘事件、setInterval、自动翻页或缩放监听
+- script/style 文本绝不能出现在 beat 内或可见正文中
+
 1. 口播稿是否经过审查
 2. 每个节拍是否有明确的视觉动词
 3. 每个节拍是否只有一个核心信息

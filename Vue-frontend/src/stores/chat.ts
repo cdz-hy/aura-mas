@@ -7,7 +7,7 @@ import { getSessions, getSessionMessages, getDialogueHistoryByPlan, deleteSessio
 import type { ChatSession, ChatMessage } from '@/types/chat'
 
 const moduleTypeLabels: Record<string, string> = {
-  text: '图文', image: '图片', diagram: '导图', code: '代码', quiz: '题目', summary: '总结',
+  text: '正文', image: '图片', diagram: '导图', code: '代码', quiz: '题目', summary: '总结',
   document: '文档', mindmap: '导图', reading: '阅读', video: '教学视频', podcast: '播客',
 }
 
@@ -898,7 +898,7 @@ export const useChatStore = defineStore('chat', () => {
     if (streaming.value) return
 
     const typeLabels: Record<string, string> = {
-      text: '图文', document: '文档', quiz: '测验', mindmap: '思维导图', code: '代码示例', summary: '总结', video: '教学视频', animation: '动画', podcast: '播客', pptx: 'PPT',
+      text: '正文', document: '文档', quiz: '测验', mindmap: '思维导图', code: '代码示例', summary: '总结', video: '教学视频', animation: '动画', podcast: '播客', pptx: 'PPT',
     }
     const typeLabel = typeLabels[resourceType] || resourceType
     const capturedSessionId = activeSessionId.value

@@ -372,6 +372,8 @@ class MQConsumer:
                 result_data["animationSpec"] = generated_content.get("animationSpec", {})
                 result_data["duration"] = generated_content.get("duration")
                 result_data["metadata"] = generated_content.get("metadata", {})
+                result_data["narration"] = generated_content.get("narration")
+                result_data["videoExports"] = generated_content.get("videoExports", {})
             module_data_json = json.dumps(result_data, ensure_ascii=False)
         elif orchestrated or module_list:
             first_module = module_list[0] if module_list else {}

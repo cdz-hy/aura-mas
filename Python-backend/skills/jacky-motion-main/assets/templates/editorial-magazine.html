@@ -15,10 +15,11 @@
   3. .beat 用 position:absolute;inset:0 撑满画布，不加 padding
   4. 内部容器自行设 padding 和布局，加 overflow:hidden
   5. body 背景色必须与 stage 主背景色相同
-  6. stage 用固定像素（1920x1080 或 1440x1080）+ JS transform:scale() 缩放
-  7. 导航栏放在 #stage 内部，用 position:absolute，禁止 fixed
-  8. 字号下限（16:9）：标题 >= 96px，正文 >= 25px，标签 >= 18px
-  9. 视觉重心：每个 beat 必须有一个主导元素显著大于其他。图文 beat 截图 >= 40% 面积或标题 >= 正文 3 倍；纯文字 beat 主标题 >= 120px。禁止所有元素同等大小平铺
+  6. stage 固定 1920x1080；宿主应用负责缩放
+  7. 禁止生成导航、播放器、键盘/点击事件和自动翻页
+  8. 每个 section.beat 必须带 30-220 字 data-narration
+  9. 字号下限（16:9）：标题 >= 96px，正文 >= 25px，标签 >= 18px
+  10. 每个 beat 必须是 #stage 直接子级，并带从 0 连续递增的 data-beat
   -->
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&family=Noto+Sans+SC:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap');
@@ -215,42 +216,18 @@
 </head>
 <body>
 <main id="stage" aria-live="polite">
-  <!-- AI 为每个 beat 编写独立的 <section class="beat"> -->
-  <div class="hint">Click / Space / →</div>
+  <section class="beat active" data-beat="0" data-narration="这里填写三十到二百二十字的自然中文讲解，说明第一屏画面的核心概念和视觉关系。"></section>
+  <section class="beat" data-beat="1" data-narration="这里填写三十到二百二十字的自然中文讲解，承接上一屏并解释第二屏展示的关键过程。"></section>
 </main>
 
 <script>
-const beats = [...document.querySelectorAll('.beat')];
-let current = 0;
-
-const stage = document.getElementById('stage');
-function scaleStage(){
-  const s = Math.min(innerWidth/1920, innerHeight/1080);
-  stage.style.transform = 'scale('+s+')';
-}
-scaleStage();
-window.addEventListener('resize', scaleStage);
-
-function showBeat(idx) {
-  current = Math.max(0, Math.min(idx, beats.length - 1));
-  beats.forEach((b, i) => b.classList.toggle('active', i === current));
-  animateBeat(beats[current]);
-}
-
-function kill(beat) {
-  gsap.killTweensOf(beat.querySelectorAll('*'));
-  gsap.set(beat.querySelectorAll('*'), { clearProps: 'all' });
-}
-
-// AI 在这里编写 animateBeat(beat) 函数，为每个 beat 定制 GSAP timeline
-
-document.getElementById('stage').addEventListener('click', () => showBeat(current + 1));
-window.addEventListener('keydown', e => {
-  if (e.key === ' ' || e.key === 'ArrowRight') { e.preventDefault(); showBeat(current + 1); }
-  if (e.key === 'ArrowLeft' || e.key === 'Backspace') { e.preventDefault(); showBeat(current - 1); }
-});
-
-if (beats[0]) { beats[0].classList.add('active'); }
+window.animateBeat = function(index) {
+  const beat = document.querySelectorAll('#stage > .beat')[index];
+  if (!beat) return null;
+  const tl = gsap.timeline();
+  tl.from(beat.children, { opacity:0, y:30, duration:.6, stagger:.08 });
+  return tl;
+};
 </script>
 </body>
 </html>

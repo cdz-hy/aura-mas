@@ -4,6 +4,7 @@ import { resourceGenerationOptions } from './resourceGenerationOptions'
 describe('resourceGenerationOptions', () => {
   it('matches the assistant resource prompt options in order', () => {
     expect(resourceGenerationOptions).toEqual([
+      { type: 'text', label: '正文' },
       { type: 'quiz', label: '测验' },
       { type: 'mindmap', label: '思维导图' },
       { type: 'code', label: '代码示例' },
@@ -13,5 +14,9 @@ describe('resourceGenerationOptions', () => {
       { type: 'podcast', label: '播客' },
       { type: 'pptx', label: 'PPT' },
     ])
+  })
+
+  it('puts 正文 first so the outline generate menu can create main content', () => {
+    expect(resourceGenerationOptions[0]).toEqual({ type: 'text', label: '正文' })
   })
 })

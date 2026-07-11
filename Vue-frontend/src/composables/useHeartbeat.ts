@@ -12,6 +12,13 @@ export function useHeartbeat() {
   let currentResourceId: number | null = null
 
   function start(planId: number, resourceId: number) {
+    // Temporary / placeholder resources use negative ids (e.g. -Date.now()).
+    // DB column resource_id is UNSIGNED — never heartbeat for those.
+    if (!Number.isFinite(planId) || planId <= 0 || !Number.isFinite(resourceId) || resourceId <= 0) {
+      stop()
+      return
+    }
+
     // Switching resource — flush accumulated time for old resource
     if (isRunning.value && (currentPlanId !== planId || currentResourceId !== resourceId)) {
       flush()
@@ -41,7 +48,7 @@ export function useHeartbeat() {
   }
 
   function _sendHeartbeat() {
-    if (!currentPlanId || !currentResourceId) return
+    if (currentPlanId == null || currentResourceId == null || currentPlanId <= 0 || currentResourceId <= 0) return
     const now = Date.now()
     const elapsed = Math.round((now - lastTick) / 1000)
     if (elapsed <= 0) return
@@ -59,7 +66,7 @@ export function useHeartbeat() {
   }
 
   function flush() {
-    if (!currentPlanId || !currentResourceId) return
+    if (currentPlanId == null || currentResourceId == null || currentPlanId <= 0 || currentResourceId <= 0) return
     const now = Date.now()
     const elapsed = Math.round((now - lastTick) / 1000)
     if (elapsed <= 0 || elapsed > 60) return

@@ -5,6 +5,7 @@ export interface ResourceGenerationOption {
 
 /** 左侧大纲与右侧助手共用的补充资源生成选项 */
 export const resourceGenerationOptions: ResourceGenerationOption[] = [
+  { type: 'text', label: '正文' },
   { type: 'quiz', label: '测验' },
   { type: 'mindmap', label: '思维导图' },
   { type: 'code', label: '代码示例' },

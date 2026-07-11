@@ -16,6 +16,7 @@ from app.api.v1.endpoints import knowledge_graph
 from app.api.v1.endpoints import admin_resource
 from app.api.v1.endpoints import asr
 from app.api.v1.endpoints import plan_advisor
+from app.api.v1.endpoints import animation_export
 from app.core.config import settings
 from app.core.reload import get_reload_dirs
 from app.services.mq_consumer import mq_consumer
@@ -53,6 +54,19 @@ async def lifespan(app: FastAPI):
     logger.info("正在启动 MQ 消费者...")
     await mq_consumer.start()
     await cache_consumer.start()
+    try:
+        from app.services.animation_renderer import dependency_status
+        from app.workers.animation_export_worker import start_background_worker
+
+        deps = dependency_status()
+        missing = [name for name, ready in deps.items() if not ready and name != "ffprobe"]
+        if missing:
+            logger.warning("动画视频导出依赖未就绪，后台导出 worker 未启动: %s", ", ".join(missing))
+        else:
+            start_background_worker()
+            logger.info("动画视频导出 worker 已启动")
+    except Exception:
+        logger.exception("动画视频导出 worker 启动失败，其余服务继续运行")
 
     # 启动定时任务调度器
     from app.services.scheduler import start_scheduler
@@ -89,6 +103,12 @@ async def lifespan(app: FastAPI):
 
     await cache_consumer.stop()
     await mq_consumer.stop()
+    try:
+        from app.workers.animation_export_worker import stop_background_worker
+
+        stop_background_worker()
+    except Exception:
+        logger.exception("动画视频导出 worker 关闭失败")
     logger.info("MQ 消费者已关闭")
 
 
@@ -112,6 +132,7 @@ app.include_router(plan_generator.router, prefix="/api/ai/plan", tags=["计划�
 app.include_router(resource_chat.router, prefix="/api/ai", tags=["资源对话"])
 app.include_router(knowledge_graph.router, prefix="/api/ai", tags=["知识图谱"])
 app.include_router(knowledge_tree.router, prefix="/api/ai", tags=["知识树 AI"])
+app.include_router(animation_export.router, prefix="/api/ai", tags=["动画视频导出"])
 
 # 路由注册 - 知识库管理接口
 app.include_router(kb.router, prefix="/api/v1/kb", tags=["知识库管理"])

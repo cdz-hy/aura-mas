@@ -1324,14 +1324,10 @@ async def generate_single_resource(
                             yield f'data: {json.dumps({"type": "error", "content": item.get("error")}, ensure_ascii=False)}\n\n'
 
                 if videos:
-<<<<<<< HEAD
-                    res_id = _save_video_resource(plan_id_int, videos, current_module_order, node_id=node_id)
-=======
                     res_id = _save_video_resource(
                         plan_id_int, videos, current_module_order,
                         parent_id=generated_parent_id, node_id=node_id,
                     )
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
                     if res_id:
                         res_info = [{"id": res_id, "type": "video", "title": f"{title} - 教学视频"}]
                         yield f'data: {json.dumps({"type": "resource_generated", "resources": res_info}, ensure_ascii=False)}\n\n'
@@ -1383,7 +1379,6 @@ async def generate_single_resource(
             # 只有当前端占位类型与目标类型一致时才复用，否则创建新占位
             can_reuse_frontend = module_id_int and current_module_order and _placeholder_type_matches(module_id_int, type)
             if is_quiz:
-<<<<<<< HEAD
                 if can_reuse_frontend:
                     ph_map = {
                         current_module_order: {
@@ -1400,27 +1395,14 @@ async def generate_single_resource(
                     ph_map = _create_placeholder_resources(
                         plan_id_int,
                         [{"title": title, "description": description, "resources": [{"resource_type": type}]}],
-                        fixed_order=current_module_order if current_module_order else None
+                        fixed_order=current_module_order if current_module_order else None,
+                        parent_id=generated_parent_id,
+                        node_id=node_id,
                     )
                     real_placeholder_id = list(ph_map.values())[0].get("id") if ph_map else None
                     stream_start_id = real_placeholder_id if real_placeholder_id else module_id_int
                     placeholder_order = list(ph_map.values())[0].get("moduleOrder") if ph_map else current_module_order
 
-=======
-                # 创建真实 DB 占位符
-                ph_map = _create_placeholder_resources(
-                    plan_id_int,
-                    [{"title": title, "description": description, "resources": [{"resource_type": type}]}],
-                    fixed_order=current_module_order if current_module_order else None,
-                    parent_id=generated_parent_id,
-                    node_id=node_id,
-                )
-                
-                real_placeholder_id = list(ph_map.values())[0].get("id") if ph_map else None
-                stream_start_id = real_placeholder_id if real_placeholder_id else module_id_int
-                placeholder_order = list(ph_map.values())[0].get("moduleOrder") if ph_map else current_module_order
-                
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
                 initial_state["placeholder_resource_map"] = ph_map
                 bg_state["placeholder_map"] = ph_map
 
@@ -1526,10 +1508,7 @@ async def generate_single_resource(
                         current_module_order, session_id,
                         bg_state.get("thinkings", []),
                         placeholder_id=real_placeholder_id,
-<<<<<<< HEAD
-=======
                         parent_id=generated_parent_id,
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
                         node_id=node_id,
                     )
                     if res_info:
@@ -2242,12 +2221,8 @@ def _persist_generated_resources(
     session_id: str = "",
     thinkings: list = None,
     placeholder_id: int = None,
-<<<<<<< HEAD
-    node_id: str = None,
-=======
     parent_id: int = None,
     node_id: str = "",
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
 ) -> list:
     """将生成的资源持久化到数据库（与 SSE 解耦，确保断开连接时也能保存）"""
     generated_resource_info = []
@@ -2269,6 +2244,8 @@ def _persist_generated_resources(
             module_data["animationSpec"] = generated_content.get("animationSpec", {})
             module_data["duration"] = generated_content.get("duration")
             module_data["metadata"] = generated_content.get("metadata", {})
+            module_data["narration"] = generated_content.get("narration")
+            module_data["videoExports"] = generated_content.get("videoExports", {})
         if resource_type == "pptx":
             module_data["html"] = generated_content.get("content", "")
             module_data["pptx_filename"] = generated_content.get("pptx_filename", "")
@@ -2276,7 +2253,6 @@ def _persist_generated_resources(
             module_data["slide_count"] = generated_content.get("slide_count", 0)
         module_data = _attach_node_metadata(module_data, node_id)
         try:
-<<<<<<< HEAD
             # 如果有占位资源且类型匹配，更新它；类型不同时创建新资源
             if _placeholder_type_matches(placeholder_id, resource_type):
                 java_client.update_resource_content(
@@ -2285,19 +2261,6 @@ def _persist_generated_resources(
                     status=2,
                     module_type=resource_type,
                 )
-=======
-            result = java_client.create_resource(
-                plan_id=plan_id_int,
-                module_type=resource_type,
-                module_data=json.dumps(module_data, ensure_ascii=False),
-                module_order=current_module_order,
-                parent_id=parent_id,
-                status=2,
-                generated_by_agent="animation_skill_generator" if resource_type == "animation" else "resource_type_generator",
-            )
-            new_resource_id = result.get("id") if isinstance(result, dict) else 0
-            if new_resource_id:
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
                 generated_resource_info.append({
                     "id": placeholder_id,
                     "type": resource_type,
@@ -2310,6 +2273,7 @@ def _persist_generated_resources(
                     module_type=resource_type,
                     module_data=json.dumps(module_data, ensure_ascii=False),
                     module_order=current_module_order,
+                    parent_id=parent_id,
                     status=2,
                     generated_by_agent="animation_skill_generator" if resource_type == "animation" else "resource_type_generator",
                 )
@@ -2332,10 +2296,7 @@ def _persist_generated_resources(
                 quiz_config,
                 module_order=current_module_order,
                 placeholder_id=placeholder_id,
-<<<<<<< HEAD
-=======
                 parent_id=parent_id,
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
                 node_id=node_id,
             )
             if quiz_res_id:
@@ -2383,9 +2344,7 @@ def _persist_generated_resources(
                     module_data["references"] = references
             if not module_data.get("title"):
                 module_data["title"] = title
-<<<<<<< HEAD
-            if node_id:
-                module_data["node_id"] = node_id
+            module_data = _attach_node_metadata(module_data, node_id)
             try:
                 # 如果有占位资源且类型匹配，更新它；类型不同时创建新资源
                 if _placeholder_type_matches(placeholder_id, resource_type):
@@ -2395,21 +2354,6 @@ def _persist_generated_resources(
                         status=2,
                         module_type=resource_type,
                     )
-=======
-            module_data = _attach_node_metadata(module_data, node_id)
-            try:
-                result = java_client.create_resource(
-                    plan_id=plan_id_int,
-                    module_type=resource_type,
-                    module_data=json.dumps(module_data, ensure_ascii=False),
-                    module_order=current_module_order,
-                    parent_id=parent_id,
-                    status=2,
-                    generated_by_agent="content_orchestrator",
-                )
-                new_resource_id = result.get("id") if isinstance(result, dict) else 0
-                if new_resource_id:
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
                     generated_resource_info.append({
                         "id": placeholder_id,
                         "type": resource_type,
@@ -2422,6 +2366,7 @@ def _persist_generated_resources(
                         module_type=resource_type,
                         module_data=json.dumps(module_data, ensure_ascii=False),
                         module_order=current_module_order,
+                        parent_id=parent_id,
                         status=2,
                         generated_by_agent="content_orchestrator",
                     )
@@ -2532,12 +2477,8 @@ def _search_videos(module_title: str) -> list:
     return videos
 
 
-<<<<<<< HEAD
-def _save_video_resource(plan_id: int, videos: list, module_order: int = None, node_id: str = None) -> int:
-=======
 def _save_video_resource(plan_id: int, videos: list, module_order: int = None,
                          parent_id: int = None, node_id: str = "") -> int:
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
     """将视频搜索结果保存为 video 类型的学习资源"""
     try:
         if not videos:
@@ -2546,13 +2487,7 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None,
             "title": "教学视频",
             "description": "相关教学视频资源",
             "videos": videos,
-<<<<<<< HEAD
-        }
-        if node_id:
-            module_data["node_id"] = node_id
-=======
         }, node_id)
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
         if module_order is None:
             existing = java_client.get_plan_resources(plan_id)
             module_order = max((r.get("moduleOrder", 0) for r in existing), default=0) + 1
@@ -2573,12 +2508,8 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None,
         return 0
 
 
-<<<<<<< HEAD
-def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None, module_order: int = None, placeholder_id: int = None, node_id: str = None) -> int:
-=======
 def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None, module_order: int = None,
                         placeholder_id: int = None, parent_id: int = None, node_id: str = "") -> int:
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
     """将生成的题目保存为 quiz 类型的学习资源，返回资源 ID。如果有 placeholder_id 则覆盖更新。"""
     try:
         if not questions:
@@ -2603,12 +2534,7 @@ def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None,
             "totalPoints": len(questions),
             "estimatedMinutes": len(questions) * 2,
         }
-<<<<<<< HEAD
-        if node_id:
-            module_data["node_id"] = node_id
-=======
         module_data = _attach_node_metadata(module_data, node_id)
->>>>>>> 2f0913b (fix: 后端持久化生成资源的父模块与节点信息)
 
         if _placeholder_type_matches(placeholder_id, "quiz"):
             java_client.update_resource_content(
@@ -3064,6 +2990,30 @@ async def stop_generation(
     return {"data": {"status": "stop_requested"}}
 
 
+def _assert_qiniu_audio_url_allowed(url: str) -> None:
+    """Only proxy audio objects for this project's Qiniu prefixes / bound domains.
+
+    Stored narration URLs may still use a retired CDN host; allow known object
+    path prefixes so rewrite_to_public_url can fetch via the active domain.
+    """
+    from urllib.parse import urlparse
+    from fastapi import HTTPException
+    from app.services.qiniu_client import qiniu_client
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Invalid audio URL")
+
+    path = parsed.path or ""
+    if path.startswith(("/animation-audio/", "/podcast-audio/", "/animation-video/")):
+        return
+
+    host = parsed.netloc.lower()
+    allowed = qiniu_client.allowed_audio_hosts()
+    if host not in allowed:
+        raise HTTPException(status_code=403, detail="Audio host not allowed")
+
+
 @router.get("/proxy-image")
 def proxy_image(url: str = Query(..., description="图片 URL")):
     """代理图片请求，返回 base64 data URL，解决 PDF 导出时的 CORS 问题"""
@@ -3079,6 +3029,77 @@ def proxy_image(url: str = Query(..., description="图片 URL")):
         return {"data_url": f"data:{content_type};base64,{b64}"}
     except Exception as e:
         return {"data_url": None, "error": str(e)}
+
+
+@router.get("/proxy-audio")
+def proxy_audio(url: str = Query(..., description="配音音频 URL")):
+    """Proxy narration audio via API origin so the browser does not hit Qiniu directly."""
+    import json
+    import time
+    from pathlib import Path
+    import requests as req
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+    from app.services.qiniu_client import qiniu_client
+
+    # #region agent log
+    def _dbg(message: str, data: dict, hypothesis_id: str = "A"):
+        try:
+            payload = {
+                "sessionId": "84be90",
+                "runId": "post-fix",
+                "hypothesisId": hypothesis_id,
+                "location": "resource_chat.py:proxy_audio",
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            }
+            line = json.dumps(payload, ensure_ascii=False) + "\n"
+            root = Path(__file__).resolve().parents[5]
+            for path in (root / "debug-84be90.log", root / ".cursor" / "debug-84be90.log"):
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    with path.open("a", encoding="utf-8") as f:
+                        f.write(line)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    # #endregion
+
+    _assert_qiniu_audio_url_allowed(url)
+    fetch_url = qiniu_client.rewrite_to_public_url(url)
+    _dbg("proxy-audio request", {"url": url, "fetchUrl": fetch_url, "domain": qiniu_client.resolve_public_domain()})
+
+    try:
+        resp = req.get(fetch_url, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("proxy-audio fetch failed for %s (via %s): %s", url, fetch_url, exc)
+        _dbg("proxy-audio upstream failed", {"url": url, "fetchUrl": fetch_url, "error": str(exc)[:300]}, "A")
+        raise HTTPException(status_code=502, detail=f"Audio fetch failed: {exc}") from exc
+
+    content_type = resp.headers.get("Content-Type", "audio/wav")
+    if ";" in content_type:
+        content_type = content_type.split(";")[0].strip()
+    if not content_type.startswith("audio/") and content_type not in ("application/octet-stream", "binary/octet-stream"):
+        content_type = "audio/wav"
+
+    _dbg(
+        "proxy-audio upstream ok",
+        {"url": url, "fetchUrl": fetch_url, "status": resp.status_code, "bytes": len(resp.content), "contentType": content_type},
+        "A",
+    )
+
+    return Response(
+        content=resp.content,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "Accept-Ranges": "bytes",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
 
 
 @router.get("/resource/pptx/download/{filename}")
