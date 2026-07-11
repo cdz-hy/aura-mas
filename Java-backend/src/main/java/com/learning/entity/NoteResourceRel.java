@@ -14,13 +14,18 @@ public class NoteResourceRel {
 
     private Long resourceId;
 
+    @TableField(exist = false)
     private String selectedText;
 
+    @TableField(exist = false)
     private String positionInfo;
 
+    @TableField(exist = false)
     private Long planId;
 
+    @TableField(exist = false)
     private String moduleName;
 
+    @TableField(exist = false)
     private String resourceTitle;
 }

@@ -1,13 +1,27 @@
 <template>
   <div>
     <!-- Welcome header -->
-    <div class="mb-8">
-      <h1 class="section-title">
-        {{ greeting }}，{{ authStore.user?.nickname || '同学' }}
-      </h1>
-      <p class="mt-1 text-navy-400 h-6">
-        <span class="typewriter" :class="{ 'typewriter-typing': isTyping }">{{ displayedGreeting }}</span>
-      </p>
+    <div class="mb-8 flex items-start justify-between">
+      <div>
+        <h1 class="section-title">
+          {{ greeting }}，{{ authStore.user?.nickname || '同学' }}
+        </h1>
+        <p class="mt-1 text-navy-400 h-6">
+          <span class="typewriter" :class="{ 'typewriter-typing': isTyping }">{{ displayedGreeting }}</span>
+        </p>
+      </div>
+      <button
+        class="mt-1 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium transition-all border"
+        :class="cloudEnabled
+          ? 'bg-violet-50 text-violet-600 border-violet-200 hover:bg-violet-100'
+          : 'bg-navy-50 text-navy-400 border-navy-200 hover:bg-navy-100'"
+        @click="toggleCloud"
+        :title="cloudEnabled ? '关闭画像气泡' : '开启画像气泡'"
+      >
+        <svg v-if="cloudEnabled" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+        <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        {{ cloudEnabled ? '气泡已开' : '气泡已关' }}
+      </button>
     </div>
 
     <!-- Stats cards -->
@@ -74,8 +88,8 @@
                   <h3 class="font-semibold text-navy-800 truncate group-hover:text-navy-600 transition-colors text-base" :title="plan.title">{{ plan.title }}</h3>
                   <div class="flex items-center gap-2 mt-0.5">
                     <span class="text-xs text-navy-400">{{ formatDate(plan.createdAt) }}</span>
-                    <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" :class="statusClass(plan.displayStatus ?? plan.status)">
-                      {{ statusText(plan.displayStatus ?? plan.status) }}
+                    <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" :class="statusClass(plan.status)">
+                      {{ statusText(plan.status) }}
                     </span>
                   </div>
                 </div>
@@ -83,7 +97,7 @@
               
               <!-- Complete button -->
               <button
-                v-if="plan.status !== 4 && (plan.displayStatus ?? plan.status) !== 4"
+                v-if="plan.status !== 4 && (plan.status) !== 4"
                 class="absolute top-4 right-12 p-1.5 rounded-lg text-emerald-400 hover:text-white hover:bg-emerald-500 transition-all opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 z-10"
                 @click.stop="confirmCompletePlan(plan.id)"
                 title="标记为已完成"
@@ -170,6 +184,12 @@
       @confirm="handleCompleteConfirm"
       @cancel="handleCompleteCancel"
     />
+
+    <!-- 画像问题气泡 -->
+    <ProfileBubble
+      v-if="authStore.user?.id && cloudEnabled"
+      :user-id="authStore.user.id"
+    />
   </div>
 </template>
 
@@ -179,10 +199,11 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { getPlans, deletePlan, updatePlan } from '@/api/plan'
 import { getDashboardStats, getGreeting } from '@/api/stats'
-import { getPlanResources, getProgressByPlan, markResourceComplete } from '@/api/resource'
+import { getPlanResources, getProgressByPlan, markResourceComplete, getBatchProgress, markAllComplete } from '@/api/resource'
 import type { DashboardStats } from '@/api/stats'
 import type { LearningPlan } from '@/types/plan'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import ProfileBubble from '@/components/dashboard/ProfileBubble.vue'
 import dayjs from 'dayjs'
 
 const router = useRouter()
@@ -197,6 +218,15 @@ const completingPlanId = ref<number | null>(null)
 const dynamicGreeting = ref('继续你的学习之旅')
 const displayedGreeting = ref('继续你的学习之旅')
 const isTyping = ref(false)
+
+// 画像气泡开关（默认开启）
+const CLOUD_ENABLED_KEY = 'profile_cloud_enabled'
+const cloudEnabled = ref(localStorage.getItem(CLOUD_ENABLED_KEY) !== 'false')
+
+function toggleCloud() {
+  cloudEnabled.value = !cloudEnabled.value
+  localStorage.setItem(CLOUD_ENABLED_KEY, String(cloudEnabled.value))
+}
 
 const greeting = computed(() => {
   const h = new Date().getHours()
@@ -264,10 +294,7 @@ async function handleCompleteConfirm() {
   if (!completingPlanId.value) return
   const planId = completingPlanId.value
   try {
-    const resRes = await getPlanResources(planId)
-    const resources = resRes.data || []
-    await Promise.all(resources.map(r => markResourceComplete(planId, r.id).catch(() => {})))
-    await updatePlan(planId, { status: 4, displayStatus: 4 })
+    await markAllComplete(planId)
     await loadDashboard()
   } catch (e) {
     console.error('Failed to complete plan:', e)
@@ -283,11 +310,18 @@ function handleCompleteCancel() {
 }
 
 function statusText(status: number) {
-  return ['待规划', '生成中', '确认中', '学习中', '已完成'][status] || '未知'
+  return ['待规划', '生成中', '待确认', '学习中', '已完成'][status] || '未知'
 }
 
 function statusClass(status: number) {
-  return ['bg-gray-100 text-gray-600', 'bg-blue-100 text-blue-600', 'bg-amber-100 text-amber-600', 'bg-emerald-100 text-emerald-600', 'bg-sage-100 text-sage-700'][status] || 'bg-gray-100 text-gray-600'
+  const map: Record<number, string> = {
+    0: 'bg-gray-100 text-gray-500',       // 待规划 — 灰色，安静
+    1: 'bg-amber-50 text-amber-700 border border-amber-200',   // 生成中 — 琥珀，动态
+    2: 'bg-sky-50 text-sky-700 border border-sky-200',         // 待确认 — 天蓝，等待
+    3: 'bg-orange-50 text-orange-700 border border-orange-200', // 学习中 — 橙色，活力
+    4: 'bg-emerald-50 text-emerald-700 border border-emerald-200', // 已完成 — 翡翠绿，达成
+  }
+  return map[status] || 'bg-gray-100 text-gray-500'
 }
 
 async function loadDashboard() {
@@ -344,26 +378,17 @@ function typewriterEffect(text: string) {
 
 async function loadAllProgress() {
   const map: Record<number, number> = {}
-  await Promise.all(plans.value.map(async (plan) => {
-    try {
-      const [resRes, progRes] = await Promise.all([
-        getPlanResources(plan.id),
-        getProgressByPlan(plan.id),
-      ])
-      const validResourceIds = new Set(
-        (resRes.data || [])
-          .filter((r: any) => r.status >= 2)
-          .map((r: any) => r.id)
-      )
-      const total = validResourceIds.size
-      const completed = (progRes.data || []).filter(
-        (p: any) => p.status === 2 && validResourceIds.has(p.resourceId)
-      ).length
-      map[plan.id] = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
-    } catch {
-      map[plan.id] = 0
+  const planIds = plans.value.map(p => p.id)
+  if (planIds.length === 0) { planProgressMap.value = map; return }
+  try {
+    const res = await getBatchProgress(planIds)
+    for (const [id, summary] of Object.entries(res.data || {})) {
+      map[Number(id)] = Math.min(100, Math.round((summary as any).progress * 100))
     }
-  }))
+  } catch {
+    // Fallback: set all to 0
+    for (const id of planIds) map[id] = 0
+  }
   planProgressMap.value = map
 }
 

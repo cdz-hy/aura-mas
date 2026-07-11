@@ -145,7 +145,8 @@ def simple_answer_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [简答智能体] 正在调用 LLM 生成回复（流式）...")
-        sse_cb = state.get("sse_callback")
+        from app.utils.stream_registry import get_sse_callback
+        sse_cb = state.get("sse_callback") or get_sse_callback(state.get("session_id", ""))
 
         def _on_chunk(chunk: str):
             if sse_cb:

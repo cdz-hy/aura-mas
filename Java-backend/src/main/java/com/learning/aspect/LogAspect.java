@@ -84,6 +84,9 @@ public class LogAspect {
         if (expression == null || expression.isEmpty()) {
             return null;
         }
+        if (!expression.contains("#") && !expression.startsWith("'") && !expression.startsWith("T(")) {
+            return expression;
+        }
         try {
             EvaluationContext context = new StandardEvaluationContext();
             MethodSignature signature = (MethodSignature) joinPoint.getSignature();
@@ -101,8 +104,8 @@ public class LogAspect {
             Object value = parser.parseExpression(expression).getValue(context);
             return value != null ? truncate(value.toString(), 200) : null;
         } catch (Exception e) {
-            log.warn("SpEL表达式解析失败: {}", expression, e);
-            return null;
+            log.warn("SpEL表达式解析失败: {}, 将使用原字符串作为备用", expression, e);
+            return expression;
         }
     }
 

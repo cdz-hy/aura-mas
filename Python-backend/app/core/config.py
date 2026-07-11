@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # Tavily 搜索 API
     TAVILY_API_KEY: str = ""
 
+    # 豆包 (Volcengine Ark) 图片生成 API
+    ARK_API_KEY: str = ""
+    ARK_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
+    ARK_IMAGE_MODEL: str = "doubao-seedream-5-0-260128"
+
     # RabbitMQ 设置 (异步任务队列)
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
 

@@ -170,8 +170,41 @@
               </svg>
             </div>
 
+            <!-- KB check confirmation card -->
+            <div v-if="msg.type === 'confirm' && msg.confirmationType === 'kb_check'" class="max-w-[85%] space-y-3">
+              <div class="bg-amber-50 rounded-2xl rounded-tl-sm px-5 py-3 border border-amber-200">
+                <div class="flex items-center gap-2 mb-2">
+                  <svg class="w-5 h-5 text-amber-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                  <span class="font-medium text-amber-800">知识库内容提示</span>
+                </div>
+                <p class="text-amber-700 text-sm leading-relaxed">{{ msg.content }}</p>
+              </div>
+              <div v-if="chatStore.awaitingConfirmation && i === chatStore.messages.length - 1" class="flex flex-wrap gap-2 ml-2">
+                <button class="px-4 py-2 rounded-lg bg-navy-600 text-white text-sm font-medium hover:bg-navy-700 transition-colors"
+                  @click="$emit('confirmBreakdown')">
+                  继续生成
+                </button>
+                <button class="px-4 py-2 rounded-lg bg-white text-navy-600 text-sm font-medium border border-navy-200 hover:bg-navy-50 transition-colors"
+                  @click="$emit('submitModification', '取消，暂不生成')">
+                  取消
+                </button>
+                <button class="px-4 py-2 rounded-lg bg-white text-navy-500 text-sm font-medium border border-navy-100 hover:bg-navy-50 transition-colors"
+                  @click="showModifyInput = !showModifyInput">
+                  说点别的...
+                </button>
+              </div>
+              <div v-if="showModifyInput && chatStore.awaitingConfirmation && i === chatStore.messages.length - 1" class="ml-2">
+                <form @submit.prevent="$emit('submitModification', modifyText); modifyText = ''; showModifyInput = false" class="flex gap-2">
+                  <input v-model="modifyText" type="text" class="input-field flex-1 text-sm" placeholder="随便说点什么，比如：有没有其他办法？" autofocus />
+                  <button type="submit" class="btn-primary px-4 text-sm" :disabled="!modifyText.trim()">发送</button>
+                </form>
+              </div>
+            </div>
+
             <!-- Task breakdown confirmation card -->
-            <div v-if="msg.type === 'confirm' && msg.breakdown" class="max-w-[85%] space-y-3">
+            <div v-else-if="msg.type === 'confirm' && msg.breakdown" class="max-w-[85%] space-y-3">
               <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3">
                 <p class="text-navy-700 mb-3">{{ msg.content }}</p>
                 <div v-if="msg.breakdown.modules" class="space-y-2">
@@ -273,7 +306,7 @@
             <p class="text-navy-700">你正在查看「<span class="font-medium">{{ moduleContextMessage.title }}</span>」，如需为该模块生成补充资源，请点击：</p>
             <div class="mt-3 flex flex-wrap gap-2">
               <button
-                v-for="opt in resourceGenerationOptions" :key="opt.type"
+                v-for="opt in resourceOptions" :key="opt.type"
                 class="text-xs px-3 py-1.5 rounded-full border transition-colors"
                 :class="generatingType === opt.type ? 'bg-navy-600 text-white border-navy-600' : 'bg-white text-navy-600 border-navy-200 hover:bg-navy-50'"
                 :disabled="!!generatingType"
@@ -351,6 +384,9 @@
           v-model="assistantInput"
           :placeholder="chatStore.streaming ? 'AI回复中...' : chatStore.awaitingConfirmation ? '输入补充说明...' : '描述你想学习的内容...'"
           :disabled="chatStore.streaming"
+          show-voice
+          :voice-recording="voice.isRecording.value"
+          @voice-toggle="voice.toggle"
         />
         <button type="submit" class="btn-primary px-5" :disabled="!assistantInput.trim() || chatStore.streaming">
           发送
@@ -362,6 +398,9 @@
           v-model="tutorInput"
           placeholder="输入你的问题..."
           :disabled="tutor.loading.value"
+          show-voice
+          :voice-recording="voice.isRecording.value"
+          @voice-toggle="voice.toggle"
         />
         <button type="submit" class="btn-primary px-5" :disabled="!tutorInput.trim() || tutor.loading.value">
           发送
@@ -435,7 +474,7 @@ import type { TutorContext } from '@/composables/useTutor'
 import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
 import tutorGif from '@/image/智能辅导.gif'
 import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
-import { resourceGenerationOptions } from '@/constants/resourceGenerationOptions'
+import { useVoiceInput } from '@/composables/useVoiceInput'
 
 const props = defineProps<{
   planId: string
@@ -499,6 +538,15 @@ const showSessionList = ref(false)
 const assistantInput = ref('')
 const tutorInput = ref('')
 const showModifyInput = ref(false)
+
+// 语音输入：根据当前 mode 写入对应 ref
+const voice = useVoiceInput({
+  onText: (text) => {
+    if (props.mode === 'tutor') tutorInput.value += text
+    else assistantInput.value += text
+  },
+  onError: (err) => { console.error('[Voice]', err) },
+})
 const modifyText = ref('')
 const isManageMode = ref(false)
 const selectedMessageIds = ref<number[]>([])
@@ -527,6 +575,17 @@ const quickQuestions = [
   '我想学习 Python 基础',
   '帮我生成一些练习题',
   '这个知识点不太理解',
+]
+
+const resourceOptions = [
+  { type: 'quiz', label: '测验' },
+  { type: 'mindmap', label: '思维导图' },
+  { type: 'code', label: '代码示例' },
+  { type: 'summary', label: '总结' },
+  { type: 'video', label: '教学视频' },
+  { type: 'animation', label: '动画' },
+  { type: 'podcast', label: '播客' },
+  { type: 'pptx', label: 'PPT' },
 ]
 
 const typeLabels: Record<string, string> = {

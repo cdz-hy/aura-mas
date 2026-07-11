@@ -66,3 +66,11 @@ export function unmarkResourceComplete(planId: number, resourceId: number) {
 export function getProgressByPlan(planId: number) {
   return request.get<any, { data: ResourceProgress[] }>('/progress/plan', { params: { planId } })
 }
+
+export function getBatchProgress(planIds: number[]) {
+  return request.get<any, { data: Record<string, { completed: number; total: number; progress: number; isCompleted: boolean }> }>('/progress/batch', { params: { planIds } })
+}
+
+export function markAllComplete(planId: number) {
+  return request.post<any, { data: null }>('/progress/complete-all', null, { params: { planId } })
+}

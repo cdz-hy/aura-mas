@@ -13,6 +13,9 @@ from app.api.v1.endpoints import knowledge_tree
 from app.api.v1.endpoints import analytics
 from app.api.v1.endpoints import note_agent
 from app.api.v1.endpoints import knowledge_graph
+from app.api.v1.endpoints import admin_resource
+from app.api.v1.endpoints import asr
+from app.api.v1.endpoints import plan_advisor
 from app.core.config import settings
 from app.core.reload import get_reload_dirs
 from app.services.mq_consumer import mq_consumer
@@ -112,6 +115,11 @@ app.include_router(analytics.router, prefix="/api/analytics", tags=["学习分�
 
 # 路由注册 - 笔记智能整理接口
 app.include_router(note_agent.router, prefix="/api/ai", tags=["笔记整理"])
+
+# 路由注册 - 管理员资源生成与入库接口
+app.include_router(admin_resource.router, prefix="/api/ai/admin/resource", tags=["管理员资源"])
+app.include_router(asr.router, prefix="/api/ai/asr", tags=["语音识别"])
+app.include_router(plan_advisor.router, prefix="/api/ai/plan-advisor", tags=["AI学习顾问"])
 
 # 挂载静态文件（用于测试 UI）
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")

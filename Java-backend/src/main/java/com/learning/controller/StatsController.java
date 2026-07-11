@@ -29,6 +29,12 @@ public class StatsController {
         return Result.success(statsService.getDashboardStats(userId));
     }
 
+    @Operation(summary = "内部接口：获取仪表盘统计数据")
+    @GetMapping("/internal/dashboard")
+    public Result<Map<String, Object>> getDashboardInternal(@RequestParam Long userId) {
+        return Result.success(statsService.getDashboardStats(userId));
+    }
+
     @Operation(summary = "获取答题详细分析")
     @GetMapping("/quiz-analysis")
     public Result<Map<String, Object>> getQuizAnalysis(Authentication authentication) {
@@ -68,9 +74,11 @@ public class StatsController {
 
     @Operation(summary = "获取全部分析数据")
     @GetMapping("/analytics")
-    public Result<Map<String, Object>> getAnalytics(Authentication authentication) {
+    public Result<Map<String, Object>> getAnalytics(
+            Authentication authentication,
+            @RequestParam(defaultValue = "180") int days) {
         Long userId = AuthUtils.getCurrentUserId(authentication);
-        return Result.success(statsService.getAnalyticsData(userId));
+        return Result.success(statsService.getAnalyticsData(userId, days));
     }
 
     @Operation(summary = "获取学习效率时段分析")

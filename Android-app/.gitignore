@@ -1,0 +1,57 @@
+# JVM crash logs
+hs_err_pid*.log
+
+# Built application files
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Files for the ART/Dalvik VM
+*.odex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+
+# Gradle files
+.gradle/
+build/
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Android Studio
+*.iml
+.idea/
+.navigation/
+captures/
+/captures
+
+# Signing files (do not commit keystores)
+*.jks
+*.keystore
+
+# External native build
+.externalNativeBuild/
+.cxx/
+
+# Google Services (if using Firebase, etc - uncomment if needed)
+# google-services.json
+
+# Crashlytics
+crashlytics-build.properties
+fabric.properties
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Log files
+*.log

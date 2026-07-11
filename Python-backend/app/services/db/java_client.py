@@ -234,6 +234,22 @@ class JavaBackendClient:
             body["importance"] = importance
         return self._request("PATCH", f"/api/knowledge-graph/domain/{domain_id}/node/{node_id}", json=body)
 
+    def trigger_mastery_update(self, user_id: int, resource_id: int, completed: bool):
+        """触发单个资源的异步掌握度分析"""
+        self.trigger_mastery_update_batch(user_id, [resource_id], completed)
+
+    def trigger_mastery_update_batch(self, user_id: int, resource_ids: list, completed: bool):
+        """批量触发掌握度分析（串行处理，避免并发冲突和 429）"""
+        try:
+            import requests as _req
+            _req.post(
+                f"http://localhost:8002/api/ai/knowledge-graph/update-mastery-batch",
+                json={"user_id": user_id, "resource_ids": resource_ids, "completed": completed},
+                timeout=5,
+            )
+        except Exception:
+            pass  # 非阻塞，失败不影响主流程
+
     # ==================== 知识树 ====================
 
     def get_or_create_tree(self, plan_id: int, user_id: int) -> dict:
@@ -413,6 +429,10 @@ class JavaBackendClient:
         """获取用户答题统计"""
         return self._request("GET", f"/api/quiz/internal/stats/{plan_id}", params={"userId": user_id})
 
+    def get_dashboard_stats(self, user_id: int) -> Dict[str, Any]:
+        """获取仪表盘统计数据（包含学习时长、今日学习等）"""
+        return self._request("GET", "/api/stats/internal/dashboard", params={"userId": user_id})
+
     def get_quiz_records_by_resource(self, user_id: int, resource_id: int) -> list:
         """获取用户对指定资源的答题记录"""
         result = self._request("GET", f"/api/quiz/internal/user/{user_id}", params={"resourceId": resource_id})
@@ -559,6 +579,10 @@ class JavaBackendClient:
     def get_kb_by_id(self, kb_id: int) -> Dict[str, Any]:
         """获取知识库记录"""
         return self._request("GET", f"/api/admin/kb/internal/{kb_id}")
+
+    def get_indexed_kb_documents(self) -> list:
+        """获取已入库的知识库文档列表(parse_status=2)"""
+        return self._request("GET", "/api/admin/kb/internal/indexed") or []
 
     def delete_kb_by_id(self, kb_id: int):
         """删除知识库记录"""

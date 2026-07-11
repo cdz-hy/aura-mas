@@ -50,6 +50,37 @@
         >
           清空头像
         </button>
+
+        <!-- Theme Switcher -->
+        <div class="mt-5 pt-5 border-t border-navy-100">
+          <h3 class="text-sm font-medium text-navy-600 mb-3">界面主题</h3>
+          <div class="grid grid-cols-1 gap-2">
+            <button
+              v-for="theme in themePresets"
+              :key="theme.id"
+              class="flex items-center gap-3 px-3 py-2.5 rounded-xl border-2 transition-all duration-300 text-left group"
+              :class="currentTheme === theme.id
+                ? 'border-navy-500 bg-navy-50 shadow-sm'
+                : 'border-transparent hover:border-navy-200 hover:bg-navy-50/50'"
+              @click="handleThemeChange(theme.id)"
+            >
+              <!-- Color preview dots -->
+              <div class="flex-shrink-0 relative w-9 h-9 rounded-lg overflow-hidden shadow-sm border border-navy-100/50">
+                <div class="absolute inset-0" :style="{ background: theme.preview.bg }"></div>
+                <div class="absolute bottom-0 right-0 w-5 h-5 rounded-tl-lg" :style="{ background: theme.preview.accent }"></div>
+                <div class="absolute top-1 left-1 w-2 h-2 rounded-full" :style="{ background: theme.preview.text }"></div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <span class="text-sm font-medium text-navy-800 block">{{ theme.name }}</span>
+                <span class="text-xs text-navy-400">{{ theme.description }}</span>
+              </div>
+              <!-- Check mark -->
+              <svg v-if="currentTheme === theme.id" class="w-4 h-4 text-navy-600 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </button>
+          </div>
+        </div>
         </div>
 
         <!-- Delete account -->
@@ -249,6 +280,8 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore, themePresets } from '@/stores/ui'
+import type { ThemeId } from '@/stores/ui'
 import { getCurrentUser, getCurrentProfile, updateUserInfo, uploadAvatar, clearAvatar, deleteAccount, updateProfile } from '@/api/user'
 import AvatarCropper from '@/components/common/AvatarCropper.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -256,7 +289,14 @@ import type { User } from '@/types/user'
 import type { StudentProfile } from '@/types/profile'
 
 const authStore = useAuthStore()
+const uiStore = useUiStore()
 const router = useRouter()
+
+const currentTheme = computed(() => uiStore.currentTheme)
+
+function handleThemeChange(themeId: ThemeId) {
+  uiStore.setTheme(themeId)
+}
 
 // Delete account state
 const showDeleteDialog = ref(false)

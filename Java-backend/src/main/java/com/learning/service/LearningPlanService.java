@@ -176,7 +176,7 @@ public class LearningPlanService {
         plan.setLearningGoal(toJson(learningGoal));
         plan.setPlanConfig(toJson(planConfig));
         plan.setUserId(userId);
-        plan.setStatus(status != null ? status : 4);
+        plan.setStatus(status != null ? status : 0);
         plan.setProgress(0.0f);
         plan.setCreatedAt(LocalDateTime.now());
         plan.setUpdatedAt(LocalDateTime.now());

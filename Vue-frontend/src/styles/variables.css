@@ -1,86 +1,357 @@
+/* ======================== Theme Variables ======================== */
+
+:root,
+[data-theme="light"] {
+  /* Navy scale */
+  --navy-50: #f0f3f9;
+  --navy-100: #d9e0f0;
+  --navy-200: #b3c1e0;
+  --navy-300: #8da2d1;
+  --navy-400: #6783c1;
+  --navy-500: #4164b2;
+  --navy-600: #34508e;
+  --navy-700: #273c6b;
+  --navy-800: #1a2847;
+  --navy-900: #0d1424;
+  --navy-950: #070a12;
+
+  /* Cream scale */
+  --cream-50: #fefdfb;
+  --cream-100: #fdf9f0;
+  --cream-200: #faf3e1;
+  --cream-300: #f7edd2;
+  --cream-400: #f4e7c3;
+  --cream-500: #f1e1b4;
+  --cream-600: #c4b790;
+  --cream-700: #978d6c;
+  --cream-800: #6a6348;
+  --cream-900: #3d3924;
+
+  /* Sage scale */
+  --sage-50: #f4f7f4;
+  --sage-100: #e0ebe0;
+  --sage-200: #c1d7c1;
+  --sage-300: #a2c3a2;
+  --sage-400: #83af83;
+  --sage-500: #649b64;
+  --sage-600: #507c50;
+  --sage-700: #3c5d3c;
+  --sage-800: #283e28;
+  --sage-900: #141f14;
+
+  /* Semantic colors */
+  --color-bg: #fefdfb;
+  --color-bg-paper: #fdf9f0;
+  --color-surface: #ffffff;
+  --color-text: #0d1424;
+  --color-text-secondary: #6783c1;
+  --color-text-muted: #8da2d1;
+  --color-border: rgba(26, 40, 71, 0.12);
+  --color-border-light: rgba(26, 40, 71, 0.06);
+
+  /* Shadows */
+  --shadow-color: rgba(0, 0, 0, 0.08);
+  --shadow-color-sm: rgba(0, 0, 0, 0.04);
+  --glow-color: rgba(65, 100, 178, 0.15);
+
+  /* Scrollbar */
+  --scrollbar-thumb: rgba(26, 40, 71, 0.15);
+  --scrollbar-thumb-hover: rgba(26, 40, 71, 0.3);
+
+  /* Selection */
+  --selection-bg: rgba(65, 100, 178, 0.2);
+  --selection-color: #1a2847;
+}
+
+/* ======================== Dark Theme ======================== */
+
+[data-theme="dark"] {
+  /* Navy scale: low=dark for surfaces, high=light for text
+     bg-navy-50/100 = dark surfaces, text-navy-800/900 = light text
+     bg-navy-600 = accent button color (readable with white text) */
+  --navy-50: #1e2530;
+  --navy-100: #263040;
+  --navy-200: #324058;
+  --navy-300: #4a6080;
+  --navy-400: #6a88b0;
+  --navy-500: #8aa8cc;
+  --navy-600: #3d6090;
+  --navy-700: #b8cce4;
+  --navy-800: #d8e4f0;
+  --navy-900: #eaf0f8;
+  --navy-950: #f4f7fc;
+
+  /* Cream scale - dark surfaces */
+  --cream-50: #161a24;
+  --cream-100: #1c2030;
+  --cream-200: #242a3a;
+  --cream-300: #2e3648;
+  --cream-400: #3a4460;
+  --cream-500: #4a5670;
+  --cream-600: #6a7890;
+  --cream-700: #90a0b8;
+  --cream-800: #b8c4d4;
+  --cream-900: #dce2ec;
+
+  /* Sage scale - muted greens for dark */
+  --sage-50: #1a2820;
+  --sage-100: #223428;
+  --sage-200: #2e4438;
+  --sage-300: #406050;
+  --sage-400: #588068;
+  --sage-500: #70a080;
+  --sage-600: #90bca0;
+  --sage-700: #b0d4bc;
+  --sage-800: #d0e8d8;
+  --sage-900: #e8f4ec;
+
+  /* Semantic colors - higher contrast */
+  --color-bg: #131720;
+  --color-bg-paper: #1a1f2c;
+  --color-surface: #222838;
+  --color-text: #e8ecf4;
+  --color-text-secondary: #a0b8d4;
+  --color-text-muted: #6a80a0;
+  --color-border: rgba(160, 184, 212, 0.15);
+  --color-border-light: rgba(160, 184, 212, 0.08);
+
+  --shadow-color: rgba(0, 0, 0, 0.4);
+  --shadow-color-sm: rgba(0, 0, 0, 0.25);
+  --glow-color: rgba(100, 160, 220, 0.2);
+
+  --scrollbar-thumb: rgba(160, 184, 212, 0.2);
+  --scrollbar-thumb-hover: rgba(160, 184, 212, 0.35);
+
+  --selection-bg: rgba(100, 160, 220, 0.3);
+  --selection-color: #e8ecf4;
+}
+
+/* ======================== Ocean Theme ======================== */
+
+[data-theme="ocean"] {
+  --navy-50: #eef6fb;
+  --navy-100: #d4e9f5;
+  --navy-200: #a9d3eb;
+  --navy-300: #7ebde0;
+  --navy-400: #53a7d6;
+  --navy-500: #2891cc;
+  --navy-600: #2074a3;
+  --navy-700: #18577a;
+  --navy-800: #103a52;
+  --navy-900: #081d29;
+  --navy-950: #040e14;
+
+  --cream-50: #f5fafd;
+  --cream-100: #e8f2f8;
+  --cream-200: #d5e8f2;
+  --cream-300: #c2deec;
+  --cream-400: #afd4e6;
+  --cream-500: #9ccae0;
+  --cream-600: #7db4d0;
+  --cream-700: #5e9ec0;
+  --cream-800: #3f88b0;
+  --cream-900: #206080;
+
+  --sage-50: #eef7f4;
+  --sage-100: #d0eadf;
+  --sage-200: #a1d5bf;
+  --sage-300: #72c09f;
+  --sage-400: #43ab7f;
+  --sage-500: #14965f;
+  --sage-600: #10784c;
+  --sage-700: #0c5a39;
+  --sage-800: #083c26;
+  --sage-900: #041e13;
+
+  --color-bg: #f5fafd;
+  --color-bg-paper: #e8f2f8;
+  --color-surface: #ffffff;
+  --color-text: #081d29;
+  --color-text-secondary: #2891cc;
+  --color-text-muted: #53a7d6;
+  --color-border: rgba(40, 145, 204, 0.12);
+  --color-border-light: rgba(40, 145, 204, 0.06);
+
+  --shadow-color: rgba(0, 50, 80, 0.08);
+  --shadow-color-sm: rgba(0, 50, 80, 0.04);
+  --glow-color: rgba(40, 145, 204, 0.15);
+
+  --scrollbar-thumb: rgba(40, 145, 204, 0.15);
+  --scrollbar-thumb-hover: rgba(40, 145, 204, 0.3);
+
+  --selection-bg: rgba(40, 145, 204, 0.2);
+  --selection-color: #103a52;
+}
+
+/* ======================== Forest Theme ======================== */
+
+[data-theme="forest"] {
+  --navy-50: #f0f5f0;
+  --navy-100: #d8e8d8;
+  --navy-200: #b0d0b0;
+  --navy-300: #88b888;
+  --navy-400: #60a060;
+  --navy-500: #388838;
+  --navy-600: #2d6d2d;
+  --navy-700: #225222;
+  --navy-800: #173717;
+  --navy-900: #0b1c0b;
+  --navy-950: #060e06;
+
+  --cream-50: #fafbf5;
+  --cream-100: #f2f5e8;
+  --cream-200: #e5ebd0;
+  --cream-300: #d8e1b8;
+  --cream-400: #cbd7a0;
+  --cream-500: #becd88;
+  --cream-600: #a0b470;
+  --cream-700: #809058;
+  --cream-800: #606c40;
+  --cream-900: #404828;
+
+  --sage-50: #f0f7f0;
+  --sage-100: #d8edd8;
+  --sage-200: #b0dbb0;
+  --sage-300: #88c988;
+  --sage-400: #60b760;
+  --sage-500: #38a538;
+  --sage-600: #2d842d;
+  --sage-700: #226322;
+  --sage-800: #174217;
+  --sage-900: #0b210b;
+
+  --color-bg: #fafbf5;
+  --color-bg-paper: #f2f5e8;
+  --color-surface: #ffffff;
+  --color-text: #0b1c0b;
+  --color-text-secondary: #388838;
+  --color-text-muted: #60a060;
+  --color-border: rgba(56, 136, 56, 0.12);
+  --color-border-light: rgba(56, 136, 56, 0.06);
+
+  --shadow-color: rgba(0, 40, 0, 0.08);
+  --shadow-color-sm: rgba(0, 40, 0, 0.04);
+  --glow-color: rgba(56, 136, 56, 0.15);
+
+  --scrollbar-thumb: rgba(56, 136, 56, 0.15);
+  --scrollbar-thumb-hover: rgba(56, 136, 56, 0.3);
+
+  --selection-bg: rgba(56, 136, 56, 0.2);
+  --selection-color: #173717;
+}
+
+/* ======================== Sunset Theme ======================== */
+
+[data-theme="sunset"] {
+  --navy-50: #fdf5f0;
+  --navy-100: #f8e0d0;
+  --navy-200: #f0c0a0;
+  --navy-300: #e8a070;
+  --navy-400: #e08040;
+  --navy-500: #d86020;
+  --navy-600: #b04d1a;
+  --navy-700: #883a13;
+  --navy-800: #60280d;
+  --navy-900: #381406;
+  --navy-950: #1c0a03;
+
+  --cream-50: #fffbf5;
+  --cream-100: #fef5e8;
+  --cream-200: #fcebd0;
+  --cream-300: #fae1b8;
+  --cream-400: #f8d7a0;
+  --cream-500: #f6cd88;
+  --cream-600: #d4ae6e;
+  --cream-700: #b28f54;
+  --cream-800: #90703a;
+  --cream-900: #6e5120;
+
+  --sage-50: #fdf7f0;
+  --sage-100: #f8e8d8;
+  --sage-200: #f0d0b0;
+  --sage-300: #e8b888;
+  --sage-400: #e0a060;
+  --sage-500: #d88838;
+  --sage-600: #ad6d2d;
+  --sage-700: #825222;
+  --sage-800: #573717;
+  --sage-900: #2c1c0b;
+
+  --color-bg: #fffbf5;
+  --color-bg-paper: #fef5e8;
+  --color-surface: #ffffff;
+  --color-text: #381406;
+  --color-text-secondary: #d86020;
+  --color-text-muted: #e08040;
+  --color-border: rgba(216, 96, 32, 0.12);
+  --color-border-light: rgba(216, 96, 32, 0.06);
+
+  --shadow-color: rgba(80, 30, 0, 0.08);
+  --shadow-color-sm: rgba(80, 30, 0, 0.04);
+  --glow-color: rgba(216, 96, 32, 0.15);
+
+  --scrollbar-thumb: rgba(216, 96, 32, 0.15);
+  --scrollbar-thumb-hover: rgba(216, 96, 32, 0.3);
+
+  --selection-bg: rgba(216, 96, 32, 0.2);
+  --selection-color: #60280d;
+}
+
+/* ======================== Layout Variables ======================== */
+
 :root {
-  --color-navy: #1a2847;
-  --color-navy-light: #4164b2;
-  --color-navy-lighter: #6783c1;
-  --color-cream: #fdf9f0;
-  --color-cream-dark: #f4e7c3;
-  --color-sage: #649b64;
-  --color-sage-light: #a2c3a2;
-  --color-accent: #c9873b;
-  --color-accent-light: #e8b06a;
-  --color-danger: #c0392b;
-  --color-success: #27ae60;
-  --color-warning: #f39c12;
   --sidebar-width: 260px;
   --header-height: 64px;
   --notes-width: 360px;
-  --border-sketch: 2px solid rgba(26, 40, 71, 0.12);
+  --border-sketch: 2px solid var(--color-border);
   --radius-card: 12px;
   --radius-btn: 8px;
-  --shadow-paper: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.04);
-  --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.12), 0 8px 24px rgba(0, 0, 0, 0.06);
   --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* ======================== Global Styles ======================== */
+
 /* Paper texture overlay */
 .bg-paper {
-  background-color: var(--color-cream);
-  background-image: url("data:image/svg+xml,%3Csvg width='200' height='200' viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  background-color: var(--color-bg-paper);
+  background-image: url("data:image/svg+xml,%3Csvg width='200' height='200' viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
 }
 
 /* Hand-drawn border effect */
 .border-sketch {
   border: var(--border-sketch);
   border-radius: var(--radius-card);
-  box-shadow: inset 0 0 0 1px rgba(26, 40, 71, 0.04);
+  box-shadow: inset 0 0 0 1px var(--color-border-light);
 }
-
 .border-sketch:hover {
-  box-shadow: var(--shadow-hover);
+  box-shadow: 0 2px 8px var(--shadow-color, rgba(0,0,0,0.12)), 0 8px 24px var(--shadow-color-sm, rgba(0,0,0,0.06));
 }
 
-/* Gradient mesh background for hero sections */
+/* Gradient mesh background */
 .gradient-mesh {
   background:
-    radial-gradient(at 20% 30%, rgba(65, 100, 178, 0.08) 0%, transparent 50%),
-    radial-gradient(at 80% 70%, rgba(100, 155, 100, 0.06) 0%, transparent 50%),
-    radial-gradient(at 50% 50%, rgba(201, 135, 59, 0.04) 0%, transparent 50%);
+    radial-gradient(at 20% 30%, var(--navy-100) 0%, transparent 50%),
+    radial-gradient(at 80% 70%, var(--sage-100) 0%, transparent 50%),
+    radial-gradient(at 50% 50%, var(--cream-200) 0%, transparent 50%);
 }
 
 /* Typewriter cursor blink */
 @keyframes blink {
-
-  0%,
-  50% {
-    opacity: 1;
-  }
-
-  51%,
-  100% {
-    opacity: 0;
-  }
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
 }
-
 .cursor-blink::after {
   content: '▊';
   animation: blink 1s step-end infinite;
-  color: var(--color-navy-light);
+  color: var(--navy-400);
   margin-left: 2px;
 }
 
 /* Staggered fade-in */
 @keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
 }
-
 .animate-fade-in-up {
   animation: fadeInUp 0.5s ease-out forwards;
   opacity: 0;
@@ -88,19 +359,9 @@
 
 /* Knowledge graph node pulse */
 @keyframes nodePulse {
-
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 0.6;
-  }
-
-  50% {
-    transform: scale(1.1);
-    opacity: 1;
-  }
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.1); opacity: 1; }
 }
-
 .node-pulse {
   animation: nodePulse 3s ease-in-out infinite;
 }
@@ -109,35 +370,32 @@
 .drag-ghost {
   opacity: 0.7;
   transform: rotate(2deg) scale(1.02);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 32px var(--shadow-color, rgba(0,0,0,0.2));
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb, rgba(26,40,71,0.15)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover, rgba(26,40,71,0.3)); }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(26, 40, 71, 0.15);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(26, 40, 71, 0.3);
-}
-
-/* Selection color */
+/* Selection */
 ::selection {
-  background: rgba(65, 100, 178, 0.2);
-  color: var(--color-navy);
+  background: var(--selection-bg, rgba(65,100,178,0.2));
+  color: var(--selection-color, #1a2847);
 }
 
-/* Markdown content styling */
+/* ======================== Theme Transition ======================== */
+
+.theme-transition,
+.theme-transition *,
+.theme-transition *::before,
+.theme-transition *::after {
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease !important;
+}
+
+/* ======================== Markdown ======================== */
+
 .markdown-body::after {
   content: "";
   display: table;
@@ -149,7 +407,7 @@
   font-size: 1.75rem;
   font-weight: 700;
   margin: 1.5rem 0 0.75rem;
-  color: var(--color-navy);
+  color: var(--navy-800);
 }
 
 .markdown-body h2 {
@@ -157,14 +415,14 @@
   font-size: 1.4rem;
   font-weight: 600;
   margin: 1.25rem 0 0.6rem;
-  color: var(--color-navy);
+  color: var(--navy-800);
 }
 
 .markdown-body h3 {
   font-size: 1.15rem;
   font-weight: 600;
   margin: 1rem 0 0.5rem;
-  color: var(--color-navy);
+  color: var(--navy-800);
 }
 
 .markdown-body p {
@@ -192,7 +450,7 @@
 }
 
 .markdown-body pre {
-  background: var(--color-navy);
+  background: var(--navy-800);
   color: #e8e8e8;
   padding: 1rem 1.25rem;
   border-radius: 8px;
@@ -207,7 +465,7 @@
 }
 
 .markdown-body blockquote {
-  border-left: 3px solid var(--color-navy-lighter);
+  border-left: 3px solid var(--navy-300);
   padding-left: 1rem;
   margin: 0.75rem 0;
   color: rgba(26, 40, 71, 0.7);
@@ -236,49 +494,42 @@
   margin-bottom: 0;
 }
 
-/* 💡 小技巧 — 琥珀/暖黄 */
 .markdown-body blockquote.tip {
   border-left-color: #f59e0b;
   background: linear-gradient(135deg, #fffbeb, #fef3c7);
   color: #92400e;
 }
 
-/* ⚠️ 注意 — 红色警告 */
 .markdown-body blockquote.warning {
   border-left-color: #ef4444;
   background: linear-gradient(135deg, #fef2f2, #fee2e2);
   color: #991b1b;
 }
 
-/* 📌 重点 — 蓝色海军 */
 .markdown-body blockquote.important {
   border-left-color: #3b82f6;
   background: linear-gradient(135deg, #eff6ff, #dbeafe);
   color: #1e3a5f;
 }
 
-/* 🌰 例子 — 绿色 sage */
 .markdown-body blockquote.example {
   border-left-color: #22c55e;
   background: linear-gradient(135deg, #f0fdf4, #dcfce7);
   color: #166534;
 }
 
-/* 🔑 核心概念 — 紫色 */
 .markdown-body blockquote.key {
   border-left-color: #a855f7;
   background: linear-gradient(135deg, #faf5ff, #f3e8ff);
   color: #581c87;
 }
 
-/* ✅ 总结 — 青绿 */
 .markdown-body blockquote.summary {
   border-left-color: #14b8a6;
   background: linear-gradient(135deg, #f0fdfa, #ccfbf1);
   color: #134e4a;
 }
 
-/* 📖 定义 — 灰色 */
 .markdown-body blockquote.definition {
   border-left-color: #6b7280;
   background: linear-gradient(135deg, #f9fafb, #f3f4f6);
@@ -316,13 +567,13 @@
 }
 
 .markdown-body a {
-  color: var(--color-navy-light);
+  color: var(--navy-500);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .markdown-body a:hover {
-  color: var(--color-navy);
+  color: var(--navy-700);
 }
 
 .markdown-body hr {

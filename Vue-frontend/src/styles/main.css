@@ -42,7 +42,7 @@
   }
 
   .card {
-    @apply bg-white rounded-xl border border-navy-100/50 shadow-paper transition-all duration-300;
+    @apply bg-white rounded-xl border border-navy-100 shadow-paper transition-all duration-300;
   }
 
   .card-hover {
@@ -85,7 +85,7 @@
   }
 
   .sidebar-link-active {
-    @apply sidebar-link bg-navy-100/70 text-navy-800 shadow-sm;
+    @apply sidebar-link bg-navy-100 text-navy-800 shadow-sm;
   }
 
   .section-title {

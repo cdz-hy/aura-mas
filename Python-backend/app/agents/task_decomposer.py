@@ -274,16 +274,22 @@ def task_decomposer_node(state: AgentState) -> Dict[str, Any]:
 
         if clarification_needed:
             logger.warning(f"  [任务分解智能体] 目标不明确/存在歧义，请求追问: {clarification_needed}")
+            # chunk 事件 → 前端流式显示（onChunk → streamBuffer）
+            _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+            if _sse_cb:
+                try:
+                    _sse_cb(f'data: {json.dumps({"type": "chunk", "content": clarification_needed}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
             return {
-                "agent_anomaly": True,
-                "anomaly_reason": clarification_needed,
-                "current_step": f"任务分解智能体: 目标不明确/存在歧义，返回主控追问",
-                "stream_events": [{
-                    "event_type": "thinking",
-                    "agent": "task_decomposer",
-                    "data": {"message": f"目标存在歧义，需要澄清: {clarification_needed}"},
-                    "step_description": "目标存在歧义，请求澄清"
-                }],
+                "_pending_question": clarification_needed,
+                "needs_human_confirm": True,
+                "current_step": f"任务分解智能体: 目标不明确，等待用户澄清",
+                "stream_events": [
+                    # content 事件 → graph_event_to_sse → node_content → 后端入库（_save_plain_text_reply）
+                    {"event_type": "content", "agent": "task_decomposer", "data": {"text": clarification_needed}},
+                    {"event_type": "thinking", "agent": "task_decomposer", "data": {"message": f"目标存在歧义，需要澄清: {clarification_needed}"}, "step_description": "目标存在歧义，请求澄清"},
+                ],
             }
 
         logger.info(f"  [任务分解智能体] 学习路径生成成功!")

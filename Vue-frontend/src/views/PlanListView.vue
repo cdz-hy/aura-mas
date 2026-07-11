@@ -82,10 +82,10 @@
           <!-- Top section: Icon and Title -->
           <div class="flex items-start justify-between">
             <div class="flex items-center gap-4 min-w-0 pr-16">
-              <div class="w-12 h-12 rounded-[14px] flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform duration-500 shadow-sm" :class="plan.status === 4 ? 'bg-emerald-50 text-emerald-500' : 'bg-gradient-to-br from-navy-50 to-navy-100 text-navy-600'">
+              <div class="w-12 h-12 rounded-[14px] flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform duration-500 shadow-sm" :class="(plan.status) === 4 ? 'bg-emerald-50 text-emerald-500' : 'bg-gradient-to-br from-navy-50 to-navy-100 text-navy-600'">
                 <!-- 优先显示自定义图标 -->
                 <div v-if="getPlanIcon(plan)" class="w-6 h-6" v-html="getPlanIcon(plan)"></div>
-                <svg v-else-if="plan.status === 4" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <svg v-else-if="(plan.status) === 4" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
                 </svg>
                 <svg v-else class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -107,7 +107,7 @@
             <div class="absolute top-5 right-4 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0 z-10">
               <!-- Complete button -->
               <button
-                v-if="plan.status !== 4 && (plan.displayStatus ?? plan.status) !== 4"
+                v-if="(plan.status) !== 4"
                 class="p-2 rounded-xl text-emerald-400 bg-emerald-50/50 border border-emerald-100/50 hover:text-white hover:bg-emerald-500 hover:border-emerald-500 transition-all shadow-sm"
                 @click.stop="confirmCompletePlan(plan.id)"
                 title="标记为已完成"
@@ -151,10 +151,10 @@
           <div class="flex items-center justify-between p-6 sm:p-7 rounded-2xl border border-navy-100/60 bg-white hover:border-navy-300 hover:shadow-xl hover:shadow-navy-200/30 hover:-translate-y-1 transition-all duration-300 relative gap-6">
             <div class="flex items-center gap-5 min-w-0 flex-1">
               <!-- Icon -->
-              <div class="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform duration-500 shadow-sm" :class="plan.status === 4 ? 'bg-emerald-50 text-emerald-500' : 'bg-gradient-to-br from-navy-50 to-navy-100 text-navy-600'">
+              <div class="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform duration-500 shadow-sm" :class="(plan.status) === 4 ? 'bg-emerald-50 text-emerald-500' : 'bg-gradient-to-br from-navy-50 to-navy-100 text-navy-600'">
                 <!-- 优先显示自定义图标 -->
                 <div v-if="getPlanIcon(plan)" class="w-7 h-7" v-html="getPlanIcon(plan)"></div>
-                <svg v-else-if="plan.status === 4" class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <svg v-else-if="(plan.status) === 4" class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
                 </svg>
                 <svg v-else class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -204,7 +204,7 @@
             <div class="absolute right-16 top-1/2 -translate-y-[44%] group-hover:-translate-y-1/2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-300 z-10">
               <!-- Complete button -->
               <button
-                v-if="plan.status !== 4 && (plan.displayStatus ?? plan.status) !== 4"
+                v-if="(plan.status) !== 4"
                 class="p-2 rounded-xl text-emerald-400 bg-emerald-50/50 border border-emerald-100/50 hover:text-white hover:bg-emerald-500 hover:border-emerald-500 transition-all shadow-sm"
                 @click.stop="confirmCompletePlan(plan.id)"
                 title="标记为已完成"
@@ -250,6 +250,51 @@
       @confirm="handleCompleteConfirm"
       @cancel="handleCompleteCancel"
     />
+
+    <!-- AI 学习顾问主动提示 -->
+    <transition name="slide-up">
+      <div
+        v-if="showAdvisorHint"
+        class="fixed bottom-6 right-6 z-50 max-w-sm bg-white rounded-2xl shadow-2xl border border-emerald-100 p-4"
+      >
+        <div class="flex items-start gap-3">
+          <div class="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center flex-shrink-0">
+            <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
+            </svg>
+          </div>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium text-navy-800">AI 学习顾问</p>
+            <p class="text-sm text-navy-700 mt-2 leading-relaxed">{{ advisorSuggestion }}</p>
+            <div class="flex items-center gap-2 mt-3">
+              <button
+                class="px-3 py-1.5 bg-emerald-600 text-white text-xs rounded-lg hover:bg-emerald-700 transition-colors"
+                @click="openAdvisor"
+              >
+                继续对话
+              </button>
+              <button
+                class="px-3 py-1.5 bg-navy-100 text-navy-600 text-xs rounded-lg hover:bg-navy-200 transition-colors"
+                @click="showAdvisorHint = false"
+              >
+                知道了
+              </button>
+            </div>
+          </div>
+          <button
+            class="p-1 rounded text-navy-300 hover:text-navy-500 transition-colors flex-shrink-0"
+            @click="showAdvisorHint = false"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </transition>
+
+    <!-- AI 学习顾问 -->
+    <PlanAdvisorChat ref="planAdvisorRef" />
   </div>
 </template>
 
@@ -257,9 +302,11 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { getPlans, createPlan, deletePlan, updatePlan } from '@/api/plan'
-import { getPlanResources, getProgressByPlan, markResourceComplete } from '@/api/resource'
+import { getPlanResources, getProgressByPlan, markResourceComplete, getBatchProgress, markAllComplete } from '@/api/resource'
+import { getDashboardStats } from '@/api/stats'
 import type { LearningPlan } from '@/types/plan'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import PlanAdvisorChat from '@/components/plan/PlanAdvisorChat.vue'
 
 const router = useRouter()
 const plans = ref<LearningPlan[]>([])
@@ -301,28 +348,18 @@ async function loadPlans() {
 async function loadAllProgress() {
   const map: Record<number, number> = {}
   const statsMap: Record<number, { completed: number; total: number }> = {}
-  await Promise.all(plans.value.map(async (plan) => {
-    try {
-      const [resRes, progRes] = await Promise.all([
-        getPlanResources(plan.id),
-        getProgressByPlan(plan.id),
-      ])
-      const validResourceIds = new Set(
-        (resRes.data || [])
-          .filter((r: any) => r.status >= 2)
-          .map((r: any) => r.id)
-      )
-      const total = validResourceIds.size
-      const completed = (progRes.data || []).filter(
-        (p: any) => p.status === 2 && validResourceIds.has(p.resourceId)
-      ).length
-      map[plan.id] = total > 0 ? Math.round((completed / total) * 100) : 0
-      statsMap[plan.id] = { completed, total }
-    } catch {
-      map[plan.id] = 0
-      statsMap[plan.id] = { completed: 0, total: 0 }
+  const planIds = plans.value.map(p => p.id)
+  if (planIds.length === 0) { planProgressMap.value = map; planStatsMap.value = statsMap; return }
+  try {
+    const res = await getBatchProgress(planIds)
+    for (const [id, summary] of Object.entries(res.data || {})) {
+      const s = summary as any
+      map[Number(id)] = Math.min(100, Math.round(s.progress * 100))
+      statsMap[Number(id)] = { completed: s.completed, total: s.total }
     }
-  }))
+  } catch {
+    for (const id of planIds) { map[id] = 0; statsMap[id] = { completed: 0, total: 0 } }
+  }
   planProgressMap.value = map
   planStatsMap.value = statsMap
 }
@@ -391,10 +428,7 @@ async function handleCompleteConfirm() {
   if (!completingPlanId.value) return
   const planId = completingPlanId.value
   try {
-    const resRes = await getPlanResources(planId)
-    const resources = resRes.data || []
-    await Promise.all(resources.map(r => markResourceComplete(planId, r.id).catch(() => {})))
-    await updatePlan(planId, { status: 4, displayStatus: 4 })
+    await markAllComplete(planId)
     await loadPlans()
   } catch (e) {
     console.error('Failed to complete plan:', e)
@@ -411,11 +445,11 @@ function handleCompleteCancel() {
 
 function statusClass(status: number) {
   const map: Record<number, string> = {
-    0: 'bg-navy-100 text-navy-500',
-    1: 'bg-amber-100 text-amber-600',
-    2: 'bg-blue-100 text-blue-600',
-    3: 'bg-sage-100 text-sage-600',
-    4: 'bg-emerald-100 text-emerald-600',
+    0: 'bg-gray-100 text-gray-500',                        // 待规划 — 灰色
+    1: 'bg-amber-50 text-amber-700 border border-amber-200',  // 生成中 — 琥珀
+    2: 'bg-sky-50 text-sky-700 border border-sky-200',        // 待确认 — 天蓝
+    3: 'bg-orange-50 text-orange-700 border border-orange-200', // 学习中 — 橙色
+    4: 'bg-emerald-50 text-emerald-700 border border-emerald-200', // 已完成 — 翡翠绿
   }
   return map[status] || map[0]
 }
@@ -443,8 +477,104 @@ function handlePlanIconUpdated(e: Event) {
   }
 }
 
-onMounted(() => {
-  loadPlans()
+// 检测学习变化并主动给出建议
+const showAdvisorHint = ref(false)
+const advisorHintText = ref('')
+const advisorSuggestion = ref('')
+const planAdvisorRef = ref<any>(null)
+
+async function openAdvisor() {
+  showAdvisorHint.value = false
+  if (planAdvisorRef.value) {
+    planAdvisorRef.value.openChat()
+  }
+}
+
+async function checkLearningChanges() {
+  try {
+    const lastCheckKey = 'advisor_last_check'
+    const lastCheckStr = localStorage.getItem(lastCheckKey)
+    const lastCheck = lastCheckStr ? JSON.parse(lastCheckStr) : null
+
+    const statsRes = await getDashboardStats().catch(() => ({ data: null }))
+    const stats = statsRes.data
+
+    let hasChange = false
+    let changeReason = ''
+
+    if (lastCheck && stats) {
+      const lastSeconds = lastCheck.todayDurationSeconds || 0
+      const currentSeconds = stats.todayDurationSeconds || 0
+      const lastMinutes = Math.floor(lastSeconds / 60)
+      const currentMinutes = Math.floor(currentSeconds / 60)
+      if (currentMinutes - lastMinutes > 30) {
+        hasChange = true
+        changeReason = `学习时长增加了 ${currentMinutes - lastMinutes} 分钟`
+      }
+
+      const lastStudyHours = lastCheck.totalStudyHours || 0
+      const currentStudyHours = stats.totalStudyHours || 0
+      if (currentStudyHours > lastStudyHours) {
+        hasChange = true
+        changeReason = `总学习时长增加到 ${currentStudyHours} 小时`
+      }
+
+      const lastPlanCount = lastCheck.planCount || 0
+      const currentPlanCount = plans.value.length
+      if (currentPlanCount > lastPlanCount) {
+        hasChange = true
+        changeReason = `新增了 ${currentPlanCount - lastPlanCount} 个学习计划`
+      }
+    } else if (!lastCheck && plans.value.length > 0) {
+      hasChange = true
+      changeReason = '发现你有学习计划'
+    }
+
+    localStorage.setItem(lastCheckKey, JSON.stringify({
+      todayDurationSeconds: stats?.todayDurationSeconds || 0,
+      totalStudyHours: stats?.totalStudyHours || 0,
+      planCount: plans.value.length,
+      timestamp: Date.now()
+    }))
+
+    // 如果有变化，调用 AI 分析并给出建议
+    if (hasChange) {
+      try {
+        const { issueTicket } = await import('@/api/auth')
+        const ticketRes = await issueTicket()
+        const ticket = ticketRes.data.ticket
+
+        const response = await fetch(`http://localhost:8002/api/ai/plan-advisor/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${ticket}`
+          },
+          body: JSON.stringify({
+            stats: stats,
+            plans: plans.value,
+            userMessage: `[系统自动触发] 检测到学生学习情况变化：${changeReason}。请主动分析学生的学习情况，根据学习计划和资源内容，主动提出问题或建议。回复要简洁，控制在100字以内。`
+          })
+        })
+
+        if (response.ok) {
+          const data = await response.json()
+          advisorHintText.value = changeReason
+          advisorSuggestion.value = data.message || '你最近学习很努力，继续保持！'
+          showAdvisorHint.value = true
+        }
+      } catch (e) {
+        console.error('AI analysis failed:', e)
+      }
+    }
+  } catch (e) {
+    console.error('Check learning changes failed:', e)
+  }
+}
+
+onMounted(async () => {
+  await loadPlans()
+  checkLearningChanges()
   window.addEventListener('plan-icon-updated', handlePlanIconUpdated)
 })
 
@@ -545,5 +675,38 @@ onBeforeUnmount(() => {
 .view-fade-leave-to {
   opacity: 0;
   transform: scale(0.98) translateY(-12px);
+}
+
+/* Slide up animation */
+.slide-up-enter-active {
+  transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.slide-up-leave-active {
+  transition: all 0.3s ease-in;
+}
+
+.slide-up-enter-from {
+  opacity: 0;
+  transform: translateY(20px) scale(0.95);
+}
+
+.slide-up-leave-to {
+  opacity: 0;
+  transform: translateY(10px) scale(0.98);
+}
+
+/* Gentle bounce animation */
+@keyframes bounceGentle {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-bounce-gentle {
+  animation: bounceGentle 2s ease-in-out infinite;
 }
 </style>

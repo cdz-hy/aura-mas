@@ -38,3 +38,6 @@ llm-animation.html
 docs/
 docs/superpowers/
 Python-backend/tests/
+combined_mobile_prototype.html
+Android-app/app/release/
+Android-app/.kotlin/

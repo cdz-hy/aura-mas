@@ -1158,14 +1158,6 @@ const progressMap = ref<Record<number, number>>({}) // resourceId -> status (0/1
 const selectedModuleIndex = ref(-1)
 const selectedResourceId = ref<number | null>(null)
 const selectedResource = ref<LearningResource | null>(null)
-
-// 流式资源生成开始时，清除选中的资源，让中间面板显示流式预览
-watch(() => chatStore.isResourceStreaming, (streaming) => {
-  if (streaming) {
-    selectedResource.value = null
-    selectedResourceId.value = null
-  }
-})
 const isFullscreen = ref(false)
 const quizData = ref<QuizData | null>(null)
 const mindmapData = ref<MindElixirData | null>(null)
@@ -1397,11 +1389,21 @@ const planIconSvg = computed(() => {
 })
 
 function statusClass(status: number) {
-  return status === 2 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+  const map: Record<number, string> = {
+    0: 'bg-gray-100 text-gray-500',                        // 待规划
+    1: 'bg-amber-50 text-amber-700 border border-amber-200',  // 生成中
+    2: 'bg-sky-50 text-sky-700 border border-sky-200',        // 待确认
+    3: 'bg-orange-50 text-orange-700 border border-orange-200', // 学习中
+    4: 'bg-emerald-50 text-emerald-700 border border-emerald-200', // 已完成
+  }
+  return map[status] ?? 'bg-gray-100 text-gray-500'
 }
 
 function statusText(status: number) {
-  return status === 2 ? '已完成' : '进行中'
+  const map: Record<number, string> = {
+    0: '待规划', 1: '生成中', 2: '待确认', 3: '学习中', 4: '已完成',
+  }
+  return map[status] ?? '未知'
 }
 
 function pptxDownloadUrl(filename: string) {
@@ -1861,8 +1863,7 @@ async function generateFromTreeNode(payload: { nodeId: string; type: string }) {
     }
     chatStore.selectedModuleContext = ctx
     await chatStore.requestNodeResourceGeneration(String(planId.value), ctx, payload.type)
-    // quiz 类型由流式预览（QuizStreamPreview）处理，不要提前打开占位资源
-    if (!isTreeMode.value && payload.type !== 'quiz') {
+    if (!isTreeMode.value) {
       await openResourceById(resourceId, payload.type)
     }
   } catch (e) {
@@ -2614,6 +2615,7 @@ function toggleResource(res: LearningResource, options: ToggleResourceOptions = 
     moduleId: res.id,
     planId: res.planId || planId.value,
     nodeId: (res.moduleData?.nodeId || res.moduleData?.node_id) as string | undefined,
+    moduleOrder: res.moduleOrder,
   }
   // 仅在非 quiz 资源时提示（quiz 本身已是补充资源）
   if (res.moduleType !== 'quiz') {
@@ -3213,8 +3215,8 @@ watch(() => chatStore.streamingPlaceholders, (placeholders) => {
     }
     resources.value.push(placeholderRes)
   }
-  // 自动选中第一个占位资源以在中间面板显示流式内容
-  if (placeholders.length > 0 && !selectedResource.value) {
+  // 自动选中第一个占位资源以在中间面板显示流式内容（始终覆盖，确保流式预览可见）
+  if (placeholders.length > 0) {
     const firstPlaceholder = resources.value.find(r => r.id === placeholders[0].id)
     if (firstPlaceholder) {
       selectedResourceId.value = firstPlaceholder.id

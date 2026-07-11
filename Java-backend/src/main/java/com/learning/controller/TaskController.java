@@ -75,6 +75,15 @@ public class TaskController {
         return Result.success(taskDispatchService.createInternalTask(planId, resourceId, agentChain));
     }
 
+    @Operation(summary = "内部接口：分派生成任务")
+    @PostMapping("/internal/dispatch")
+    public Result<ResourceGenerationTask> dispatchTaskInternal(@RequestBody java.util.Map<String, Object> body) {
+        Long planId = Long.valueOf(body.get("planId").toString());
+        Long resourceId = Long.valueOf(body.get("resourceId").toString());
+        String agentChain = body.get("agentChain") != null ? body.get("agentChain").toString() : null;
+        return Result.success(taskDispatchService.dispatchTask(planId, resourceId, agentChain));
+    }
+
     @Operation(summary = "内部接口：完成任务（原子性：保存内容 + 更新状态）")
     @PutMapping("/internal/{taskId}/complete")
     public Result<Void> completeTaskInternal(@PathVariable Long taskId,
