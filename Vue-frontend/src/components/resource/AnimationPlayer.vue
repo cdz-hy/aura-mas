@@ -5,11 +5,19 @@
     @mouseenter="hovering = true"
     @mouseleave="hovering = false"
   >
-    <iframe ref="frame" class="animation-player__frame" :srcdoc="html" sandbox="allow-scripts" title="教学动画"></iframe>
+    <iframe ref="frame" class="animation-player__frame" :class="{ 'pointer-events-none': isDragging }" :srcdoc="html" sandbox="allow-scripts" title="教学动画"></iframe>
     
-    <div class="animation-player__overlay" :class="{ 'is-hidden': playing && !hovering }">
-      <div v-if="narrationHealthy && subtitleVisible && currentCue" class="animation-player__subtitle">
-        <span>{{ currentCue.text }}</span>
+    <div class="animation-player__overlay" :class="{ 'is-hidden': !hovering && playbackState === 'playing' }">
+      <div class="animation-player__subtitle-wrapper">
+        <div 
+          v-if="narrationHealthy && subtitleVisible && currentCue" 
+          class="animation-player__subtitle"
+          :style="{ transform: `translate(${subtitleX}px, ${subtitleY}px)` }"
+          @mousedown.stop="onSubtitleDragStart"
+          @touchstart.stop="onSubtitleDragStart"
+        >
+          <span>{{ currentCue.text }}</span>
+        </div>
       </div>
       
       <div class="animation-player__controls">
@@ -40,7 +48,7 @@
           </select>
           <button type="button" class="btn-export" :disabled="!exportSupported || activeExport.status === 'rendering'" @click="handleExport">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" v-if="activeExport.status === 'ready'"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" v-else-if="activeExport.status === 'rendering'"><path d="M12 4V2C6.48 2 2 6.48 2 12h2c0-4.41 3.59-8 8-8zm8 8c0-4.41-3.59-8-8-8v2c4.41 0 8 3.59 8 8h2z"/></svg>
+            <svg class="icon-spin" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" v-else-if="activeExport.status === 'rendering'"><path d="M12 4V2C6.48 2 2 6.48 2 12h2c0-4.41 3.59-8 8-8zm8 8c0-4.41-3.59-8-8-8v2c4.41 0 8 3.59 8 8h2z"/></svg>
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" v-else><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
             {{ exportLabel }}
           </button>
@@ -82,7 +90,7 @@ interface Narration extends NarrationLike {
   cues: Cue[]
 }
 
-const props = defineProps<{ resourceId: number; html: string; narration: Narration; videoExports?: Record<string, AnimationExportState> }>()
+const props = defineProps<{ resourceId: number; html: string; narration: Narration; videoExports?: Record<string, AnimationExportState>; isDragging?: boolean }>()
 const frame = ref<HTMLIFrameElement | null>(null)
 const audio = ref<HTMLAudioElement | null>(null)
 const playing = ref(false)
@@ -105,6 +113,41 @@ let pollTimer: number | undefined
 let lastBeatIndex = -1
 let silentAnchor = createSilentAnchor(0)
 let clockMode: 'audio' | 'silent' = 'silent'
+
+const subtitleX = ref(0)
+const subtitleY = ref(0)
+let isDraggingSubtitle = false
+let startDragX = 0
+let startDragY = 0
+
+function onSubtitleDragStart(e: MouseEvent | TouchEvent) {
+  isDraggingSubtitle = true
+  const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
+  const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY
+  startDragX = clientX - subtitleX.value
+  startDragY = clientY - subtitleY.value
+  document.addEventListener('mousemove', onSubtitleDragMove)
+  document.addEventListener('touchmove', onSubtitleDragMove, { passive: false })
+  document.addEventListener('mouseup', onSubtitleDragEnd)
+  document.addEventListener('touchend', onSubtitleDragEnd)
+}
+
+function onSubtitleDragMove(e: MouseEvent | TouchEvent) {
+  if (!isDraggingSubtitle) return
+  if (e.cancelable) e.preventDefault()
+  const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
+  const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY
+  subtitleX.value = clientX - startDragX
+  subtitleY.value = clientY - startDragY
+}
+
+function onSubtitleDragEnd() {
+  isDraggingSubtitle = false
+  document.removeEventListener('mousemove', onSubtitleDragMove)
+  document.removeEventListener('touchmove', onSubtitleDragMove)
+  document.removeEventListener('mouseup', onSubtitleDragEnd)
+  document.removeEventListener('touchend', onSubtitleDragEnd)
+}
 
 const durationMs = computed(() => Math.max(1, Math.round(props.narration.duration * 1000)))
 const currentCue = computed(() => findCueAtTime(props.narration.cues, currentMs.value))
@@ -310,12 +353,26 @@ function onAudioEnded() {
   endPlayback()
 }
 
+const MAX_POLL_MS = 10 * 60 * 1000 // 10 minutes max polling
+let pollStartedAt = 0
+let pollInterval = 2000
+
 async function refreshExports() {
   const result = await getAnimationExports(props.resourceId)
   exports.value = result.qualities
   const active = exports.value[selectedQuality.value]
   if (active?.status === 'failed' && active.error) exportError.value = active.error
-  if (Object.values(exports.value).some(state => state.status === 'rendering')) pollTimer = window.setTimeout(refreshExports, 2000)
+  const stillRendering = Object.values(exports.value).some(state => state.status === 'rendering')
+  if (stillRendering) {
+    if (Date.now() - pollStartedAt > MAX_POLL_MS) {
+      // Timeout: stop polling and show error
+      exportError.value = '导出超时，请重试'
+      exports.value[selectedQuality.value] = { ...exports.value[selectedQuality.value], status: 'failed' as const }
+      return
+    }
+    pollInterval = Math.min(pollInterval * 1.3, 10000) // gradually slow down, cap at 10s
+    pollTimer = window.setTimeout(refreshExports, pollInterval)
+  }
 }
 
 async function handleExport() {
@@ -328,7 +385,7 @@ async function handleExport() {
     exports.value = result.qualities
     const failed = result.qualities?.[selectedQuality.value]
     if (failed?.status === 'failed' && failed.error) exportError.value = failed.error
-    window.clearTimeout(pollTimer); pollTimer = window.setTimeout(refreshExports, 1500)
+    window.clearTimeout(pollTimer); pollStartedAt = Date.now(); pollInterval = 2000; pollTimer = window.setTimeout(refreshExports, 1500)
   } catch (error) {
     exportError.value = error instanceof Error ? error.message : '视频导出失败'
   }
@@ -349,6 +406,7 @@ watch(() => props.narration, () => {
 onMounted(() => {
   window.addEventListener('message', onFrameMessage)
   if (Object.values(exports.value).some(state => state.status === 'rendering')) {
+    pollStartedAt = Date.now(); pollInterval = 2000
     pollTimer = window.setTimeout(refreshExports, 2000)
   }
 })
@@ -361,23 +419,31 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 
+ * Layout strategy: .animation-player is ALWAYS flex-column.
+ * The iframe has its own aspect-ratio so it sizes itself.
+ * In wide mode: overlay is position:absolute over the iframe.
+ * In narrow mode (@container): overlay becomes position:static, flowing below iframe.
+ * IMPORTANT: @container queries only change CHILDREN, never the container element itself.
+ */
 .animation-player { 
   position: relative; 
   width: 100%; 
-  aspect-ratio: 16 / 9; 
-  overflow: hidden; 
+  display: flex;
+  flex-direction: column;
   background: #050505; 
   border-radius: 8px;
   container-type: inline-size;
 }
 .animation-player__frame { 
   width: 100%; 
-  height: 100%; 
+  aspect-ratio: 16 / 9;
+  flex-shrink: 0;
   border: 0; 
   display: block; 
 }
 
-/* Elegant Overlay for subtitles & controls */
+/* Elegant Overlay for subtitles & controls — default: absolute over iframe */
 .animation-player__overlay {
   position: absolute;
   inset: 0;
@@ -394,6 +460,13 @@ onBeforeUnmount(() => {
 }
 
 /* Beautiful Subtitles */
+.animation-player__subtitle-wrapper {
+  transition: transform 0.4s ease;
+  pointer-events: none;
+}
+.animation-player__overlay.is-hidden .animation-player__subtitle-wrapper {
+  transform: translateY(20px);
+}
 .animation-player__subtitle {
   text-align: center;
   color: rgba(255, 255, 255, 0.95);
@@ -402,10 +475,11 @@ onBeforeUnmount(() => {
   line-height: 1.5;
   margin-bottom: clamp(10px, 2cqw, 24px);
   pointer-events: auto;
-  transition: transform 0.4s ease;
+  cursor: grab;
+  touch-action: none;
 }
-.animation-player__overlay.is-hidden .animation-player__subtitle {
-  transform: translateY(20px);
+.animation-player__subtitle:active {
+  cursor: grabbing;
 }
 .animation-player__subtitle span {
   background: rgba(0, 0, 0, 0.5);
@@ -430,6 +504,39 @@ onBeforeUnmount(() => {
 }
 .animation-player__overlay.is-hidden .animation-player__controls {
   transform: translateY(100%);
+}
+
+@keyframes spin { 100% { transform: rotate(360deg); } }
+.icon-spin { animation: spin 1s linear infinite; }
+
+/* Narrow layout: overlay drops BELOW the iframe (only child rules here!) */
+@container (max-width: 600px) {
+  .animation-player__frame {
+    border-radius: 8px 8px 0 0;
+  }
+  .animation-player__overlay {
+    position: static;
+    background: #111;
+    padding: 12px 16px 16px;
+    flex-direction: column-reverse;
+    gap: 12px;
+    opacity: 1 !important;
+    pointer-events: auto;
+    border-radius: 0 0 8px 8px;
+  }
+  .animation-player__overlay.is-hidden {
+    opacity: 1 !important;
+  }
+  .animation-player__controls {
+    transform: none !important;
+  }
+  .animation-player__subtitle-wrapper {
+    transform: none !important;
+  }
+  .animation-player__subtitle {
+    font-size: 14px;
+    margin-bottom: 0;
+  }
 }
 
 .animation-player__playback { 

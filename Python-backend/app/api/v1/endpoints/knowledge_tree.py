@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -9,6 +10,7 @@ from app.schemas.sse_bridge import _sse
 from app.services.db.java_client import java_client
 from app.services.knowledge_tree_ai import get_knowledge_tree_ai_service
 
+logger = logging.getLogger("api.knowledge_tree")
 router = APIRouter()
 
 
@@ -17,6 +19,7 @@ def _user_id_from_ticket(ticket: str) -> int:
         ticket_info = java_client.validate_ticket(ticket)
         return ticket_info["user_id"]
     except Exception as exc:
+        logger.warning("知识树鉴权失败: %s", exc)
         raise HTTPException(status_code=401, detail=str(exc))
 
 
@@ -30,6 +33,7 @@ def _verify_node_access(tree_id: str, node_id: str, user_id: int) -> None:
     try:
         java_client.verify_tree_node_access(tree_id, node_id, user_id)
     except Exception as exc:
+        logger.warning("节点访问校验失败: tree=%s node=%s user=%s error=%s", tree_id, node_id, user_id, exc)
         raise HTTPException(status_code=404, detail=str(exc))
 
 
@@ -37,16 +41,19 @@ def _verify_plan_tree_access(plan_id: int, tree_id: str, user_id: int) -> None:
     try:
         tree_response = java_client.get_tree_by_plan(plan_id, user_id)
     except Exception as exc:
+        logger.warning("计划树访问校验失败: plan=%s tree=%s user=%s error=%s", plan_id, tree_id, user_id, exc)
         raise HTTPException(status_code=404, detail=str(exc))
 
     tree = tree_response.get("tree", {}) if isinstance(tree_response, dict) else {}
     if tree.get("id") != tree_id:
+        logger.warning("树不属于计划: tree=%s plan=%s", tree_id, plan_id)
         raise HTTPException(status_code=404, detail="tree does not belong to plan")
 
 
 @router.get("/tree/plan/{plan_id}/ensure")
 async def ensure_tree(plan_id: int, ticket: str = Query(...)):
     user_id = _user_id_from_ticket(ticket)
+    logger.info("知识树确保: plan=%s user=%s", plan_id, user_id)
     return java_client.get_or_create_tree(plan_id, user_id)
 
 

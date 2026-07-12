@@ -1,11 +1,14 @@
+import json
+import asyncio
+import logging
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from app.services.retrieval import HybridRetrievalService
 from app.services.llm import QwenChatService
-import json
-import asyncio
 
+logger = logging.getLogger("api.query")
 router = APIRouter()
 retrieval_service = HybridRetrievalService()
 chat_service = QwenChatService()
@@ -26,6 +29,7 @@ async def search_only(request: QueryRequest):
         )
         return results
     except Exception as e:
+        logger.error("RAG 检索失败: query=%s error=%s", request.query, e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/chat")
@@ -67,6 +71,7 @@ async def chat_with_rag(request: QueryRequest):
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
             
         except Exception as e:
+            logger.error("RAG 对话失败: query=%s error=%s", request.query, e, exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

@@ -87,12 +87,16 @@ class JavaBackendClient:
                 if code == 200 or code == 0:
                     return result.get("data", result)
                 else:
+                    logger.error("Java 后端业务错误: %s %s -> code=%s msg=%s", method, path, code, result.get('msg'))
                     raise Exception(f"Java 后端返回错误: {result.get('msg', '未知错误')}")
             else:
+                logger.error("Java 后端 HTTP 错误: %s %s -> %s %s", method, path, resp.status_code, resp.text[:200])
                 raise Exception(f"Java 后端请求失败 ({resp.status_code}): {resp.text}")
         except requests.exceptions.ConnectionError:
+            logger.error("Java 后端连接失败: %s %s", method, url)
             raise Exception(f"无法连接 Java 后端: {url}")
         except requests.exceptions.Timeout:
+            logger.error("Java 后端请求超时: %s %s (timeout=%ss)", method, url, self.timeout)
             raise Exception(f"Java 后端请求超时: {url}")
 
     async def _arequest(self, method: str, path: str, **kwargs) -> Any:
@@ -109,12 +113,16 @@ class JavaBackendClient:
                 if code == 200 or code == 0:
                     return result.get("data", result)
                 else:
+                    logger.error("Java 后端业务错误(async): %s %s -> code=%s msg=%s", method, path, code, result.get('msg'))
                     raise Exception(f"Java 后端返回错误: {result.get('msg', '未知错误')}")
             else:
+                logger.error("Java 后端 HTTP 错误(async): %s %s -> %s %s", method, path, resp.status_code, resp.text[:200])
                 raise Exception(f"Java 后端请求失败 ({resp.status_code}): {resp.text}")
         except httpx.ConnectError:
+            logger.error("Java 后端连接失败(async): %s %s", method, url)
             raise Exception(f"无法连接 Java 后端: {url}")
         except httpx.TimeoutException:
+            logger.error("Java 后端请求超时(async): %s %s (timeout=%ss)", method, url, self.timeout)
             raise Exception(f"Java 后端请求超时: {url}")
 
     # ==================== 对话记录 ====================
@@ -256,8 +264,8 @@ class JavaBackendClient:
                 json={"user_id": user_id, "resource_ids": resource_ids, "completed": completed},
                 timeout=5,
             )
-        except Exception:
-            pass  # 非阻塞，失败不影响主流程
+        except Exception as e:
+            logger.warning("掌握度批量分析触发失败: user=%s resources=%s error=%s", user_id, resource_ids, e)
 
     # ==================== 知识树 ====================
 

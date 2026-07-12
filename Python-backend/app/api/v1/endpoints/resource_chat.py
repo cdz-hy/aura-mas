@@ -2959,8 +2959,8 @@ async def get_stream_state(
                     "message": "学习路径已生成，请确认",
                     "task_breakdown": task_breakdown,
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("获取流状态异常(已降级): session=%s error=%s", session_id, e)
 
     return {"data": state, "pending_confirmation": pending_confirmation}
 

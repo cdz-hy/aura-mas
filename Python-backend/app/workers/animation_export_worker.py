@@ -28,14 +28,23 @@ def process_job(job: dict) -> None:
     state = module_data.setdefault("videoExports", {}).setdefault(quality, {})
     if state.get("resourceVersion") != int(job["resourceVersion"]):
         return
+    logger.info("=== 开始处理动画导出任务: 资源ID %s [%s] ===", resource_id, quality)
     try:
         from app.services.animation_renderer import render_animation
 
-        with tempfile.TemporaryDirectory(prefix="aura-export-") as directory:
+        export_temp_dir = Path(__file__).resolve().parent.parent.parent / "temp"
+        export_temp_dir.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(prefix="aura-export-", dir=export_temp_dir) as directory:
             output = str(Path(directory) / f"animation-{quality}.mp4")
             render_animation(module_data, quality, output)
+            
+            logger.info("开始上传视频到七牛云...")
             url = qiniu_client.upload_file(output, "animation-video")
+            logger.info("上传成功！CDN 地址: %s", url)
+            
         state.update({"status": "ready", "url": url, "error": None, "completedAt": utc_now()})
+        logger.info("=== 动画导出任务圆满完成: 资源ID %s ===", resource_id)
     except Exception as exc:
         logger.exception("Animation export failed for resource %s", resource_id)
         state.update({"status": "failed", "url": None, "error": str(exc)[:500], "completedAt": utc_now()})

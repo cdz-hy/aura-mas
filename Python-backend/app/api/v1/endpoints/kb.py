@@ -171,6 +171,7 @@ async def get_collection_stats(collection_name: str):
         stats = vector_db.get_collection_stats()
         return stats
     except Exception as e:
+        logger.error("获取集合统计失败: collection=%s error=%s", collection_name, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取集合统计失败: {str(e)}")
 
 
@@ -229,6 +230,7 @@ async def get_document_detail(collection_name: str, doc_id: int):
             "sample_chunks": sample_chunks,
         }
     except Exception as e:
+        logger.error("获取文档详情失败: doc_id=%s error=%s", doc_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取文档详情失败: {str(e)}")
 
 
@@ -246,4 +248,5 @@ async def delete_document_chunks(collection_name: str, doc_id: int):
 
         return {"status": "success", "doc_id": doc_id, "message": "切片已删除"}
     except Exception as e:
+        logger.error("删除切片失败: doc_id=%s error=%s", doc_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"删除切片失败: {str(e)}")

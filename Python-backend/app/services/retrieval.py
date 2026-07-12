@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import asyncio
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -8,6 +9,8 @@ from qdrant_client import models
 from app.services.vector_db import QdrantService
 from app.services.embedding import BailianEmbeddingService, SparseEmbeddingService
 from app.services.reranker import BailianRerankerService
+
+logger = logging.getLogger("services.retrieval")
 
 # 全局共享线程池，硬性限制最多 15 个并发任务，防止爆 Qps/并发
 _executor = ThreadPoolExecutor(max_workers=15)
@@ -46,18 +49,16 @@ class HybridRetrievalService:
         4. 使用 Reranker 进行二次精排，取前 5 条。
         5. 对前 5 条结果的大切块进行去重，提取最终上下文。
         """
-        print(f"\n{'='*60}")
-        print(f"  [检索启动] 用户查询: {query}")
-        print(f"{'='*60}")
+        logger.info(f"[检索启动] 用户查询: {query}")
         
         loop = asyncio.get_running_loop()
 
         # 1. 生成查询向量
-        print(f"\n  [阶段 1/4] 正在并发生成查询向量 (Dense + Sparse)...")
+        logger.info("[阶段 1/4] 正在并发生成查询向量 (Dense + Sparse)...")
         dense_task = loop.run_in_executor(_executor, self.dense_embedding.embed_query, query)
         sparse_task = loop.run_in_executor(_executor, self.sparse_embedding.embed_text, query)
         dense_vec, sparse_vec = await asyncio.gather(dense_task, sparse_task)
-        print(f"  [阶段 1/4] 查询向量生成完成 (Dense 维度: {len(dense_vec)}, Sparse 非零项: {len(sparse_vec.get('indices', []))})")
+        logger.info(f"[阶段 1/4] 查询向量生成完成 (Dense 维度: {len(dense_vec)}, Sparse 非零项: {len(sparse_vec.get('indices', []))})")
 
         # 2. 并行独立检索 (解决 DBSF 算分不公问题)
         text_limit = max(1, int(limit * (1.0 - image_bias)))
@@ -78,9 +79,9 @@ class HybridRetrievalService:
                 )
             )
         else:
-            print(f"  [降级] 查询词稀疏向量为空，本次文本检索自动关闭 text-sparse 并联通道")
+            logger.warning(f"[降级] 查询词稀疏向量为空，本次文本检索自动关闭 text-sparse 并联通道")
             
-        print(f"\n  [阶段 2/4] 正在执行独立并发检索: 文本(DBSF, 限额 {text_limit}) + 图片(Dense, 限额 {image_limit})...")
+        logger.info(f"[阶段 2/4] 正在执行独立并发检索: 文本(DBSF, 限额 {text_limit}) + 图片(Dense, 限额 {image_limit})...")
         
         text_search_func = partial(
             self.vector_db.client.query_points,
@@ -123,16 +124,14 @@ class HybridRetrievalService:
 
         text_recalled = sum(1 for r in initial_results if r["payload"].get("type") == "text")
         image_recalled = sum(1 for r in initial_results if r["payload"].get("type") == "image")
-        print(f"  [阶段 2/4] 混合检索完成, 共召回 {len(initial_results)} 个候选 (文本: {text_recalled}, 图片: {image_recalled})")
+        logger.info(f"[阶段 2/4] 混合检索完成, 共召回 {len(initial_results)} 个候选 (文本: {text_recalled}, 图片: {image_recalled})")
 
         if not initial_results:
-            print("  [警告] 未能在向量数据库中找到任何匹配项，检索终止。")
+            logger.warning("未能在向量数据库中找到任何匹配项，检索终止。")
             return {"final_results": [], "context_chunks": []}
 
         # 输出召回阶段的完整日志
-        print(f"\n  {'─'*56}")
-        print(f"  [召回详情] 以下为 DBSF 融合后的全部 {len(initial_results)} 个候选结果:")
-        print(f"  {'─'*56}")
+        logger.info(f"[召回详情] 以下为 DBSF 融合后的全部 {len(initial_results)} 个候选结果:")
         for idx, res in enumerate(initial_results, 1):
             p = res["payload"]
             doc_type = p.get("type", "unknown")
@@ -142,16 +141,13 @@ class HybridRetrievalService:
 
             if doc_type == "text":
                 content_preview = p.get("content", "")[:60].replace("\n", " ")
-                print(f"  #{idx:>2} [文本] | DBSF: {dbsf_score:.4f} | 文档: {doc_title} | 章节: {heading}")
-                print(f"       内容: {content_preview}...")
+                logger.info(f"  #{idx:>2} [文本] | DBSF: {dbsf_score:.4f} | 文档: {doc_title} | 章节: {heading} | 内容: {content_preview}...")
             else:
                 caption_preview = p.get("image_caption", "无描述")[:50]
-                print(f"  #{idx:>2} [图片] | DBSF: {dbsf_score:.4f} | 文档: {doc_title} | 章节: {heading}")
-                print(f"       描述: {caption_preview}...")
-        print(f"  {'─'*56}")
+                logger.info(f"  #{idx:>2} [图片] | DBSF: {dbsf_score:.4f} | 文档: {doc_title} | 章节: {heading} | 描述: {caption_preview}...")
 
         # 4. 执行多模态重排序 (针对小切块进行精排)
-        print(f"\n  [阶段 3/4] 正在启动多模态重排序 (模型: {self.reranker.model_name}, 精选 Top {rerank_top_n})...")
+        logger.info(f"[阶段 3/4] 正在启动多模态重排序 (模型: {self.reranker.model_name}, 精选 Top {rerank_top_n})...")
         rerank_func = partial(
             self.reranker.rerank,
             query=query,
@@ -166,10 +162,10 @@ class HybridRetrievalService:
             reranked_results = [r for r in reranked_results if r.get("rerank_score", 0) >= min_rerank_score]
             filtered_count = before_count - len(reranked_results)
             if filtered_count > 0:
-                print(f"  [过滤] rerank_score < {min_rerank_score} 的结果已移除: {filtered_count} 条, 剩余 {len(reranked_results)} 条")
+                logger.info(f"[过滤] rerank_score < {min_rerank_score} 的结果已移除: {filtered_count} 条, 剩余 {len(reranked_results)} 条")
 
         # 5. 仅针对精排后的 Top N 结果进行大切块回溯与去重
-        print(f"\n  [阶段 4/4] 开始父块内容回溯与上下文去重...")
+        logger.info("[阶段 4/4] 开始父块内容回溯与上下文去重...")
         final_context_chunks = []
         seen_parents = set()
         
@@ -189,7 +185,7 @@ class HybridRetrievalService:
                 is_new = parent_id not in seen_parents
                 status = "新增" if is_new else "去重跳过"
                 parent_preview = parent_text[:40].replace("\n", " ") if parent_text else "空"
-                print(f"  [回溯] #{rank} parent_id={parent_id[:8]}... | {status} | 内容: {parent_preview}...")
+                logger.info(f"[回溯] #{rank} parent_id={parent_id[:8]}... | {status} | 内容: {parent_preview}...")
                 
                 # 如果这个大切块还没被加入上下文，则加入
                 if is_new:
@@ -206,9 +202,7 @@ class HybridRetrievalService:
                         chunk_entry["image_caption"] = payload.get("image_caption", "")
                     final_context_chunks.append(chunk_entry)
 
-        print(f"\n{'='*60}")
-        print(f"  [检索完成] 最终提取去重后大切块上下文: {len(final_context_chunks)} 个")
-        print(f"{'='*60}\n")
+        logger.info(f"[检索完成] 最终提取去重后大切块上下文: {len(final_context_chunks)} 个")
         return {
             "final_results": reranked_results,        # 前 N 个精排后的原信息（含图片路径等）
             "context_chunks": final_context_chunks     # 去重后的 1200 字大切块上下文（喂给 AI）

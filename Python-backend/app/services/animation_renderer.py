@@ -148,7 +148,13 @@ async def _render_animation_async(module_data: dict, quality: str, output_path: 
     if missing:
         raise RuntimeError("Missing animation export dependencies: " + ", ".join(missing))
 
-    with tempfile.TemporaryDirectory(prefix="aura-animation-") as temp_dir:
+    logger.info("开始渲染动画 [%s] 预计时长: %.1f秒 (总场景数: %d)", quality, duration_ms / 1000.0, len(narration.get("cues", [])))
+
+    # 将中间过程文件保存在项目目录下的 temp 文件夹，而不是 C 盘系统临时目录
+    export_temp_dir = Path(__file__).resolve().parent.parent.parent / "temp"
+    export_temp_dir.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="aura-animation-", dir=export_temp_dir) as temp_dir:
         temp = Path(temp_dir)
         html_file = temp / "animation.html"
         video_file = temp / "capture.webm"
@@ -156,8 +162,11 @@ async def _render_animation_async(module_data: dict, quality: str, output_path: 
         subtitle_file = temp / "subtitles.ass"
         html_file.write_text(prepare_animation_html(module_data["html"]), encoding="utf-8")
         subtitle_file.write_text(build_ass(narration["cues"], width, height), encoding="utf-8-sig")
+        logger.info("[1/4] 素材准备: HTML 和字幕已生成")
+        
         if narration.get("audioUrl") and narration.get("audioStatus", "ready") == "ready":
-            download_narration_audio(str(narration["audioUrl"]), audio_file)
+            success = download_narration_audio(str(narration["audioUrl"]), audio_file)
+            logger.info("[2/4] 素材准备: 音频下载%s", "成功" if success else "失败(将静音导出)")
 
         async with async_playwright() as playwright:
             bundled = Path(playwright.chromium.executable_path)
@@ -174,9 +183,15 @@ async def _render_animation_async(module_data: dict, quality: str, output_path: 
             }""")
             await page.wait_for_function("() => window.__AURA_BRIDGE", timeout=15000)
             current_beat = None
-            for cue in narration["cues"]:
+            total_cues = len(narration["cues"])
+            logger.info("[3/4] 开始无头浏览器录制 (共 %d 个分镜)...", total_cues)
+            for i, cue in enumerate(narration["cues"]):
                 beat_index = int(cue["beatIndex"])
                 duration = max(1, int(cue["endMs"]) - int(cue["startMs"]))
+                
+                if (i + 1) % max(1, total_cues // 5) == 0 or i == total_cues - 1:
+                    logger.info("  -> 录制进度: %d / %d 分镜 (当前时长: %.1f秒)", i + 1, total_cues, int(cue["endMs"]) / 1000.0)
+
                 if beat_index != current_beat:
                     await page.evaluate("() => window.__AURA_BRIDGE.pause()")
                     await page.evaluate("(idx) => window.__AURA_BRIDGE.enterBeat(idx, { play: true })", beat_index)
@@ -190,8 +205,10 @@ async def _render_animation_async(module_data: dict, quality: str, output_path: 
             await context.close()
             await browser.close()
             Path(await recorded.path()).replace(video_file)
+            logger.info("[3/4] 浏览器录制完成，WebM 视频已保存")
 
         # Windows: absolute ASS paths break libass (drive colon escaping). Use cwd-relative names.
+        logger.info("[4/4] 开始 FFmpeg 音视频轨合成压制...")
         output_abs = str(Path(output_path).resolve())
         command = ["ffmpeg", "-y", "-i", video_file.name]
         if audio_file.exists():
@@ -211,4 +228,7 @@ async def _render_animation_async(module_data: dict, quality: str, output_path: 
             timeout=max(120, duration_ms // 1000 * 4),
         )
         if result.returncode:
+            logger.error("FFmpeg 输出日志:\n%s", result.stderr[-2000:])
             raise RuntimeError("FFmpeg export failed: " + result.stderr[-1200:])
+        
+        logger.info("[4/4] FFmpeg 合成压制完成！已输出至: %s", output_path)

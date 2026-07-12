@@ -380,6 +380,7 @@
                 :html="animationHtml"
                 :narration="selectedResource.moduleData.narration"
                 :video-exports="selectedResource.moduleData.videoExports"
+                :is-dragging="isDragging"
               />
               <iframe
                 v-else
@@ -1188,7 +1189,10 @@ const questionResults = computed(() => {
   return map
 })
 const quizSubmitting = ref(false)
-const sidebarCollapsed = ref(false)
+const sidebarCollapsed = ref(localStorage.getItem('aura-sidebar-collapsed') === 'true')
+watch(sidebarCollapsed, (val) => {
+  localStorage.setItem('aura-sidebar-collapsed', String(val))
+})
 
 function clearSelectedResource() {
   if (selectedResourceId.value !== null) {
@@ -3461,9 +3465,7 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
 
 .animation-stage {
   width: min(100%, calc((100vh - 250px) * 16 / 9));
-  aspect-ratio: 16 / 9;
   margin: 0 auto;
-  overflow: hidden;
   background: #050505;
 }
 

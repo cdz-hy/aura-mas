@@ -2,10 +2,13 @@
 LLM 工厂 - 为不同智能体提供不同模型配置
 所有智能体均不采用思考模式
 """
+import logging
 import requests
 import json
 from typing import Generator, Optional, Dict, Any
 from app.core.config import settings
+
+logger = logging.getLogger("llm_factory")
 
 # 全局共享的 requests.Session，配置连接池复用，解决高并发端口耗尽问题
 _llm_session = requests.Session()
@@ -109,7 +112,7 @@ class MIMOClient:
         
         if clamped < requested_max:
             import logging
-            logging.getLogger("llm_factory").warning(
+            logger.warning(
                 f"max_tokens 从 {requested_max} 自动降至 {clamped}（输入约 {input_tokens} tokens，"
                 f"模型上限 {ctx_limit}，可用空间 {available}）"
             )
@@ -169,8 +172,10 @@ class MIMOClient:
         try:
             resp = _llm_session.post(url, headers=headers, json=payload, timeout=self.request_timeout)
         except requests.exceptions.Timeout:
+            logger.error("MIMO API 超时: model=%s timeout=%ss", self.model, self.request_timeout)
             raise Exception(f"MIMO API 请求超时（{self.request_timeout}秒），可能是网络问题或服务繁忙")
         except requests.exceptions.RequestException as e:
+            logger.error("MIMO API 网络错误: model=%s error=%s", self.model, e)
             raise Exception(f"MIMO API 网络请求失败: {str(e)[:200]}")
 
         if resp.status_code == 200:
@@ -207,7 +212,6 @@ class MIMOClient:
             if content is None or content.strip() == "":
                 # 记录完整响应以便排查
                 import logging
-                logger = logging.getLogger("llm_factory")
                 logger.warning(
                     f"MIMO API 返回空内容 (finish_reason={finish_reason}, "
                     f"model={self.model}, max_completion_tokens={safe_max_tokens}): "
@@ -263,6 +267,7 @@ class MIMOClient:
                                  timeout=(30, stream_read_timeout))
 
         if resp.status_code != 200:
+            logger.error("MIMO API 流式调用失败: model=%s status=%s body=%s", self.model, resp.status_code, resp.text[:200])
             raise Exception(f"MIMO API 流式调用失败 ({resp.status_code}): {resp.text}")
 
         input_est = sum(self._estimate_tokens(m.get("content", "")) for m in messages)

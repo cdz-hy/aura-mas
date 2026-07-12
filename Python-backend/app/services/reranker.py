@@ -1,7 +1,11 @@
+import logging
 import dashscope
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from http import HTTPStatus
+
+logger = logging.getLogger("services.reranker")
+
 
 class BailianRerankerService:
     def __init__(self):
@@ -64,8 +68,8 @@ class BailianRerankerService:
 
                 image_count += 1
 
-        print(f"  [重排序] 构建文档完成: {text_count} 个文本块, {image_count} 个图片块")
-        print(f"  [重排序] 实际送入条目: {len(rerank_docs)} 个 (图片视觉通道: {image_entry_count}/{MAX_IMAGE_ENTRIES}, 其余以语义描述替代)")
+        logger.info(f"[重排序] 构建文档完成: {text_count} 个文本块, {image_count} 个图片块")
+        logger.info(f"[重排序] 实际送入条目: {len(rerank_docs)} 个 (图片视觉通道: {image_entry_count}/{MAX_IMAGE_ENTRIES}, 其余以语义描述替代)")
 
         # 尝试调用百炼 API 
         try:
@@ -77,7 +81,7 @@ class BailianRerankerService:
                 api_key=self.api_key
             )
         except Exception as e:
-            print(f"  [警告] Reranker API 抛出异常: {e}，将自动尝试纯文本语义降级重排...")
+            logger.warning(f"Reranker API 抛出异常: {e}，将自动尝试纯文本语义降级重排...")
             resp = None
 
         # 检查是否为图片 URL 无法下载导致的报错，如果是则进行优雅降级
@@ -91,10 +95,11 @@ class BailianRerankerService:
         if is_failed:
             if resp and not is_download_error:
                 # 若为其他致命错误（如 API_KEY 错误），直接报错
+                logger.error(f"Reranker API 调用异常 ({resp.status_code}): {resp.message}")
                 raise Exception(f"Reranker API 调用异常 ({resp.status_code}): {resp.message}")
 
             err_msg = resp.message if resp else "网络请求超时"
-            print(f"  [优雅降级] 百炼下载图片失败或超时 ({err_msg})，触发纯文本语义兜底重排...")
+            logger.warning(f"百炼下载图片失败或超时 ({err_msg})，触发纯文本语义兜底重排...")
             
             # 重建纯文本 Rerank 文档 (图片全量降级为 AI 描述文本参与重排，100% 避免下载 URL 报错)
             rerank_docs = []
@@ -146,11 +151,12 @@ class BailianRerankerService:
                 score = res["rerank_score"]
                 if doc_type == "text":
                     preview = p.get("content", "")[:40].replace("\n", " ")
-                    print(f"  [重排序] #{rank} 文本 | 得分: {score:.4f} | {preview}...")
+                    logger.info(f"[重排序] #{rank} 文本 | 得分: {score:.4f} | {preview}...")
                 else:
-                    print(f"  [重排序] #{rank} 图片 | 得分: {score:.4f} | 描述: {p.get('image_caption', '')[:40]}...")
+                    logger.info(f"[重排序] #{rank} 图片 | 得分: {score:.4f} | 描述: {p.get('image_caption', '')[:40]}...")
 
             return final_results
         else:
             err_final = resp.message if resp else "重排请求失败"
+            logger.error(f"Reranker 最终调用失败: {err_final}")
             raise Exception(f"Reranker 最终调用失败: {err_final}")
