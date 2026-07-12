@@ -121,7 +121,7 @@ const activeFeature = ref(0)
 let featureTimer: ReturnType<typeof setInterval>
 
 const features = [
-  { title: '图文学习资源', desc: 'AI 自动生成图文并茂的学习内容', tag: '图文', color: '#4164b2', gif: '/show/图文学习资源.gif' },
+  { title: '图文学习资源', desc: 'AI 生成个性化图文并茂的学习内容', tag: '图文', color: '#4164b2', gif: '/show/图文学习资源.gif' },
   { title: '教学动画演示', desc: '可视化讲解复杂概念，如 Transformer', tag: '动画', color: '#e8b06a', gif: '/show/教学动画资源.gif' },
   { title: '智能对话生成', desc: '与 AI 对话，按需生成个性化资料', tag: '对话', color: '#649b64', gif: '/show/对话式资源生成.gif' },
   { title: '测验与错题辅导', desc: '自适应测验 + 个性化错题讲解', tag: '测验', color: '#c06080', gif: '/show/测验作答与个性化错题辅导.gif' },

@@ -64,7 +64,10 @@ export async function ingestKB(docId: number, docName: string, file: File) {
   formData.append('doc_name', docName)
   formData.append('file', file)
   const resp = await fetch(`${PYTHON_BASE}/api/v1/kb/ingest`, { method: 'POST', body: formData })
-  if (!resp.ok) throw new Error(`Ingest failed: ${resp.statusText}`)
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }))
+    throw new Error(err.detail || `上传失败 (${resp.status})`)
+  }
   return resp.json()
 }
 
