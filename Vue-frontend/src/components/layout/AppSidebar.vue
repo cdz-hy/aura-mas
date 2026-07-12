@@ -9,7 +9,7 @@
       @click="uiStore.toggleSidebar()"
     >
       <div class="flex items-center gap-3 min-w-0">
-        <img src="/aura-icon.svg" alt="AURA" class="w-9 h-9 flex-shrink-0" />
+        <img src="/icon.png" alt="AURA" class="w-9 h-9 flex-shrink-0 rounded-lg object-cover" />
         <transition name="fade">
           <span v-if="!uiStore.sidebarCollapsed" class="font-display text-lg font-bold text-navy-800 whitespace-nowrap">
             智学
