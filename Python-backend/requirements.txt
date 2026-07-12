@@ -17,6 +17,9 @@ aio-pika
 tavily-python
 python-pptx
 playwright
+# NOTE: ffmpeg/ffprobe must be installed as system binaries (not pip):
+#   winget install FFmpeg  OR  choco install ffmpeg  OR  scoop install ffmpeg
+# Also run: python -m playwright install chromium
 bilibili-api-python
 redis
 pika

@@ -3034,49 +3034,19 @@ def proxy_image(url: str = Query(..., description="图片 URL")):
 @router.get("/proxy-audio")
 def proxy_audio(url: str = Query(..., description="配音音频 URL")):
     """Proxy narration audio via API origin so the browser does not hit Qiniu directly."""
-    import json
-    import time
-    from pathlib import Path
     import requests as req
     from fastapi import HTTPException
     from fastapi.responses import Response
     from app.services.qiniu_client import qiniu_client
 
-    # #region agent log
-    def _dbg(message: str, data: dict, hypothesis_id: str = "A"):
-        try:
-            payload = {
-                "sessionId": "84be90",
-                "runId": "post-fix",
-                "hypothesisId": hypothesis_id,
-                "location": "resource_chat.py:proxy_audio",
-                "message": message,
-                "data": data,
-                "timestamp": int(time.time() * 1000),
-            }
-            line = json.dumps(payload, ensure_ascii=False) + "\n"
-            root = Path(__file__).resolve().parents[5]
-            for path in (root / "debug-84be90.log", root / ".cursor" / "debug-84be90.log"):
-                try:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    with path.open("a", encoding="utf-8") as f:
-                        f.write(line)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-    # #endregion
-
     _assert_qiniu_audio_url_allowed(url)
     fetch_url = qiniu_client.rewrite_to_public_url(url)
-    _dbg("proxy-audio request", {"url": url, "fetchUrl": fetch_url, "domain": qiniu_client.resolve_public_domain()})
 
     try:
         resp = req.get(fetch_url, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
     except Exception as exc:
         logger.warning("proxy-audio fetch failed for %s (via %s): %s", url, fetch_url, exc)
-        _dbg("proxy-audio upstream failed", {"url": url, "fetchUrl": fetch_url, "error": str(exc)[:300]}, "A")
         raise HTTPException(status_code=502, detail=f"Audio fetch failed: {exc}") from exc
 
     content_type = resp.headers.get("Content-Type", "audio/wav")
@@ -3084,12 +3054,6 @@ def proxy_audio(url: str = Query(..., description="配音音频 URL")):
         content_type = content_type.split(";")[0].strip()
     if not content_type.startswith("audio/") and content_type not in ("application/octet-stream", "binary/octet-stream"):
         content_type = "audio/wav"
-
-    _dbg(
-        "proxy-audio upstream ok",
-        {"url": url, "fetchUrl": fetch_url, "status": resp.status_code, "bytes": len(resp.content), "contentType": content_type},
-        "A",
-    )
 
     return Response(
         content=resp.content,

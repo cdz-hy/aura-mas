@@ -439,6 +439,8 @@ async def advisor_chat(
 
         try:
             result = llm.chat_json(messages)
+            from app.utils.token_recorder import record_from_mimo
+            record_from_mimo(llm, user_id, "plan_advisor")
         except Exception as e:
             logger.error(f"[AI顾问] LLM 调用失败: {e}")
             return JSONResponse(content={

@@ -1,3 +1,10 @@
+"""
+动画视频渲染器：Playwright 录屏 + FFmpeg 合成。
+
+系统依赖（不在 requirements.txt 中，需手动安装）：
+  - ffmpeg / ffprobe：winget install FFmpeg | choco install ffmpeg | scoop install ffmpeg
+  - Chromium：python -m playwright install chromium
+"""
 import logging
 import os
 import shutil
@@ -54,6 +61,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def dependency_status() -> dict[str, bool]:
+    """Check runtime dependencies. Install missing ones before using video export:
+    ffmpeg/ffprobe: winget install FFmpeg
+    Chromium:       python -m playwright install chromium
+    """
     browser_root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", Path.home() / "AppData/Local/ms-playwright"))
     chromium = any(browser_root.glob("chromium-*/chrome-win*/chrome.exe")) or any(
         browser_root.glob("chromium_headless_shell-*/chrome-headless-shell-win*/chrome-headless-shell.exe")
@@ -97,6 +108,39 @@ def download_narration_audio(audio_url: str, dest: Path) -> bool:
 
 
 def render_animation(module_data: dict, quality: str, output_path: str) -> None:
+    """Synchronous entry point. Works in standalone scripts and worker processes."""
+    import asyncio
+    import sys
+    
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(_render_animation_async(module_data, quality, output_path))
+        return
+    # Called from within an event loop (e.g. via asyncio.to_thread) — run in a fresh loop
+    import threading
+    result = [None]
+    def _run():
+        try:
+            if sys.platform == 'win32':
+                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+            asyncio.run(_render_animation_async(module_data, quality, output_path))
+        except Exception as e:
+            result[0] = e
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join()
+    if result[0]:
+        raise result[0]
+
+
+async def _render_animation_async(module_data: dict, quality: str, output_path: str) -> None:
+    """Core render logic using async Playwright (works inside asyncio contexts)."""
+    from playwright.async_api import async_playwright
+
     width, height = QUALITIES[quality]
     narration = module_data["narration"]
     duration_ms = max(1, round(float(narration["duration"]) * 1000))
@@ -115,44 +159,37 @@ def render_animation(module_data: dict, quality: str, output_path: str) -> None:
         if narration.get("audioUrl") and narration.get("audioStatus", "ready") == "ready":
             download_narration_audio(str(narration["audioUrl"]), audio_file)
 
-        try:
-            from playwright.sync_api import sync_playwright
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "未安装 playwright，请执行: python -m pip install playwright"
-            ) from exc
-
-        with sync_playwright() as playwright:
+        async with async_playwright() as playwright:
             bundled = Path(playwright.chromium.executable_path)
             executable = bundled if bundled.exists() else next((path for path in SYSTEM_BROWSERS if path.exists()), None)
-            browser = playwright.chromium.launch(headless=True, executable_path=str(executable) if executable else None)
-            context = browser.new_context(
+            browser = await playwright.chromium.launch(headless=True, executable_path=str(executable) if executable else None)
+            context = await browser.new_context(
                 viewport={"width": width, "height": height},
                 record_video_dir=str(temp), record_video_size={"width": width, "height": height},
             )
-            page = context.new_page()
-            page.goto(html_file.as_uri(), wait_until="networkidle")
-            page.evaluate("""() => {
+            page = await context.new_page()
+            await page.goto(html_file.as_uri(), wait_until="networkidle")
+            await page.evaluate("""() => {
               document.querySelectorAll('.animation-control-bar, nav[aria-label="动画控制"]').forEach(el => el.remove());
             }""")
-            page.wait_for_function("() => window.__AURA_BRIDGE", timeout=15000)
+            await page.wait_for_function("() => window.__AURA_BRIDGE", timeout=15000)
             current_beat = None
             for cue in narration["cues"]:
                 beat_index = int(cue["beatIndex"])
                 duration = max(1, int(cue["endMs"]) - int(cue["startMs"]))
                 if beat_index != current_beat:
-                    page.evaluate("() => window.__AURA_BRIDGE.pause()")
-                    page.evaluate("(idx) => window.__AURA_BRIDGE.enterBeat(idx, { play: true })", beat_index)
+                    await page.evaluate("() => window.__AURA_BRIDGE.pause()")
+                    await page.evaluate("(idx) => window.__AURA_BRIDGE.enterBeat(idx, { play: true })", beat_index)
                     current_beat = beat_index
                 else:
-                    page.evaluate("() => window.__AURA_BRIDGE.play()")
-                page.wait_for_timeout(duration)
-            page.evaluate("() => window.__AURA_BRIDGE.freeze()")
+                    await page.evaluate("() => window.__AURA_BRIDGE.play()")
+                await page.wait_for_timeout(duration)
+            await page.evaluate("() => window.__AURA_BRIDGE.freeze()")
             recorded = page.video
-            page.close()
-            context.close()
-            browser.close()
-            Path(recorded.path()).replace(video_file)
+            await page.close()
+            await context.close()
+            await browser.close()
+            Path(await recorded.path()).replace(video_file)
 
         # Windows: absolute ASS paths break libass (drive colon escaping). Use cwd-relative names.
         output_abs = str(Path(output_path).resolve())
@@ -174,26 +211,4 @@ def render_animation(module_data: dict, quality: str, output_path: str) -> None:
             timeout=max(120, duration_ms // 1000 * 4),
         )
         if result.returncode:
-            # #region agent log
-            try:
-                import json as _json, time as _time
-                _log = Path(r"D:\a\Aura\aura-mas-develop\debug-55a441.log")
-                with open(_log, "a", encoding="utf-8") as _f:
-                    _f.write(_json.dumps({
-                        "sessionId": "55a441", "runId": "post-fix", "hypothesisId": "C",
-                        "location": "animation_renderer.py:ffmpeg",
-                        "message": "ffmpeg failed",
-                        "data": {
-                            "returncode": result.returncode,
-                            "cwd": str(temp),
-                            "ass": subtitle_file.name,
-                            "videoExists": video_file.exists(),
-                            "audioExists": audio_file.exists(),
-                            "stderrTail": (result.stderr or "")[-800:],
-                        },
-                        "timestamp": int(_time.time() * 1000),
-                    }, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-            # #endregion
             raise RuntimeError("FFmpeg export failed: " + result.stderr[-1200:])

@@ -230,7 +230,7 @@
       :class="{
         'resource-panel--closed': !selectedResource && !showResourceStreamPreview,
         '!transition-none': isDragging,
-        'fixed inset-0 z-40 m-0 bg-white rounded-none border-none shadow-none': isFullscreen,
+        'fixed inset-0 z-[55] m-0 bg-white rounded-none border-none shadow-none': isFullscreen,
         'plan-resource-panel--spaced': !isFullscreen
       }"
       :style="isFullscreen ? {} : panelStyle"
@@ -2589,15 +2589,6 @@ function toggleResource(res: LearningResource, options: ToggleResourceOptions = 
 
   selectedResourceId.value = res.id
   selectedResource.value = res
-
-  // #region agent log
-  {
-    const md = res.moduleData || {}
-    const narration = md.narration || null
-    const htmlSnippet = String(md.content || md.html || '').slice(0, 200)
-    fetch('http://127.0.0.1:7296/ingest/e9514b2d-72ba-413a-b7bd-0ae318ec510a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '84be90' }, body: JSON.stringify({ sessionId: '84be90', runId: 'pre-fix', hypothesisId: 'B,C', location: 'PlanDetailView.vue:selectResource', message: 'resource selected for preview', data: { resourceId: res.id, moduleType: res.moduleType, hasNarrationV1: narration?.version === 1, narrationAudioUrl: narration?.audioUrl || null, narrationAudioStatus: narration?.audioStatus || null, htmlHasPodcastAudio: /podcast-audio/.test(htmlSnippet) || /podcast-audio/.test(String(md.content || md.html || '')), audioUrlInHtml: (String(md.content || md.html || '').match(/https?:\/\/[^"'\\s]+(?:podcast-audio|wav|mp3)[^"'\\s]*/i) || [null])[0] }, timestamp: Date.now() }) }).catch(() => {})
-  }
-  // #endregion
 
   // 联动左侧大纲：找到资源对应的节点并高亮
   const nodeId = findNodeIdForResource(res)

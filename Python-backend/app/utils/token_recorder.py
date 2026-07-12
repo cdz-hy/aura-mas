@@ -26,8 +26,8 @@ def record(
             output_tokens=output_tokens,
             task_id=task_id,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Token recording failed for scene=%s: %s", scene, e)
 
 
 def record_from_mimo(llm_client, user_id: int, scene: str, task_id: Optional[int] = None):

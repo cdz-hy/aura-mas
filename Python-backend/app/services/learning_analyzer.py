@@ -194,6 +194,9 @@ async def analyze_user_behavior(user_id: int) -> Optional[Dict[str, Any]]:
 
         result = await asyncio.to_thread(llm.chat_json, messages)
 
+        from app.utils.token_recorder import record_from_mimo
+        record_from_mimo(llm, user_id, "learning_analysis")
+
         # 检查 LLM 返回结果
         if not result or not isinstance(result, dict):
             logger.warning(f"[学习分析] 用户 {user_id} LLM 返回无效结果: {result}")
