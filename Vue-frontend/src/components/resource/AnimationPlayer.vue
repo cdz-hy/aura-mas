@@ -56,7 +56,22 @@
       </div>
     </div>
 
-    <div v-if="narrationHealthy && playbackNotice" class="animation-player__notice">{{ playbackNotice }}</div>
+    <div v-if="narrationHealthy && playbackNotice && !audioPendingStatus" class="animation-player__notice">{{ playbackNotice }}</div>
+    <div v-if="audioPendingStatus" class="animation-player__notice bg-orange-50/90 text-orange-800 border-orange-200 backdrop-blur" style="border: 1px solid currentColor;">
+      语音正在后台努力合成中，当前为无声预览模式...
+    </div>
+    
+    <!-- Refresh Button Toast -->
+    <div v-if="showAudioReadyToast" class="absolute top-4 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-4 py-2 bg-white/90 backdrop-blur shadow-lg rounded-full border border-green-200" style="animation: slide-down 0.3s ease-out forwards;">
+      <span class="text-sm font-medium text-green-700">语音合成已就绪！</span>
+      <button type="button" @click="applyNewAudio" class="text-xs px-3 py-1 bg-green-500 hover:bg-green-600 text-white rounded-full transition-colors shadow-sm">
+        点击刷新体验
+      </button>
+      <button type="button" @click="showAudioReadyToast = false" class="text-green-400 hover:text-green-600 ml-1">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
     <div v-if="!narrationHealthy" class="animation-player__invalid">讲解数据异常，请重新生成该动画</div>
     <div v-if="bridgeError" class="animation-player__error">{{ bridgeError }}</div>
     <div v-if="exportError" class="animation-player__error">{{ exportError }}</div>
@@ -65,9 +80,16 @@
   </div>
 </template>
 
+<style scoped>
+@keyframes slide-down {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+</style>
+
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { createAnimationExport, getAnimationExports, type AnimationExportQuality, type AnimationExportState } from '@/api/resource'
+import { createAnimationExport, getAnimationExports, getResource, type AnimationExportQuality, type AnimationExportState } from '@/api/resource'
 import { PYTHON_AI_BASE } from '@/api/request'
 import {
   advanceSilentTime,
@@ -107,6 +129,55 @@ const exports = ref<Record<AnimationExportQuality, AnimationExportState>>({
   '1080p': props.videoExports?.['1080p'] || { status: 'idle' },
   '720p': props.videoExports?.['720p'] || { status: 'idle' },
 })
+
+const activeNarration = ref<Narration>(props.narration)
+const audioPendingStatus = ref(false)
+const showAudioReadyToast = ref(false)
+let fetchedNarration: Narration | null = null
+
+watch(() => props.narration, (newVal) => {
+  activeNarration.value = newVal
+  audioPendingStatus.value = newVal.audioStatus === 'pending'
+}, { immediate: true })
+
+let audioPollTimer: number | undefined
+
+async function pollAudioReady() {
+  if (!audioPendingStatus.value) return
+  try {
+    const res = await getResource(props.resourceId)
+    const content = typeof res.data.moduleData === 'string' ? JSON.parse(res.data.moduleData) : res.data.moduleData
+    if (content?.narration && content.narration.audioStatus !== 'pending') {
+      audioPendingStatus.value = false
+      showAudioReadyToast.value = true
+      fetchedNarration = content.narration
+    } else {
+      audioPollTimer = window.setTimeout(pollAudioReady, 3000)
+    }
+  } catch (e) {
+    audioPollTimer = window.setTimeout(pollAudioReady, 5000)
+  }
+}
+
+watch(audioPendingStatus, (pending) => {
+  if (pending) {
+    clearTimeout(audioPollTimer)
+    audioPollTimer = window.setTimeout(pollAudioReady, 3000)
+  } else {
+    clearTimeout(audioPollTimer)
+  }
+}, { immediate: true })
+
+function applyNewAudio() {
+  if (fetchedNarration) {
+    activeNarration.value = fetchedNarration
+    showAudioReadyToast.value = false
+    // reset playback
+    endPlayback()
+    currentMs.value = 0
+    audioFailed.value = false
+  }
+}
 
 let rafId: number | undefined
 let pollTimer: number | undefined
@@ -149,15 +220,15 @@ function onSubtitleDragEnd() {
   document.removeEventListener('touchend', onSubtitleDragEnd)
 }
 
-const durationMs = computed(() => Math.max(1, Math.round(props.narration.duration * 1000)))
-const currentCue = computed(() => findCueAtTime(props.narration.cues, currentMs.value))
+const durationMs = computed(() => Math.max(1, Math.round(activeNarration.value.duration * 1000)))
+const currentCue = computed(() => findCueAtTime(activeNarration.value.cues, currentMs.value))
 const audioSrc = computed(() => {
-  if (!shouldUseAudioClock(props.narration, audioFailed.value)) return undefined
-  return resolvePlayableAudioUrl(props.narration.audioUrl, PYTHON_AI_BASE)
+  if (!shouldUseAudioClock(activeNarration.value, audioFailed.value)) return undefined
+  return resolvePlayableAudioUrl(activeNarration.value.audioUrl, PYTHON_AI_BASE)
 })
-const playbackNotice = computed(() => narrationNotice(props.narration, audioFailed.value))
-const narrationHealthy = computed(() => narrationIsHealthy(props.narration))
-const exportSupported = computed(() => narrationHealthy.value)
+const playbackNotice = computed(() => narrationNotice(activeNarration.value, audioFailed.value))
+const narrationHealthy = computed(() => narrationIsHealthy(activeNarration.value))
+const exportSupported = computed(() => narrationHealthy.value && !audioPendingStatus.value)
 const activeExport = computed(() => exports.value[selectedQuality.value])
 const exportLabel = computed(() => ({ idle: '导出视频', rendering: '生成中...', ready: '下载视频', failed: '重试导出' }[activeExport.value.status]))
 
@@ -250,7 +321,7 @@ async function startPlayback() {
   playbackState.value = 'playing'
   playing.value = true
 
-  if (shouldUseAudioClock(props.narration, audioFailed.value) && audio.value) {
+  if (shouldUseAudioClock(activeNarration.value, audioFailed.value) && audio.value) {
     clockMode = 'audio'
     if (Number.isFinite(currentMs.value) && Number.isFinite(audio.value.duration)) {
       audio.value.currentTime = currentMs.value / 1000
@@ -316,11 +387,11 @@ function seek(event: Event) {
   silentAnchor = createSilentAnchor(nextMs)
   lastBeatIndex = -1
 
-  if (audio.value && clockMode === 'audio' && shouldUseAudioClock(props.narration, audioFailed.value)) {
+  if (audio.value && clockMode === 'audio' && shouldUseAudioClock(activeNarration.value, audioFailed.value)) {
     audio.value.currentTime = nextMs / 1000
   }
 
-  const cue = findCueAtTime(props.narration.cues, nextMs)
+  const cue = findCueAtTime(activeNarration.value.cues, nextMs)
   send('seek', { beatIndex: cue?.beatIndex ?? 0 })
   lastBeatIndex = cue?.beatIndex ?? -1
 }

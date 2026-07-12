@@ -254,7 +254,7 @@ function removeDarkStyles() {
 }
 
 export const useUiStore = defineStore('ui', () => {
-  const sidebarCollapsed = ref(false)
+  const sidebarCollapsed = ref(localStorage.getItem('aura-sidebar-collapsed') === 'true')
   const notesPanelOpen = ref(false)
   const tutorPanelOpen = ref(false)
   const currentTheme = ref<ThemeId>('light')
@@ -299,6 +299,7 @@ export const useUiStore = defineStore('ui', () => {
 
   function toggleSidebar() {
     sidebarCollapsed.value = !sidebarCollapsed.value
+    localStorage.setItem('aura-sidebar-collapsed', String(sidebarCollapsed.value))
   }
 
   function toggleNotesPanel() {

@@ -88,6 +88,45 @@ def _wav_info(data: bytes) -> tuple[wave._wave_params, bytes, int]:
     return params, frames, duration_ms
 
 
+def build_pending_narration(html: str, voice: str = "冰糖") -> dict:
+    """Build a pending narration structure with estimated durations based on text length.
+    This allows the frontend to render the animation immediately without waiting for TTS.
+    """
+    texts = extract_beat_texts(html)
+    if not texts:
+        return {
+            "version": 1,
+            "voice": voice,
+            "audioUrl": "",
+            "audioStatus": "unavailable",
+            "duration": 0,
+            "cues": [],
+        }
+    
+    # Estimate durations: 180ms per character, min 1800ms, max 10000ms
+    durations = [max(1800, min(10000, len(text) * 180)) for text in texts]
+    
+    cues = []
+    cursor = 0
+    for index, (text, duration) in enumerate(zip(texts, durations)):
+        cues.append({
+            "beatIndex": index,
+            "startMs": cursor,
+            "endMs": cursor + duration,
+            "text": text,
+        })
+        cursor += duration
+        
+    return {
+        "version": 1,
+        "voice": voice,
+        "audioUrl": "",
+        "audioStatus": "pending",
+        "duration": cursor / 1000,
+        "cues": cues,
+    }
+
+
 def build_narration(
     html: str,
     synthesize: Callable[[str, str], bytes],
