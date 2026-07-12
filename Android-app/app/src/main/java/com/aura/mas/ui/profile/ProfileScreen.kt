@@ -72,7 +72,6 @@ fun ProfileScreen(
     onLearningProfileClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onAnalyticsClick: () -> Unit,
-    onAdminClick: () -> Unit,
     onKnowledgeGraphClick: (Long) -> Unit,
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
@@ -160,9 +159,6 @@ fun ProfileScreen(
             }
             ProfileMenuItem(Icons.Default.BarChart, "学习分析", onAnalyticsClick)
             ProfileMenuItem(Icons.Default.Settings, "设置", onSettingsClick)
-            if (user?.role == "admin") {
-                ProfileMenuItem(Icons.Default.AdminPanelSettings, "管理后台", onAdminClick)
-            }
         }
     }
 }

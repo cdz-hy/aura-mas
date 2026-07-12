@@ -66,6 +66,7 @@
 import { ref, onMounted } from 'vue'
 import type { AnalyticsData } from '@/api/analytics'
 import { PYTHON_AI_BASE } from '@/api/request'
+import { useAuthStore } from '@/stores/auth'
 
 const props = defineProps<{
   data: AnalyticsData
@@ -110,10 +111,12 @@ async function fetchSuggestions() {
 
   try {
     const d = props.data
+    const authStore = useAuthStore()
     const response = await fetch(`${PYTHON_AI_BASE}/api/analytics/ai-suggestions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        user_id: authStore.user?.id || 0,
         overview: d.overview || {},
         quiz_analysis: d.quizAnalysis || {},
         heatmap: d.heatmap || {},

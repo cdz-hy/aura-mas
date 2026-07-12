@@ -89,6 +89,7 @@ class PlanDetailViewModel @Inject constructor(
     private val planRepo: PlanRepository,
     private val api: ApiService,
     private val chatRepo: ChatRepository,
+    private val tracker: com.aura.mas.service.LearningTracker,
     private val sseClient: SseClient,
     private val networkUtil: com.aura.mas.util.NetworkUtil,
     private val heartbeatManager: com.aura.mas.service.HeartbeatManager
@@ -203,6 +204,8 @@ class PlanDetailViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(selectedResource = resource)
         // Start heartbeat tracking for this resource
         heartbeatManager.startTracking(planId, resource.id)
+        // Track resource view
+        tracker.trackResourceView(resource.id, resource.moduleType ?: "text", planId)
     }
 
     fun clearSelectedResource() {
@@ -466,6 +469,9 @@ class PlanDetailViewModel @Inject constructor(
         viewModelScope.launch {
             planRepo.markComplete(planId, resourceId)
             loadPlan(planId)
+            // Track resource complete
+            val resource = _uiState.value.resources.find { it.id == resourceId }
+            tracker.trackResourceComplete(resourceId, resource?.moduleType ?: "text", planId)
         }
     }
 

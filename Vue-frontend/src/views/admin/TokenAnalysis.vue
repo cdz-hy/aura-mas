@@ -424,7 +424,7 @@ const sceneMap: Record<string, string> = {
   // 资源生成
   resource_generation: '资源生成', resource_react_search: '资源检索', resource_type_generation: '资源类型生成',
   quiz_generation: '题目生成', quiz_grading: '题目批改', quiz_grading_inline: '题目批改',
-  animation_generation: '动画生成', flashcard_generation: '闪卡生成',
+  animation_generation: '动画生成', animation_summarization: '动画摘要', flashcard_generation: '闪卡生成',
   // PPT 生成
   pptx_manuscript: 'PPT文稿', pptx_outline: 'PPT大纲', pptx_content: 'PPT内容',
   pptx_image_query: 'PPT配图', pptx_image_validate: 'PPT图片校验',

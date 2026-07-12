@@ -325,7 +325,9 @@ async def run_analysis_for_user(user_id: int):
     """为单个用户运行分析"""
     logger.info(f"[学习分析] 开始分析用户 {user_id}")
     result = await analyze_user_behavior(user_id)
-    if result and result.get("strategies"):
+    if result is None:
+        raise Exception(f"用户 {user_id} 分析返回空结果（LLM 调用失败或数据不足）")
+    if result.get("strategies"):
         await save_strategies(user_id, result)
     logger.info(f"[学习分析] 用户 {user_id} 分析完成")
 

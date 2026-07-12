@@ -42,7 +42,12 @@ class AuthViewModel @Inject constructor(
             try {
                 val response = api.login(LoginRequest(loginName, password))
                 if (response.isSuccess && response.data != null) {
-                    authStore.saveSession(response.data.token, response.data.user, loginName, password, remember)
+                    val user = response.data.user
+                    if (user.role == "admin") {
+                        _uiState.value = AuthUiState(error = "该版本暂不支持管理员登录，请使用网页端")
+                        return@launch
+                    }
+                    authStore.saveSession(response.data.token, user, loginName, password, remember)
                     _uiState.value = AuthUiState(success = true)
                 } else {
                     _uiState.value = AuthUiState(error = response.message.ifEmpty { "登录失败" })

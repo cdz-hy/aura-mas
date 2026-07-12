@@ -36,6 +36,28 @@ data class AnalyticsUiState(
     val error: String? = null
 )
 
+private val intentLabelMap = mapOf(
+    "generate_resource" to "资源生成",
+    "resource_generated" to "资源已生成",
+    "generate_quiz" to "题目生成",
+    "generate_animation" to "动画生成",
+    "generate_type_resource" to "类型资源生成",
+    "grade_quiz" to "题目批改",
+    "task_breakdown" to "任务分解",
+    "simple_qa" to "简单问答",
+    "chat" to "普通对话",
+    "plan_chat" to "计划对话",
+    "follow_up" to "追问",
+    "ambiguous" to "意图模糊",
+    "clarify" to "需求澄清",
+    "plan_advisor" to "学习顾问",
+    "profile" to "画像构建",
+    "profile_maintenance" to "画像维护",
+    "stopped" to "已停止",
+    "cancel" to "取消操作",
+    "animation_summarization" to "动画摘要",
+)
+
 @HiltViewModel
 class AnalyticsViewModel @Inject constructor(
     private val api: com.aura.mas.data.api.ApiService
@@ -474,7 +496,7 @@ private fun AiInteractionCard(ai: AiInteractionStats) {
                     Modifier.fillMaxWidth().padding(vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(item.intent, fontSize = 13.sp, color = Color(0xFF475569), modifier = Modifier.weight(1f))
+                    Text(intentLabelMap[item.intent] ?: item.intent, fontSize = 13.sp, color = Color(0xFF475569), modifier = Modifier.weight(1f))
                     LinearProgressIndicator(
                         progress = { (item.percentage / 100).toFloat().coerceIn(0f, 1f) },
                         modifier = Modifier

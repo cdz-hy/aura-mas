@@ -32,7 +32,8 @@ import com.aura.mas.ui.theme.*
 fun DashboardScreen(
     onPlanClick: (Long) -> Unit,
     onViewAllPlans: () -> Unit,
-    viewModel: DashboardViewModel = hiltViewModel()
+    viewModel: DashboardViewModel = hiltViewModel(),
+    tracker: com.aura.mas.service.LearningTracker? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val user by viewModel.currentUser.collectAsState()
@@ -40,6 +41,7 @@ fun DashboardScreen(
     // Refresh on every recomposition where data is stale (handles 401 recovery)
     LaunchedEffect(Unit) {
         viewModel.loadDashboard()
+        tracker?.trackPageView("dashboard")
     }
 
     if (uiState.isLoading) {
