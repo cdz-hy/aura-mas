@@ -179,12 +179,20 @@ CREATE TABLE IF NOT EXISTS `note` (
     `content` LONGTEXT NOT NULL,
     `tags` JSON DEFAULT NULL COMMENT '标签数组',
     `is_pinned` TINYINT DEFAULT 0 COMMENT '是否置顶',
+    `note_type` VARCHAR(32) DEFAULT NULL COMMENT '摘录/速记/提问: excerpt|quick|question',
+    `organize_status` VARCHAR(32) DEFAULT NULL COMMENT '整理状态: pending|organizing|organized|error',
+    `source_type` VARCHAR(64) DEFAULT NULL COMMENT '来源类型: resource|plan|knowledge_tree|tutor',
+    `source_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '来源实体ID',
+    `source_title` VARCHAR(255) DEFAULT NULL COMMENT '来源标题',
+    `source_route` VARCHAR(512) DEFAULT NULL COMMENT '来源前端路由',
+    `excerpt` TEXT DEFAULT NULL COMMENT '摘录原文（可为空）',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     `is_deleted` TINYINT DEFAULT 0,
     `deleted_at` DATETIME DEFAULT NULL,
     PRIMARY KEY (`id`),
-    KEY `idx_user_id` (`user_id`)
+    KEY `idx_user_id` (`user_id`),
+    KEY `idx_organize_status` (`organize_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='笔记表';
 
 CREATE TABLE IF NOT EXISTS `note_resource_rel` (
@@ -208,6 +216,16 @@ CREATE TABLE IF NOT EXISTS `note_resource_rel` (
 -- 笔记标签和置顶功能：
 -- ALTER TABLE note ADD COLUMN tags JSON DEFAULT NULL COMMENT '标签数组' AFTER content;
 -- ALTER TABLE note ADD COLUMN is_pinned TINYINT DEFAULT 0 COMMENT '是否置顶' AFTER tags;
+
+-- 笔记捕获元数据（侧边栏 workbench）：
+-- ALTER TABLE note ADD COLUMN note_type VARCHAR(32) DEFAULT NULL COMMENT '摘录/速记/提问: excerpt|quick|question' AFTER is_pinned;
+-- ALTER TABLE note ADD COLUMN organize_status VARCHAR(32) DEFAULT NULL COMMENT '整理状态: pending|organizing|organized|error' AFTER note_type;
+-- ALTER TABLE note ADD COLUMN source_type VARCHAR(64) DEFAULT NULL COMMENT '来源类型: resource|plan|knowledge_tree|tutor' AFTER organize_status;
+-- ALTER TABLE note ADD COLUMN source_id BIGINT UNSIGNED DEFAULT NULL COMMENT '来源实体ID' AFTER source_type;
+-- ALTER TABLE note ADD COLUMN source_title VARCHAR(255) DEFAULT NULL COMMENT '来源标题' AFTER source_id;
+-- ALTER TABLE note ADD COLUMN source_route VARCHAR(512) DEFAULT NULL COMMENT '来源前端路由' AFTER source_title;
+-- ALTER TABLE note ADD COLUMN excerpt TEXT DEFAULT NULL COMMENT '摘录原文（可为空）' AFTER source_route;
+-- ALTER TABLE note ADD INDEX idx_organize_status (organize_status);
 
 CREATE TABLE IF NOT EXISTS `flashcard` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

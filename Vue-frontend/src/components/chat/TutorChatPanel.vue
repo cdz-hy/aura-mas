@@ -88,7 +88,7 @@
     </transition>
 
     <!-- Messages area -->
-    <div ref="messagesContainer" class="flex-1 overflow-y-auto px-4 py-4">
+    <div ref="messagesContainer" class="flex-1 overflow-y-auto px-4 py-4" @mouseup="onTutorMouseUp">
       <!-- Empty state -->
       <div v-if="tutor.messages.value.length === 0" class="tutor-empty">
         <img :src="tutorGif" alt="" class="tutor-empty-gif" />
@@ -140,6 +140,21 @@
       </div>
     </div>
 
+    <Teleport to="body">
+      <div
+        v-if="capturePopup.show"
+        class="fixed z-[9999] rounded-lg border border-purple-100 bg-white shadow-lg"
+        :style="{ left: capturePopup.x + 'px', top: capturePopup.y + 'px' }"
+      >
+        <button
+          class="flex items-center gap-2 px-3 py-2 text-sm text-purple-700 hover:bg-purple-50 rounded-lg"
+          @click="addSelectionToNotes"
+        >
+          新建笔记
+        </button>
+      </div>
+    </Teleport>
+
     <!-- Input bar -->
     <div class="px-4 py-3 border-t border-purple-100/50 bg-white">
       <!-- Manage actions bar -->
@@ -183,6 +198,7 @@ import { useRoute } from 'vue-router'
 import { useTutor, pickFollowUp } from '@/composables/useTutor'
 import { useVoiceInput } from '@/composables/useVoiceInput'
 import { useUiStore } from '@/stores/ui'
+import { resolveNoteCaptureSource, useNoteCaptureStore } from '@/stores/noteCapture'
 import { useAuthStore } from '@/stores/auth'
 import { getCurrentProfile } from '@/api/user'
 import { getDashboardStats } from '@/api/stats'
@@ -198,8 +214,59 @@ import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
 import SearchSources from '@/components/chat/SearchSources.vue'
 
 const uiStore = useUiStore()
+const noteCaptureStore = useNoteCaptureStore()
 const route = useRoute()
 const authStore = useAuthStore()
+
+const capturePopup = ref({ show: false, x: 0, y: 0, text: '' })
+
+function onTutorMouseUp(_e: MouseEvent) {
+  const selection = window.getSelection()
+  const text = selection?.toString().trim() || ''
+  if (!text || text.length < 2) {
+    capturePopup.value.show = false
+    return
+  }
+  const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+  if (!range || range.collapsed) {
+    capturePopup.value.show = false
+    return
+  }
+  const rect = range.getBoundingClientRect()
+  capturePopup.value = {
+    show: true,
+    x: Math.min(rect.right + 8, window.innerWidth - 140),
+    y: Math.max(8, rect.top - 10),
+    text,
+  }
+}
+
+function addSelectionToNotes() {
+  const text = capturePopup.value.text
+  capturePopup.value.show = false
+  if (!text) return
+
+  const source = resolveNoteCaptureSource(
+    {
+      name: route.name,
+      fullPath: route.fullPath,
+      params: route.params as Record<string, unknown>,
+      query: route.query as Record<string, unknown>,
+    },
+    {
+      sourceType: 'tutor',
+      sourceId: tutor.activeSessionId.value || undefined,
+      title: '智能辅导',
+    },
+  )
+
+  noteCaptureStore.requestCapture({
+    mode: 'excerpt',
+    ...(source ? { source } : {}),
+    excerpt: text,
+    noteName: '摘录 - 智能辅导',
+  })
+}
 
 // Tutor context: general Q&A mode (no plan/resource binding)
 const tutorContext = computed(() => ({ planId: 0, resourceId: 0 }))

@@ -134,8 +134,8 @@
       </div>
     </div>
 
-    <!-- Source tags -->
-    <div v-if="noteResources.length > 0" class="flex flex-wrap gap-2 mb-4">
+    <!-- Legacy resource-rel chips only (per-excerpt sources live inside the document card) -->
+    <div v-if="noteResources.length > 0" class="flex flex-wrap gap-2 mb-3">
       <button
         v-for="res in noteResources"
         :key="res.id"
@@ -212,7 +212,7 @@
       </div>
     </div>
 
-    <!-- Editor / Preview area -->
+    <!-- Classic Markdown editor: 编辑 / 分屏 / 预览 — 原文与笔记穿插在同一 content 里 -->
     <div v-else class="card overflow-hidden flex flex-col" style="height: calc(100vh - 220px)">
       <!-- Toolbar (edit & split modes) -->
       <div v-if="viewMode !== 'preview'" class="flex items-center gap-0.5 px-4 py-2 border-b border-navy-100/50 bg-navy-50/30 shrink-0 flex-wrap">
@@ -226,6 +226,7 @@
         <button v-for="btn in toolbarButtons" :key="btn.label" class="toolbar-btn" :title="btn.label" @click="insertMarkdown(btn.prefix, btn.suffix, btn.placeholder)">
           <span class="text-xs font-medium">{{ btn.display }}</span>
         </button>
+        <span class="ml-auto text-[10px] text-navy-300 hidden sm:inline">原文与笔记可穿插书写 · 分屏右侧即时预览</span>
       </div>
 
       <!-- Edit mode -->
@@ -234,7 +235,7 @@
           ref="textareaRef"
           v-model="content"
           class="w-full h-full p-8 text-navy-700 leading-relaxed resize-none outline-none font-body text-base"
-          placeholder="开始书写你的笔记...&#10;&#10;支持 Markdown 语法：&#10;# 标题&#10;**粗体** *斜体*&#10;- 列表&#10;> 引用&#10;`代码`"
+          placeholder="开始书写你的笔记…&#10;&#10;从学习正文划选「新建笔记 / 追加到笔记」会插入原文块，你可在原文前后穿插写理解。&#10;支持 Markdown：# 标题 **粗体** - 列表 > 引用"
           @input="onInput"
           @mouseup="onTextareaMouseUp"
           @keydown.ctrl.s.prevent="saveNote"
@@ -246,13 +247,13 @@
         ></textarea>
       </div>
 
-      <!-- Split mode -->
+      <!-- Split mode: 左编辑 · 右预览 -->
       <div v-else-if="viewMode === 'split'" class="flex-1 min-h-0 flex">
         <textarea
           ref="textareaRef"
           v-model="content"
           class="flex-1 p-6 text-navy-700 leading-relaxed resize-none outline-none font-body text-base border-r border-navy-100/50"
-          placeholder="开始书写你的笔记..."
+          placeholder="左侧编辑，右侧预览…"
           @input="onInput"
           @mouseup="onTextareaMouseUp"
           @keydown.ctrl.s.prevent="saveNote"
@@ -263,13 +264,12 @@
           @keydown.meta.y.prevent="redo"
         ></textarea>
         <div class="flex-1 overflow-y-auto p-6" @mouseup="onPreviewMouseUp">
-          <div class="markdown-body" v-html="renderedContent" @click="onPreviewClick"></div>
+          <div class="markdown-body note-interleaved-preview" v-html="renderedContent" @click="onPreviewClick"></div>
         </div>
       </div>
 
       <!-- Preview mode -->
       <div v-else class="flex-1 min-h-0 overflow-y-auto" @mouseup="onPreviewMouseUp">
-        <!-- Annotated two-column layout -->
         <div v-if="isAnnotated" ref="annotatedLayoutRef" class="annotated-layout">
           <aside class="annotation-sidebar">
             <p class="text-xs font-medium text-navy-400 mb-3 px-1">批注 ({{ annotations.length }})</p>
@@ -310,14 +310,13 @@
           </aside>
           <div
             ref="annotatedContentRef"
-            class="annotation-content markdown-body"
+            class="annotation-content markdown-body note-interleaved-preview"
             v-html="annotatedHtml"
             @click="onAnnotatedContentClick"
           ></div>
         </div>
-        <!-- Regular single-column preview -->
         <div v-else class="p-8">
-          <div class="markdown-body max-w-3xl mx-auto" v-html="renderedContent" @click="onPreviewClick"></div>
+          <div class="markdown-body note-interleaved-preview max-w-3xl mx-auto" v-html="renderedContent" @click="onPreviewClick"></div>
         </div>
       </div>
     </div>
@@ -380,6 +379,13 @@
           </button>
         </div>
         <div class="selection-popup-divider"></div>
+        <button class="selection-popup-btn" @click="addSelectionToNotes">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
+            <line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" />
+          </svg>
+          新建笔记
+        </button>
         <button class="selection-popup-btn" @click="generateFromSelection">
           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
@@ -495,11 +501,22 @@ import { PYTHON_AI_BASE } from '@/api/request'
 import type { NoteAnnotation } from '@/api/noteAgent'
 import type { Note, NoteResourceRel } from '@/types/note'
 import type { Flashcard } from '@/types/flashcard'
+import { useNoteCaptureStore } from '@/stores/noteCapture'
+import {
+  buildFormatPayload,
+  joinExcerptsFromContent,
+  migrateLegacyToInterleaved,
+  normalizeInterleavedOrder,
+  parseNoteBlocks,
+  preserveInterleavedStructure,
+  stripFormatArtifacts,
+} from '@/components/note/noteBlocks'
 import FlashcardPlayer from '@/components/flashcard/FlashcardPlayer.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 
 const route = useRoute()
 const router = useRouter()
+const noteCaptureStore = useNoteCaptureStore()
 
 const note = ref<Note | null>(null)
 const noteName = ref('')
@@ -508,6 +525,76 @@ const viewMode = ref<'edit' | 'split' | 'preview'>(route.query.mode === 'preview
 const saving = ref(false)
 const saved = ref(false)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+
+/**
+ * Turn <<<excerpt>>> fences into HTML cards for 分屏/预览.
+ * Protect <<A:…>> annotations so marked does not treat them as HTML
+ * (otherwise they collapse into visible <<>> / >>> junk).
+ */
+function renderInterleavedMarkdown(raw: string): string {
+  // 0) Drop pure bracket / ellipsis junk lines before markdown
+  let input = raw
+    .replace(/<<\s*>>/g, '')
+    .replace(/<<<\s*>>>/g, '')
+    .replace(/^[ \t]*[<>]{1,}[ \t]*$/gm, '')
+    .replace(/^[ \t]*(\.{2,}|…+)[ \t]*$/gm, '')
+    .replace(/^[ \t]*[<>]{1,}\s*(\.{2,}|…+)?[ \t]*$/gm, '')
+
+  // 1) Protect annotation markers (must not pass through marked as HTML)
+  const annPlaceholders = new Map<string, string>()
+  let annI = 0
+  input = input.replace(/<<A:(\d+)\|([^|]+)\|([\s\S]*?)>>/g, (_full, id: string, type: string, text: string) => {
+    const key = `%%ANN_${annI++}%%`
+    // Keep a stable token for processAnnotatedHtml to attach data-aids
+    annPlaceholders.set(key, `<<A:${id}|${type}|${String(text).trim()}>>`)
+    return key
+  })
+
+  // 2) Protect excerpt fences → placeholders, markdown the rest, restore as cards
+  const map = new Map<string, string>()
+  let i = 0
+  const protected_ = input.replace(
+    /<<<excerpt\s+([^>]*?)>>>\r?\n?([\s\S]*?)\r?\n?<<<\s*\/excerpt\s*>>>/g,
+    (_full, attrStr: string, body: string) => {
+      const key = `%%EXCERPT_${i++}%%`
+      const titleMatch = /sourceTitle="((?:\\.|[^"\\])*)"/.exec(attrStr)
+      const routeMatch = /sourceRoute="((?:\\.|[^"\\])*)"/.exec(attrStr)
+      const title = titleMatch ? titleMatch[1].replace(/\\"/g, '"') : ''
+      const route = routeMatch ? routeMatch[1].replace(/\\"/g, '"') : ''
+      const safeBody = body
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>')
+      const titleHtml = title
+        ? (route
+            ? `<a class="note-excerpt-source" href="${route.replace(/"/g, '')}">${title.replace(/</g, '&lt;')}</a>`
+            : `<span class="note-excerpt-source">${title.replace(/</g, '&lt;')}</span>`)
+        : ''
+      map.set(
+        key,
+        `<div class="note-excerpt-card"><div class="note-excerpt-label">原文 ${titleHtml}</div><div class="note-excerpt-body">${safeBody}</div></div>`,
+      )
+      return `\n\n${key}\n\n`
+    },
+  )
+  let html = classifyCallouts(marked.parse(protected_) as string)
+  for (const [key, card] of map) {
+    html = html.replace(new RegExp(`<p>\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*</p>`, 'g'), card)
+    html = html.replace(key, card)
+  }
+  // Restore annotation markers as HTML-escaped text so processAnnotatedHtml can find them
+  for (const [key, marker] of annPlaceholders) {
+    const escaped = marker
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+    html = html.replace(new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), escaped)
+  }
+  // Final pass: any leftover bare <<>> from AI
+  html = html.replace(/&lt;&lt;\s*&gt;&gt;/g, '').replace(/<<\s*>>/g, '')
+  return html
+}
 
 // Tags
 const noteTags = ref<string[]>([])
@@ -667,7 +754,10 @@ const formatInstruction = ref('')
 // Format comparison preview state
 const showFormatPreview = ref(false)
 const originalBeforeFormat = ref('')
+/** Display content (for interleaved notes: already merged with 原文 fences). */
 const formattedResult = ref('')
+/** Raw AI stream before client re-merge (note markers or plain markdown). */
+const formatStreamRaw = ref('')
 const formatStreamAbort = ref<(() => void) | null>(null)
 const streamingContentRef = ref<HTMLElement | null>(null)
 const acceptedDuringStream = ref(false)
@@ -688,29 +778,51 @@ const annotationTypeColor: Record<string, string> = {
 
 function parseAnnotations(raw: string): { cleanContent: string; annotations: NoteAnnotation[] } {
   const anns: NoteAnnotation[] = []
-  const re = /<<A:(\d+)\|([^|]+)\|([^>]+)>>/g
+  // Non-greedy body so nested > in rare text does not break the match
+  const re = /<<A:(\d+)\|([^|]+)\|([\s\S]*?)>>/g
   let match: RegExpExecArray | null
   while ((match = re.exec(raw)) !== null) {
     anns.push({ id: match[1], type: match[2] as NoteAnnotation['type'], text: match[3].trim() })
   }
-  const cleanContent = raw.replace(re, '').trim()
+  const cleanContent = raw
+    .replace(re, '')
+    .replace(/<<\s*>>/g, '')
+    .replace(/^[ \t]*[<>]{2,}[ \t]*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
   return { cleanContent, annotations: anns }
 }
 
 function processAnnotatedHtml(html: string): string {
   const div = document.createElement('div')
   div.innerHTML = html
-  const refRe = /&lt;&lt;A:(\d+)\|[^|]+\|[^&]+&gt;&gt;/g
-  for (const p of div.querySelectorAll('p, li, blockquote, td, h1, h2, h3, h4, h5, h6')) {
-    if (!refRe.test(p.innerHTML)) continue
-    refRe.lastIndex = 0
+  // Escaped form after renderInterleavedMarkdown protection
+  const refRe = /&lt;&lt;A:(\d+)\|[^|]+\|[\s\S]*?&gt;&gt;/g
+  for (const p of div.querySelectorAll('p, li, blockquote, td, h1, h2, h3, h4, h5, h6, div')) {
+    if (!p.innerHTML.includes('&lt;&lt;A:') && !p.innerHTML.includes('<<A:')) continue
     const ids: string[] = []
-    p.innerHTML = p.innerHTML.replace(refRe, (_, id) => { ids.push(id); return '' })
+    p.innerHTML = p.innerHTML
+      .replace(refRe, (_, id) => {
+        ids.push(id)
+        return ''
+      })
+      // raw form fallback
+      .replace(/<<A:(\d+)\|[^|]+\|[\s\S]*?>>/g, (_, id) => {
+        ids.push(id)
+        return ''
+      })
+      // leftover empty brackets from mangled markers
+      .replace(/&lt;&lt;\s*&gt;&gt;/g, '')
+      .replace(/<<\s*>>/g, '')
     if (ids.length > 0) {
-      p.setAttribute('data-aids', ids.join(','))
+      p.setAttribute('data-aids', [...new Set(ids)].join(','))
       p.classList.add('annotated-paragraph')
     }
   }
+  // Global cleanup of empty bracket artifacts in any node text
+  div.innerHTML = div.innerHTML
+    .replace(/&lt;&lt;\s*&gt;&gt;/g, '')
+    .replace(/<<\s*>>/g, '')
   return div.innerHTML
 }
 
@@ -819,7 +931,7 @@ function closeAnnotationPopup() {
 }
 
 function deleteAnnotation(id: string) {
-  const re = new RegExp(`<<A:${id}\\|[^|]+\\|[^>]+>>`)
+  const re = new RegExp(`<<A:${id}\\|[^|]+\\|[\\s\\S]*?>>`)
   if (!re.test(content.value)) return
   saveSnapshot()
   content.value = content.value.replace(re, '')
@@ -851,10 +963,10 @@ function saveInlineEdit(ann: NoteAnnotation, event?: Event) {
     editingAnnotationId.value = null
     return
   }
-  const oldRe = new RegExp(`<<A:${ann.id}\\|([^|]+)\\|([^>]+)>>`)
+  const oldRe = new RegExp(`<<A:${ann.id}\\|([^|]+)\\|([\\s\\S]*?)>>`)
   const match = oldRe.exec(content.value)
   if (!match) { editingAnnotationId.value = null; return }
-  const newMarker = `<<A:${ann.id}|${match[1]}|${newText}>`
+  const newMarker = `<<A:${ann.id}|${match[1]}|${newText}>>`
   saveSnapshot()
   content.value = content.value.replace(oldRe, newMarker)
   const { annotations: anns } = parseAnnotations(content.value)
@@ -874,10 +986,10 @@ function cycleAnnotationType(ann: NoteAnnotation) {
   const types = ANNOTATION_TYPES.map(t => t.type)
   const idx = types.indexOf(ann.type)
   const nextType = types[(idx + 1) % types.length]
-  const oldRe = new RegExp(`<<A:${ann.id}\\|([^|]+)\\|([^>]+)>>`)
+  const oldRe = new RegExp(`<<A:${ann.id}\\|([^|]+)\\|([\\s\\S]*?)>>`)
   const match = oldRe.exec(content.value)
   if (!match) return
-  const newMarker = `<<A:${ann.id}|${nextType}|${match[2]}>`
+  const newMarker = `<<A:${ann.id}|${nextType}|${match[2]}>>`
   saveSnapshot()
   content.value = content.value.replace(oldRe, newMarker)
   const { annotations: anns } = parseAnnotations(content.value)
@@ -968,27 +1080,30 @@ const renderedContent = computed(() => {
   const raw = content.value || ''
   const stripped = raw
     .replace(/```mindmap\s*\n[\s\S]*?```/g, '')
-    .replace(/<<A:\d+\|[^|]+\|[^>]+>>/g, '')
+    .replace(/<<A:\d+\|[^|]+\|[\s\S]*?>>/g, '')
+    .replace(/<<\s*>>/g, '')
+    .replace(/^[ \t]*[<>]{2,}[ \t]*$/gm, '')
     .trim()
-  return classifyCallouts(marked(stripped) as string)
+  return renderInterleavedMarkdown(stripped)
 })
 
 const annotatedHtml = computed(() => {
   if (!isAnnotated.value) return ''
   const raw = content.value || ''
   const stripped = raw.replace(/```mindmap\s*\n[\s\S]*?```/g, '').trim()
-  const html = classifyCallouts(marked(stripped) as string)
+  const html = renderInterleavedMarkdown(stripped)
   return processAnnotatedHtml(html)
 })
 
-// Comparison preview rendered content
+// Comparison preview: render 原文 cards so左右差异落在「补充」上，而不是裸 fence 文本
 const renderedOriginalContent = computed(() => {
-  return classifyCallouts(marked.parse(originalBeforeFormat.value || '') as string)
+  const { cleanContent } = parseAnnotations(originalBeforeFormat.value || '')
+  return processAnnotatedHtml(renderInterleavedMarkdown(cleanContent))
 })
 
 const renderedFormattedContent = computed(() => {
   const { cleanContent } = parseAnnotations(formattedResult.value)
-  return classifyCallouts(marked.parse(cleanContent) as string)
+  return processAnnotatedHtml(renderInterleavedMarkdown(cleanContent))
 })
 
 const mindmapData = computed(() => {
@@ -1073,10 +1188,41 @@ async function saveNote() {
     const name = noteName.value.trim() || '无标题笔记'
     const body = content.value.trim() || ' '
     const tags = noteTags.value.length > 0 ? noteTags.value : undefined
+
+    const blocks = parseNoteBlocks(body)
+    const excerpts = blocks.filter(b => b.type === 'excerpt')
+    const primary = excerpts[excerpts.length - 1]
+    const captureMeta = {
+      ...(note.value?.noteType ? { noteType: note.value.noteType } : excerpts.length ? { noteType: 'excerpt' as const } : {}),
+      ...(note.value?.organizeStatus ? { organizeStatus: note.value.organizeStatus } : {}),
+      ...(primary && primary.type === 'excerpt' && primary.sourceType
+        ? { sourceType: primary.sourceType as Note['sourceType'] }
+        : note.value?.sourceType
+          ? { sourceType: note.value.sourceType }
+          : {}),
+      ...(primary && primary.type === 'excerpt' && typeof primary.sourceId === 'number'
+        ? { sourceId: primary.sourceId }
+        : note.value?.sourceId != null
+          ? { sourceId: note.value.sourceId }
+          : {}),
+      ...(primary && primary.type === 'excerpt' && primary.sourceTitle
+        ? { sourceTitle: primary.sourceTitle }
+        : note.value?.sourceTitle
+          ? { sourceTitle: note.value.sourceTitle }
+          : {}),
+      ...(primary && primary.type === 'excerpt' && primary.sourceRoute
+        ? { sourceRoute: primary.sourceRoute }
+        : note.value?.sourceRoute
+          ? { sourceRoute: note.value.sourceRoute }
+          : {}),
+      excerpt: joinExcerptsFromContent(body) || undefined,
+    }
+
     if (note.value?.id) {
-      await updateNote(note.value.id, { noteName: name, content: body, tags })
+      await updateNote(note.value.id, { noteName: name, content: body, tags, ...captureMeta })
+      note.value = { ...note.value, content: body, ...captureMeta }
     } else {
-      const res = await createNote({ noteName: name, content: body, tags })
+      const res = await createNote({ noteName: name, content: body, tags, ...captureMeta })
       const id = (res as any)?.data?.id
       if (id) {
         router.replace(`/notes/${id}`)
@@ -1112,13 +1258,17 @@ async function loadNote() {
     if (found) {
       note.value = found
       noteName.value = found.noteName
-      content.value = found.content
+      // Migrate legacy split excerpt/content into one interleaved markdown document
+      // 清洗残留符号，并纠正为 原文→笔记 交替顺序
+      content.value = normalizeInterleavedOrder(
+        stripFormatArtifacts(
+          migrateLegacyToInterleaved(found.content, found.excerpt),
+        ),
+      )
       noteTags.value = parseTags(found.tags)
       loadNoteResources(found.id)
-      // Parse annotations from saved content (if it was previously formatted)
-      const { annotations: anns } = parseAnnotations(found.content || '')
+      const { annotations: anns } = parseAnnotations(content.value)
       annotations.value = anns
-      // Reset undo/redo history for newly loaded note
       undoStack.length = 0
       redoStack.length = 0
     } else {
@@ -1251,6 +1401,7 @@ async function handleFormat() {
   annotations.value = []
   originalBeforeFormat.value = content.value
   formattedResult.value = ''
+  formatStreamRaw.value = ''
   acceptedDuringStream.value = false
   showFormatPreview.value = true
 
@@ -1261,48 +1412,67 @@ async function handleFormat() {
     formatStatus.value = '正在整理笔记...'
 
     const instruction = formatInstruction.value.trim()
-    const { abort } = formatNoteSSE(ticket, originalBeforeFormat.value, {
-      onProgress(message) {
-        formatStatus.value = message
+    // 有原文块：按段附带只读原文上下文，只让 AI 写 note；客户端再拼回 fence
+    const { contentForAi, hasInterleaved } = buildFormatPayload(originalBeforeFormat.value)
+
+    const mergeAiOutput = (aiText: string) =>
+      hasInterleaved
+        ? preserveInterleavedStructure(originalBeforeFormat.value, aiText)
+        : (aiText.trim() || originalBeforeFormat.value)
+
+    const { abort } = formatNoteSSE(
+      ticket,
+      contentForAi,
+      {
+        onProgress(message) {
+          formatStatus.value = message
+        },
+        onChunk(chunk) {
+          formatStreamRaw.value += chunk
+          // 对比预览始终展示「拼回原文后」的最终形态，避免左右看起来像同一坨 fence
+          formattedResult.value = mergeAiOutput(formatStreamRaw.value)
+          if (acceptedDuringStream.value) {
+            content.value = formattedResult.value
+          }
+          nextTick(() => {
+            const el = streamingContentRef.value
+            if (el) el.scrollTop = el.scrollHeight
+          })
+        },
+        onDone(formatted) {
+          formatStreamRaw.value = formatted
+          formattedResult.value = mergeAiOutput(formatted)
+          formatting.value = false
+          formatStatus.value = ''
+          formatStreamAbort.value = null
+          if (acceptedDuringStream.value) {
+            const { annotations: anns } = parseAnnotations(formattedResult.value)
+            content.value = formattedResult.value
+            annotations.value = anns
+            saveNote()
+            showFormatFlashcardPrompt.value = true
+          }
+        },
+        onError(error) {
+          content.value = originalBeforeFormat.value
+          annotations.value = []
+          formatting.value = false
+          formatStatus.value = ''
+          showFormatPreview.value = false
+          formattedResult.value = ''
+          formatStreamRaw.value = ''
+          originalBeforeFormat.value = ''
+          formatStreamAbort.value = null
+          console.error('Note format error:', error)
+        },
       },
-      onChunk(chunk) {
-        formattedResult.value += chunk
-        // If already accepted, keep updating content.value in editor
-        if (acceptedDuringStream.value) {
-          content.value = formattedResult.value
-        }
-        // Auto-scroll the streaming panel to bottom
-        nextTick(() => {
-          const el = streamingContentRef.value
-          if (el) el.scrollTop = el.scrollHeight
-        })
+      instruction,
+      {
+        excerpt: joinExcerptsFromContent(originalBeforeFormat.value),
+        sourceTitle: note.value?.sourceTitle,
+        noteType: note.value?.noteType,
       },
-      onDone(formatted) {
-        formattedResult.value = formatted
-        formatting.value = false
-        formatStatus.value = ''
-        formatStreamAbort.value = null
-        // If accepted mid-stream, save the final complete result now
-        if (acceptedDuringStream.value) {
-          const { annotations: anns } = parseAnnotations(formatted)
-          content.value = formatted
-          annotations.value = anns
-          saveNote()
-          showFormatFlashcardPrompt.value = true
-        }
-      },
-      onError(error) {
-        content.value = originalBeforeFormat.value
-        annotations.value = []
-        formatting.value = false
-        formatStatus.value = ''
-        showFormatPreview.value = false
-        formattedResult.value = ''
-        originalBeforeFormat.value = ''
-        formatStreamAbort.value = null
-        console.error('Note format error:', error)
-      },
-    }, instruction)
+    )
     formatStreamAbort.value = abort
   } catch (e) {
     content.value = originalBeforeFormat.value
@@ -1311,6 +1481,7 @@ async function handleFormat() {
     formatStatus.value = ''
     showFormatPreview.value = false
     formattedResult.value = ''
+    formatStreamRaw.value = ''
     originalBeforeFormat.value = ''
     formatStreamAbort.value = null
     console.error('Failed to start note formatting:', e)
@@ -1318,18 +1489,29 @@ async function handleFormat() {
 }
 
 function acceptFormat() {
-  if (!formattedResult.value.trim()) return
+  if (!formattedResult.value.trim() && !formatStreamRaw.value.trim()) return
   acceptedDuringStream.value = true
-  const { annotations: anns } = parseAnnotations(formattedResult.value)
-  content.value = formattedResult.value
+  // 始终从 raw AI 输出再 merge，避免对已拼回结果二次误解析
+  const source = formatStreamRaw.value.trim() || formattedResult.value
+  const merged = normalizeInterleavedOrder(
+    stripFormatArtifacts(
+      preserveInterleavedStructure(
+        originalBeforeFormat.value || content.value,
+        source,
+      ),
+    ),
+  )
+  formattedResult.value = merged
+  const { annotations: anns } = parseAnnotations(merged)
+  content.value = merged
   annotations.value = anns
   formatInstruction.value = ''
   showFormatPreview.value = false
-  // If stream already finished, save now; otherwise onDone will save
   if (!formatting.value) {
     saveNote()
     showFormatFlashcardPrompt.value = true
     formattedResult.value = ''
+    formatStreamRaw.value = ''
     originalBeforeFormat.value = ''
   }
 }
@@ -1344,6 +1526,7 @@ function rejectFormat() {
   formatting.value = false
   showFormatPreview.value = false
   formattedResult.value = ''
+  formatStreamRaw.value = ''
   originalBeforeFormat.value = ''
 }
 
@@ -1519,6 +1702,18 @@ function startAnnotationFromPreview(type: string) {
   selectionPopup.value.show = false
   showAnnotationPopup.value = true
   nextTick(() => annotationInputRef.value?.focus())
+}
+
+/** Note detail is a utility editor — capture excerpt only, never auto-attach a learning source. */
+function addSelectionToNotes() {
+  const text = selectionPopup.value.text
+  selectionPopup.value.show = false
+  if (!text) return
+  noteCaptureStore.requestCapture({
+    mode: 'excerpt',
+    excerpt: text,
+    noteName: note.value?.noteName ? `摘录 - ${note.value.noteName}` : '摘录笔记',
+  })
 }
 
 async function generateFromSelection() {
@@ -2162,5 +2357,37 @@ watch(activeAnnotation, (id) => {
 
 .btn-reject:hover {
   background: #dc2626;
+}
+
+/* 分屏/预览中的穿插原文块 — 简约灰阶 */
+.note-interleaved-preview :deep(.note-excerpt-card) {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid #e8ecf1;
+  background: #f8fafc;
+}
+.note-interleaved-preview :deep(.note-excerpt-label) {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.note-interleaved-preview :deep(.note-excerpt-source) {
+  font-weight: 500;
+  color: #475569;
+  text-decoration: none;
+}
+.note-interleaved-preview :deep(.note-excerpt-source:hover) {
+  text-decoration: underline;
+  color: #334155;
+}
+.note-interleaved-preview :deep(.note-excerpt-body) {
+  font-size: 0.925rem;
+  line-height: 1.65;
+  color: #475569;
 }
 </style>

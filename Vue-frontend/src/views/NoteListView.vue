@@ -168,15 +168,32 @@
         class="card-hover p-5 cursor-pointer group relative"
       >
         <!-- Pin icon -->
-        <div v-if="note.isPinned" class="absolute top-3 right-3 text-amber-500" title="已置顶">
+        <div v-if="note.isPinned" class="absolute top-3 right-3 text-navy-400" title="已置顶">
           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
             <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
           </svg>
         </div>
 
+        <!-- Capture type + organize status (与侧栏一致) -->
+        <div class="flex items-center flex-wrap gap-1.5 mb-2 pr-6">
+          <span class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-navy-50 text-navy-500">
+            {{ typeLabel(note) }}
+          </span>
+          <span class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-navy-50 text-navy-400">
+            {{ statusLabel(note) }}
+          </span>
+          <span
+            v-if="note.sourceTitle"
+            class="text-[10px] px-1.5 py-0.5 rounded bg-navy-50 text-navy-400 truncate max-w-[10rem]"
+            :title="note.sourceTitle"
+          >
+            来源 · {{ note.sourceTitle }}
+          </span>
+        </div>
+
         <div class="flex items-start justify-between mb-2">
           <h3 class="font-medium text-navy-800 group-hover:text-navy-600 transition-colors flex-1 mr-2 line-clamp-1">
-            {{ note.noteName }}
+            {{ note.noteName || '无标题笔记' }}
           </h3>
         </div>
 
@@ -191,7 +208,7 @@
           </span>
         </div>
 
-        <p class="text-sm text-navy-400 line-clamp-3 mb-3">{{ note.content.substring(0, 150) }}</p>
+        <p class="text-sm text-navy-400 line-clamp-3 mb-3">{{ previewText(note) }}</p>
         <div class="flex items-center justify-between text-xs text-navy-300">
           <span>{{ formatDate(note.updatedAt) }}</span>
         </div>
@@ -209,7 +226,7 @@
           </button>
           <button
             class="p-1.5 rounded-lg text-red-400 hover:bg-red-50 transition-colors"
-            @click.stop="deleteNote(note.id)"
+            @click.stop="requestDeleteNote(note)"
             title="删除"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -241,17 +258,36 @@
         </div>
       </div>
     </div>
+
+    <ConfirmDialog
+      :visible="showDeleteConfirm"
+      title="删除笔记"
+      :message="deleteConfirmMessage"
+      confirm-text="确认删除"
+      cancel-text="取消"
+      type="danger"
+      @confirm="handleDeleteConfirm"
+      @cancel="handleDeleteCancel"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getNotes, deleteNote as deleteNoteApi, updateNote } from '@/api/note'
 import { getFlashcardsByNote, getDueFlashcardCount } from '@/api/flashcard'
 import { tracker } from '@/utils/tracker'
+import { showToast } from '@/composables/useToast'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { useNoteCaptureStore } from '@/stores/noteCapture'
 import type { Note } from '@/types/note'
 import type { Flashcard } from '@/types/flashcard'
+import {
+  noteListPreview,
+  noteTypeLabel,
+  organizeStatusLabel,
+} from '@/components/note/notePresentation'
 
 interface FlashcardGroup {
   noteId: number
@@ -262,6 +298,7 @@ interface FlashcardGroup {
 }
 
 const router = useRouter()
+const noteCaptureStore = useNoteCaptureStore()
 const notes = ref<Note[]>([])
 const keyword = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | null = null
@@ -275,6 +312,18 @@ const flashcardDropdownRef = ref<HTMLElement | null>(null)
 
 function formatDate(date: string) {
   return new Date(date).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+}
+
+function typeLabel(note: Note) {
+  return noteTypeLabel(note.noteType)
+}
+
+function statusLabel(note: Note) {
+  return organizeStatusLabel(note.organizeStatus)
+}
+
+function previewText(note: Note) {
+  return noteListPreview(note, 120) || '暂无预览'
 }
 
 function parseTags(tags: Note['tags']): string[] {
@@ -309,12 +358,45 @@ async function togglePin(note: Note) {
   }
 }
 
-async function deleteNote(id: number) {
+const showDeleteConfirm = ref(false)
+const deletingNoteId = ref<number | null>(null)
+const deletingNoteName = ref('')
+const deleteConfirmMessage = computed(() => {
+  const name = deletingNoteName.value || '无标题笔记'
+  return `确定要删除笔记「${name}」吗？删除后不可恢复。`
+})
+
+function requestDeleteNote(note: Note) {
+  deletingNoteId.value = note.id
+  deletingNoteName.value = note.noteName?.trim() || '无标题笔记'
+  showDeleteConfirm.value = true
+}
+
+function handleDeleteCancel() {
+  showDeleteConfirm.value = false
+  deletingNoteId.value = null
+  deletingNoteName.value = ''
+}
+
+async function handleDeleteConfirm() {
+  const id = deletingNoteId.value
+  if (id == null) {
+    handleDeleteCancel()
+    return
+  }
   try {
     await deleteNoteApi(id)
+    showDeleteConfirm.value = false
+    deletingNoteId.value = null
+    deletingNoteName.value = ''
+    // Optimistic local remove + broadcast so sidebar / append pickers drop it too
+    notes.value = notes.value.filter(n => n.id !== id)
+    noteCaptureStore.notifyNotesChanged({ removedId: id })
     await loadNotes()
+    showToast('笔记已删除', 'success')
   } catch (e) {
     console.error('Delete note failed:', e)
+    showToast('删除失败，请稍后重试', 'error')
   }
 }
 
