@@ -38,6 +38,13 @@
       </div>
     </transition>
 
+    <!-- Advisor panel (slide-in from right) -->
+    <transition name="slide-right">
+      <div v-if="uiStore.advisorPanelOpen" class="w-[360px] border-l border-emerald-200/50 bg-white flex-shrink-0 overflow-hidden">
+        <PlanAdvisorChat :is-sidebar="true" @close="uiStore.advisorPanelOpen = false" />
+      </div>
+    </transition>
+
   </div>
 </template>
 
@@ -48,6 +55,7 @@ import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
 import NoteSidebar from '@/components/note/NoteSidebar.vue'
 import TutorChatPanel from '@/components/chat/TutorChatPanel.vue'
+import PlanAdvisorChat from '@/components/plan/PlanAdvisorChat.vue'
 import Toast from '@/components/common/Toast.vue'
 import { useUiStore } from '@/stores/ui'
 

@@ -59,11 +59,10 @@ import { getDashboardStats } from '@/api/stats'
 import { getPlans } from '@/api/plan'
 import { issueTicket } from '@/api/auth'
 import { PYTHON_AI_BASE } from '@/api/request'
+import { useUiStore } from '@/stores/ui'
 
 const router = useRouter()
-const emit = defineEmits<{
-  openChat: []
-}>()
+const uiStore = useUiStore()
 
 // 状态
 const showCloud = ref(false)
@@ -277,7 +276,7 @@ async function acceptSuggestion() {
 
 // 打开对话
 function openChat() {
-  emit('openChat')
+  uiStore.toggleAdvisorPanel()
   dismiss()
 }
 

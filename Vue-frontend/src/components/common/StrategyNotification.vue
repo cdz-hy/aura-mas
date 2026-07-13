@@ -19,8 +19,15 @@
       <div v-if="showPanel" class="strategy-panel">
         <!-- 头部 -->
         <div class="panel-header">
-          <h3 class="panel-title">学习策略建议</h3>
-          <button class="panel-close" @click="showPanel = false">
+          <div class="flex items-center gap-2">
+            <button v-if="showAll" class="panel-back" @click="showAll = false; loadPending()">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+            <h3 class="panel-title">{{ showAll ? '全部建议' : '学习策略建议' }}</h3>
+          </div>
+          <button class="panel-close" @click="showPanel = false; showAll = false">
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
@@ -94,7 +101,7 @@
         </div>
 
         <!-- 底部 -->
-        <div v-if="strategies.length > 0" class="panel-footer">
+        <div v-if="strategies.length > 0 && !showAll" class="panel-footer">
           <button class="view-all-btn" @click="viewAll">
             查看全部建议
           </button>
@@ -110,6 +117,7 @@ import { useRouter } from 'vue-router'
 import {
   getPendingStrategyCount,
   getPendingStrategies,
+  getUserStrategies,
   acceptStrategy,
   rejectStrategy,
   type LearningStrategy
@@ -123,6 +131,7 @@ const containerRef = ref<HTMLElement | null>(null)
 
 // 状态
 const showPanel = ref(false)
+const showAll = ref(false)
 const loading = ref(false)
 const processing = ref(false)
 const pendingCount = ref(0)
@@ -135,12 +144,13 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 function togglePanel() {
   showPanel.value = !showPanel.value
   if (showPanel.value) {
-    loadStrategies()
+    showAll.value = false
+    loadPending()
   }
 }
 
-// 加载策略
-async function loadStrategies() {
+// 加载待处理策略
+async function loadPending() {
   loading.value = true
   try {
     const res = await getPendingStrategies()
@@ -335,10 +345,18 @@ async function handleReject(strategy: LearningStrategy) {
   }
 }
 
-// 查看全部
-function viewAll() {
-  showPanel.value = false
-  router.push('/analytics')
+// 查看全部 - 加载所有策略
+async function viewAll() {
+  showAll.value = true
+  loading.value = true
+  try {
+    const res = await getUserStrategies(undefined, 50)
+    strategies.value = res.data || []
+  } catch (e) {
+    console.error('加载全部策略失败:', e)
+  } finally {
+    loading.value = false
+  }
 }
 
 // 获取类型标签
@@ -493,6 +511,25 @@ onUnmounted(() => {
 .panel-title {
   font-size: 15px;
   font-weight: 600;
+  color: #1e293b;
+}
+
+.panel-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.panel-back:hover {
+  background: #f1f5f9;
   color: #1e293b;
 }
 

@@ -212,4 +212,97 @@ public class LearningTrackerService {
                 .distinct()
                 .collect(java.util.stream.Collectors.toList());
     }
+
+    /**
+     * 记录用户心跳（每分钟调用一次）
+     * 使用 learning_events 表记录心跳事件
+     */
+    public void recordHeartbeat(Long userId) {
+        try {
+            // 保存心跳事件到数据库
+            LearningEvent event = new LearningEvent();
+            event.setUserId(userId);
+            event.setEventType("heartbeat");
+            event.setEventData("{}");
+            event.setCreatedAt(LocalDateTime.now());
+            eventMapper.insert(event);
+            log.debug("[学习追踪] 用户 {} 心跳已记录", userId);
+        } catch (Exception e) {
+            log.warn("[学习追踪] 记录心跳失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 检查用户是否需要进行学习分析
+     * 基于用户的活跃时间（累计5小时）
+     */
+    public boolean needAnalysis(Long userId) {
+        // 获取用户最近的学习事件（包括心跳）
+        LocalDateTime since = LocalDateTime.now().minusHours(24);
+        List<LearningEvent> events = eventMapper.selectList(
+                new LambdaQueryWrapper<LearningEvent>()
+                        .eq(LearningEvent::getUserId, userId)
+                        .ge(LearningEvent::getCreatedAt, since)
+                        .in(LearningEvent::getEventType, "heartbeat", "page_view", "resource_view")
+        );
+
+        if (events.size() < 2) {
+            return false;
+        }
+
+        // 计算活跃时间（基于事件间隔）
+        long activeMinutes = calculateActiveMinutes(events);
+
+        // 检查是否已超过5小时（300分钟）
+        boolean needAnalysis = activeMinutes >= 300;
+
+        if (needAnalysis) {
+            log.info("[学习追踪] 用户 {} 活跃时间达到 {} 分钟，需要分析", userId, activeMinutes);
+        }
+
+        return needAnalysis;
+    }
+
+    /**
+     * 计算用户的活跃时间（基于事件间隔）
+     */
+    private long calculateActiveMinutes(List<LearningEvent> events) {
+        if (events.size() < 2) {
+            return 0;
+        }
+
+        // 按时间排序
+        events.sort((a, b) -> a.getCreatedAt().compareTo(b.getCreatedAt()));
+
+        long activeMs = 0;
+        LocalDateTime lastEventTime = null;
+
+        for (LearningEvent event : events) {
+            LocalDateTime currentTime = event.getCreatedAt();
+            if (lastEventTime != null) {
+                long gapMs = java.time.Duration.between(lastEventTime, currentTime).toMillis();
+                // 如果间隔小于5分钟，算作活跃时间
+                if (gapMs <= 5 * 60 * 1000) {
+                    activeMs += gapMs;
+                }
+            }
+            lastEventTime = currentTime;
+        }
+
+        return activeMs / (60 * 1000); // 转换为分钟
+    }
+
+    /**
+     * 清空用户的待处理策略
+     */
+    @Transactional
+    public int clearPendingStrategies(Long userId) {
+        int count = strategyMapper.delete(
+                new LambdaQueryWrapper<LearningStrategy>()
+                        .eq(LearningStrategy::getUserId, userId)
+                        .eq(LearningStrategy::getStatus, "pending")
+        );
+        log.info("[学习策略] 清空用户 {} 的待处理策略: {} 条", userId, count);
+        return count;
+    }
 }

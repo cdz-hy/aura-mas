@@ -115,4 +115,24 @@ public class LearningTrackerController {
     public Result<?> getActiveUsers(@RequestParam(defaultValue = "5") int hours) {
         return Result.success(trackerService.getActiveUserIds(hours));
     }
+
+    @Operation(summary = "用户心跳 - 追踪活跃时间")
+    @PostMapping("/heartbeat")
+    public Result<Void> heartbeat(Authentication authentication) {
+        Long userId = AuthUtils.getCurrentUserId(authentication);
+        trackerService.recordHeartbeat(userId);
+        return Result.success();
+    }
+
+    @Operation(summary = "内部接口：检查用户是否需要分析")
+    @GetMapping("/internal/need-analysis")
+    public Result<Boolean> needAnalysis(@RequestParam Long userId) {
+        return Result.success(trackerService.needAnalysis(userId));
+    }
+
+    @Operation(summary = "内部接口：清空用户的待处理策略")
+    @PostMapping("/internal/clear-user-strategies")
+    public Result<Integer> clearUserStrategies(@RequestParam Long userId) {
+        return Result.success(trackerService.clearPendingStrategies(userId));
+    }
 }

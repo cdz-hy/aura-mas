@@ -38,6 +38,9 @@ class LearningTracker {
 
     this.timer = setInterval(() => this.flush(), this.flushInterval)
 
+    // 启动心跳（每分钟发送一次）
+    this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), 60000)
+
     // 页面关闭前发送剩余事件
     if (typeof window !== 'undefined') {
       window.addEventListener('beforeunload', () => {
@@ -50,6 +53,24 @@ class LearningTracker {
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = null
+    }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+  }
+
+  /**
+   * 发送心跳
+   */
+  private async sendHeartbeat() {
+    try {
+      const authStore = useAuthStore()
+      if (!authStore.isLoggedIn) return
+
+      await request.post('/tracker/heartbeat', {})
+    } catch (error) {
+      // 静默失败
     }
   }
 
@@ -139,6 +160,9 @@ class LearningTracker {
   // 页面停留时间追踪
   private pageStartTime: number = 0
   private currentPage: string = ''
+
+  // 心跳定时器
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
   /**
    * 追踪页面浏览（自动计算停留时间）

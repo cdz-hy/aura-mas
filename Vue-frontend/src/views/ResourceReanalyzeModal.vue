@@ -194,7 +194,7 @@ const showConfirm = ref(false)
 const submitting = ref(false)
 
 const typeLabels: Record<string, string> = {
-  text: '正文', image: '图片', diagram: '导图', code: '代码', quiz: '题目', summary: '总结',
+  text: '图文', image: '图片', diagram: '导图', code: '代码', quiz: '题目', summary: '总结',
   document: '文档', mindmap: '导图', reading: '阅读', video: '视频', podcast: '播客', animation: '动画',
 }
 

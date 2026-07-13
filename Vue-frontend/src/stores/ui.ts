@@ -257,6 +257,7 @@ export const useUiStore = defineStore('ui', () => {
   const sidebarCollapsed = ref(false)
   const notesPanelOpen = ref(false)
   const tutorPanelOpen = ref(false)
+  const advisorPanelOpen = ref(false)
   const currentTheme = ref<ThemeId>('light')
 
   function applyTheme(theme: ThemeId) {
@@ -303,17 +304,25 @@ export const useUiStore = defineStore('ui', () => {
 
   function toggleNotesPanel() {
     tutorPanelOpen.value = false
+    advisorPanelOpen.value = false
     notesPanelOpen.value = !notesPanelOpen.value
   }
 
   function toggleTutorPanel() {
     notesPanelOpen.value = false
+    advisorPanelOpen.value = false
     tutorPanelOpen.value = !tutorPanelOpen.value
   }
 
+  function toggleAdvisorPanel() {
+    notesPanelOpen.value = false
+    tutorPanelOpen.value = false
+    advisorPanelOpen.value = !advisorPanelOpen.value
+  }
+
   return {
-    sidebarCollapsed, notesPanelOpen, tutorPanelOpen, currentTheme,
-    toggleSidebar, toggleNotesPanel, toggleTutorPanel,
+    sidebarCollapsed, notesPanelOpen, tutorPanelOpen, advisorPanelOpen, currentTheme,
+    toggleSidebar, toggleNotesPanel, toggleTutorPanel, toggleAdvisorPanel,
     setTheme, restoreTheme, applyTheme,
   }
 })

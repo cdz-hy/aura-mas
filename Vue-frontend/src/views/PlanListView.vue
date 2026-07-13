@@ -35,6 +35,15 @@
             </svg>
           </button>
         </div>
+        <!-- AI 顾问按钮 -->
+        <button
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-all duration-200"
+          :class="uiStore.advisorPanelOpen ? 'bg-emerald-100 text-emerald-700' : 'text-navy-400 hover:bg-emerald-50 hover:text-emerald-600'"
+          @click="uiStore.toggleAdvisorPanel()"
+        >
+          <img src="/学习顾问.png" alt="AI顾问" class="w-4 h-4 rounded object-cover" />
+          AI 顾问
+        </button>
         <button class="btn-primary" @click="createNewPlan" :disabled="creating">
           <svg class="w-4 h-4 inline mr-1.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
@@ -253,11 +262,8 @@
 
     <!-- AI 学习顾问建议云朵（Teleport 到 body，避免被父容器 transform 影响 fixed 定位） -->
     <Teleport to="body">
-      <AdvisorSuggestionCloud @open-chat="openAdvisor" />
+      <AdvisorSuggestionCloud />
     </Teleport>
-
-    <!-- AI 学习顾问 -->
-    <PlanAdvisorChat ref="planAdvisorRef" />
   </div>
 </template>
 
@@ -268,12 +274,13 @@ import { getPlans, createPlan, deletePlan, updatePlan } from '@/api/plan'
 import { getPlanResources, getProgressByPlan, markResourceComplete, getBatchProgress, markAllComplete } from '@/api/resource'
 import { getDashboardStats } from '@/api/stats'
 import { tracker } from '@/utils/tracker'
+import { useUiStore } from '@/stores/ui'
 import type { LearningPlan } from '@/types/plan'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import PlanAdvisorChat from '@/components/plan/PlanAdvisorChat.vue'
 import AdvisorSuggestionCloud from '@/components/plan/AdvisorSuggestionCloud.vue'
 
 const router = useRouter()
+const uiStore = useUiStore()
 const plans = ref<LearningPlan[]>([])
 const planProgressMap = ref<Record<number, number>>({}) // planId -> progress percentage
 const planStatsMap = ref<Record<number, { completed: number; total: number }>>({}) // planId -> resource stats
@@ -442,15 +449,6 @@ function handlePlanIconUpdated(e: Event) {
     if (planItem) {
       planItem.planConfig = detail.planConfig
     }
-  }
-}
-
-// AI 学习顾问
-const planAdvisorRef = ref<any>(null)
-
-async function openAdvisor() {
-  if (planAdvisorRef.value) {
-    planAdvisorRef.value.openChat()
   }
 }
 

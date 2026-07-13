@@ -1,164 +1,174 @@
 <template>
-  <div class="plan-advisor-chat" :style="positionStyle">
-    <!-- 触发按钮 -->
-    <button
-      v-if="!isOpen"
-      class="advisor-trigger"
-      @click="openChat"
-      :class="{ 'has-notification': hasNotification }"
-    >
-      <img src="/学习顾问.png" alt="AI学习顾问" class="w-full h-full rounded-full object-cover" />
-      <span v-if="hasNotification" class="notification-dot"></span>
-    </button>
-
-    <!-- 对话面板 -->
-    <transition name="advisor-slide">
-      <div v-if="isOpen" class="advisor-panel" :style="{ transform: `translate(${panelOffset.x}px, ${panelOffset.y}px)` }">
-        <!-- 头部（可拖动） -->
-        <div
-          class="advisor-header cursor-move select-none"
-          @mousedown="startDrag"
-          @touchstart.prevent="startDragTouch"
+  <div class="flex flex-col h-full">
+    <!-- Header -->
+    <div class="px-4 py-3 border-b border-emerald-100/50 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <img src="/学习顾问.png" alt="" class="w-6 h-6 rounded-lg object-cover" />
+        <span class="text-sm font-semibold text-emerald-700">AI 学习顾问</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <button
+          class="p-2 rounded-lg transition-colors relative"
+          :class="showSessionList ? 'bg-emerald-100 text-emerald-700' : 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100'"
+          @click="showSessionList = !showSessionList"
+          title="会话历史"
         >
-          <div class="flex items-center gap-2">
-            <img src="/学习顾问.png" alt="AI学习顾问" class="w-8 h-8 rounded-full object-cover" />
-            <div>
-              <h3 class="font-semibold text-navy-800 text-sm">AI 学习顾问</h3>
-              <p class="text-xs text-navy-400">{{ isListening ? '正在聆听...' : '随时为你服务' }}</p>
-            </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <!-- 关闭按钮 -->
-            <button
-              class="p-1.5 rounded-lg text-navy-400 hover:text-navy-600 hover:bg-navy-100 transition-colors"
-              @click="closeChat"
-            >
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          </div>
-        </div>
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+          </svg>
+          <span v-if="sessions.length" class="absolute -top-1 -right-1 bg-emerald-600 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center border border-white">
+            {{ sessions.length }}
+          </span>
+        </button>
+        <button
+          class="p-2 rounded-lg bg-emerald-50 text-emerald-500 hover:bg-emerald-100 transition-colors"
+          @click="handleNewSession()"
+          title="新建会话"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
+        <button
+          v-if="loading"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
+          @click="stopGeneration()"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          停止
+        </button>
+        <button
+          v-if="isSidebar"
+          class="p-2 rounded-lg bg-emerald-50 text-emerald-500 hover:bg-emerald-100 transition-colors"
+          @click="$emit('close')"
+          title="关闭"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+    </div>
 
-        <!-- 消息列表 -->
-        <div ref="messagesContainer" class="advisor-messages">
-          <!-- 欢迎消息 -->
-          <div v-if="messages.length === 0" class="message assistant">
-            <div class="message-content">
-              <p class="text-sm text-navy-700 leading-relaxed">
-                你好！我是你的 AI 学习顾问。我可以：
-              </p>
-              <ul class="mt-2 space-y-1 text-xs text-navy-600">
-                <li>• 分析你的学习情况，提供个性化建议</li>
-                <li>• 根据你的进度推荐合适的学习计划</li>
-                <li>• 解答学习中的疑问</li>
-              </ul>
-              <p class="mt-3 text-xs text-navy-400">点击麦克风按钮或输入文字开始对话</p>
-            </div>
-          </div>
-
-          <!-- 消息列表 -->
+    <!-- Session list panel -->
+    <transition name="slide-down">
+      <div v-if="showSessionList" class="border-b border-emerald-100/50 bg-emerald-50/30 max-h-[240px] overflow-y-auto">
+        <div v-if="sessionsLoading" class="p-4 text-center text-emerald-400 text-sm">加载中...</div>
+        <div v-else-if="sessions.length === 0" class="p-4 text-center text-emerald-300 text-sm">暂无历史会话</div>
+        <div v-else class="py-1">
           <div
-            v-for="(msg, i) in messages"
-            :key="i"
-            class="message"
-            :class="msg.role"
+            v-for="session in sessions"
+            :key="session.sessionId"
+            class="flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors"
+            :class="activeSessionId === session.sessionId ? 'bg-emerald-100/60' : 'hover:bg-white'"
+            @click="handleSelectSession(session.sessionId)"
           >
-            <div class="message-content">
-              <!-- 计划建议卡片 -->
-              <div v-if="msg.type === 'plan_suggestion'" class="plan-suggestion">
-                <div class="flex items-center gap-2 mb-2">
-                  <svg class="w-4 h-4 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
-                  </svg>
-                  <span class="text-sm font-medium text-emerald-700">为你推荐的学习计划</span>
-                </div>
-                <p class="text-sm text-navy-700 mb-3">{{ msg.suggestion.title }}</p>
-                <div class="space-y-1 mb-3">
-                  <div v-for="(mod, idx) in msg.suggestion.modules.slice(0, 3)" :key="idx" class="text-xs text-navy-500">
-                    {{ idx + 1 }}. {{ mod.title }}
-                  </div>
-                  <p v-if="msg.suggestion.modules.length > 3" class="text-xs text-navy-400">
-                    ...共 {{ msg.suggestion.modules.length }} 个模块
-                  </p>
-                </div>
-                <div class="flex gap-2">
-                  <button
-                    class="flex-1 px-3 py-1.5 bg-emerald-600 text-white text-xs rounded-lg hover:bg-emerald-700 transition-colors"
-                    @click="acceptPlanSuggestion(msg.suggestion)"
-                  >
-                    接受建议
-                  </button>
-                  <button
-                    class="flex-1 px-3 py-1.5 bg-navy-100 text-navy-600 text-xs rounded-lg hover:bg-navy-200 transition-colors"
-                    @click="rejectPlanSuggestion(msg.id)"
-                  >
-                    暂不需要
-                  </button>
-                </div>
-              </div>
-
-              <!-- 消息内容 -->
-              <div v-else>
-                <div class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
-              </div>
+            <div class="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+              :class="activeSessionId === session.sessionId ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-400'">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+              </svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm text-emerald-700 truncate">{{ session.title }}</p>
+              <p class="text-[11px] text-emerald-400 mt-0.5">{{ session.messageCount }} 条消息 · {{ formatTime(session.lastMessageAt) }}</p>
             </div>
           </div>
-
-          <!-- 加载指示器 -->
-          <div v-if="loading" class="message assistant">
-            <div class="message-content">
-              <div class="flex gap-1.5 py-1">
-                <span class="w-2 h-2 rounded-full bg-emerald-300 animate-bounce" style="animation-delay: 0s"></span>
-                <span class="w-2 h-2 rounded-full bg-emerald-300 animate-bounce" style="animation-delay: 0.15s"></span>
-                <span class="w-2 h-2 rounded-full bg-emerald-300 animate-bounce" style="animation-delay: 0.3s"></span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 输入区域 -->
-        <div class="advisor-input">
-          <!-- 语音输入按钮 -->
-          <button
-            class="voice-btn"
-            :class="{ 'is-listening': isListening }"
-            @mousedown="startListening"
-            @mouseup="stopListening"
-            @touchstart.prevent="startListening"
-            @touchend.prevent="stopListening"
-            :disabled="loading"
-          >
-            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-              <line x1="12" y1="19" x2="12" y2="23" />
-              <line x1="8" y1="23" x2="16" y2="23" />
-            </svg>
-          </button>
-
-          <!-- 文字输入 -->
-          <input
-            v-model="inputText"
-            class="text-input"
-            placeholder="输入你的问题..."
-            @keyup.enter="sendMessage"
-            :disabled="loading"
-          />
-
-          <!-- 发送按钮 -->
-          <button
-            class="send-btn"
-            @click="sendMessage"
-            :disabled="!inputText.trim() || loading"
-          >
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
         </div>
       </div>
     </transition>
+
+    <!-- Messages area -->
+    <div ref="messagesContainer" class="flex-1 overflow-y-auto px-4 py-4">
+      <!-- Empty state -->
+      <div v-if="messages.length === 0" class="tutor-empty">
+        <img src="/学习顾问.png" alt="" class="tutor-empty-gif" />
+        <div class="tutor-empty-bubble">你好！我是你的 AI 学习顾问，有什么可以帮你的吗？</div>
+      </div>
+
+      <!-- Message list -->
+      <div v-for="(msg, i) in messages" :key="i" class="tutor-msg-row group" :class="msg.role">
+        <div v-if="msg.role === 'assistant'" class="tutor-avatar">
+          <img src="/学习顾问.png" alt="" />
+        </div>
+        <div class="tutor-bubble" :class="msg.role">
+          <template v-if="msg.role === 'assistant'">
+            <!-- Plan suggestion card -->
+            <div v-if="msg.type === 'plan_suggestion'" class="plan-suggestion-card">
+              <div class="flex items-center gap-2 mb-2">
+                <svg class="w-4 h-4 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
+                </svg>
+                <span class="text-sm font-medium text-emerald-700">为你推荐的学习计划</span>
+              </div>
+              <p class="text-sm text-navy-700 mb-3">{{ msg.suggestion?.title }}</p>
+              <div class="space-y-1 mb-3">
+                <div v-for="(mod, idx) in (msg.suggestion?.modules || []).slice(0, 3)" :key="idx" class="text-xs text-navy-500">
+                  {{ idx + 1 }}. {{ mod.title }}
+                </div>
+                <p v-if="(msg.suggestion?.modules || []).length > 3" class="text-xs text-navy-400">
+                  ...共 {{ msg.suggestion?.modules?.length }} 个模块
+                </p>
+              </div>
+              <div class="flex gap-2">
+                <button
+                  class="flex-1 px-3 py-1.5 bg-emerald-600 text-white text-xs rounded-lg hover:bg-emerald-700 transition-colors"
+                  @click="acceptPlanSuggestion(msg.suggestion)"
+                >
+                  接受建议
+                </button>
+                <button
+                  class="flex-1 px-3 py-1.5 bg-navy-100 text-navy-600 text-xs rounded-lg hover:bg-navy-200 transition-colors"
+                  @click="rejectPlanSuggestion(msg.id)"
+                >
+                  暂不需要
+                </button>
+              </div>
+            </div>
+            <!-- Normal message -->
+            <div v-else class="tutor-md-content" v-html="renderMd(msg.content)"></div>
+          </template>
+          <template v-else>{{ msg.content }}</template>
+        </div>
+      </div>
+
+      <!-- Loading indicator -->
+      <div v-if="loading" class="tutor-msg-row assistant">
+        <div class="tutor-avatar">
+          <img src="/学习顾问.png" alt="" />
+        </div>
+        <div class="tutor-bubble assistant">
+          <span class="tutor-typing">
+            <span></span><span></span><span></span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input bar -->
+    <div class="px-4 py-3 border-t border-emerald-100/50 bg-white">
+      <div class="flex gap-2 items-end">
+        <textarea
+          ref="inputRef"
+          v-model="inputText"
+          class="flex-1 resize-none rounded-xl border border-emerald-200 px-3 py-2 text-sm focus:outline-none focus:border-emerald-400 max-h-32"
+          placeholder="输入你的问题..."
+          rows="1"
+          @input="autoResize"
+          @keydown.enter.exact.prevent="sendMessage"
+          :disabled="loading"
+        />
+        <button
+          class="p-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
+          @click="sendMessage"
+          :disabled="!inputText.trim() || loading"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
+          </svg>
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -166,12 +176,23 @@
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { parseMarkdown } from '@/utils/markdown'
-import { getDashboardStats, getStudyHeatmap } from '@/api/stats'
+import { getDashboardStats } from '@/api/stats'
 import { getDueFlashcardCount } from '@/api/flashcard'
 import { getPlans } from '@/api/plan'
 import { getDialogueHistoryByIntent } from '@/api/chat'
-import { PYTHON_AI_BASE } from '@/api/request'
 import { issueTicket } from '@/api/auth'
+import { PYTHON_AI_BASE } from '@/api/request'
+
+// Props & Emits
+const props = defineProps<{
+  isSidebar?: boolean
+}>()
+
+const emit = defineEmits<{
+  close: []
+}>()
+
+const router = useRouter()
 
 interface Message {
   id: string
@@ -181,308 +202,64 @@ interface Message {
   suggestion?: any
 }
 
-const router = useRouter()
+interface Session {
+  sessionId: string
+  title: string
+  messageCount: number
+  lastMessageAt: string
+}
 
-// Markdown 渲染
+// State
+const messages = ref<Message[]>([])
+const inputText = ref('')
+const loading = ref(false)
+const showSessionList = ref(false)
+const sessions = ref<Session[]>([])
+const sessionsLoading = ref(false)
+const activeSessionId = ref('')
+const messagesContainer = ref<HTMLElement | null>(null)
+const inputRef = ref<HTMLTextAreaElement | null>(null)
+
+// Markdown rendering
 function renderMd(text: string) {
   return parseMarkdown(text)
 }
 
-// 状态
-const isOpen = ref(false)
-const messages = ref<Message[]>([])
-const inputText = ref('')
-const loading = ref(false)
-const hasNotification = ref(false)
-
-// 语音状态
-const isListening = ref(false)
-const mediaRecorder = ref<MediaRecorder | null>(null)
-const audioChunks = ref<Blob[]>([])
-
-// 拖动状态
-const position = ref({ x: 24, y: 24 })
-const panelOffset = ref({ x: 0, y: 0 })
-const isDragging = ref(false)
-const dragStart = ref({ x: 0, y: 0 })
-
-// 计算位置样式
-const positionStyle = computed(() => ({
-  right: position.value.x + 'px',
-  top: position.value.y + 'px'
-}))
-
-// 引用
-const messagesContainer = ref<HTMLElement | null>(null)
-
-// 打开对话
-async function openChat() {
-  isOpen.value = true
-  hasNotification.value = false
-
-  // 检查是否有检测到的变化
-  const changeReason = localStorage.getItem('advisor_change_reason')
-
-  if (messages.value.length === 0) {
-    // 没有历史对话，加载历史或主动问候
-    await loadHistory()
-  } else if (changeReason) {
-    // 有历史对话且检测到新变化，主动发起分析
-    await proactiveGreeting()
+// Auto resize textarea
+function autoResize() {
+  if (inputRef.value) {
+    inputRef.value.style.height = 'auto'
+    inputRef.value.style.height = Math.min(inputRef.value.scrollHeight, 128) + 'px'
   }
 }
 
-// 加载历史对话
-async function loadHistory() {
-  try {
-    const res = await getDialogueHistoryByIntent('plan_advisor', 20)
-    const history = res.data || []
-    if (history.length > 0) {
-      // 反转顺序，让最新的消息在最下面
-      const reversedHistory = [...history].reverse()
-      for (const item of reversedHistory) {
-        const role = item.dialogueType === 'USER' ? 'user' : 'assistant'
-        messages.value.push({
-          id: item.id?.toString() || Date.now().toString(),
-          role: role as 'user' | 'assistant',
-          content: item.conversationText || '',
-          type: 'text'
-        })
-      }
-      scrollToBottom()
-    } else {
-      // 没有历史对话，主动问候
-      await proactiveGreeting()
+// Format time
+function formatTime(dateStr: string): string {
+  if (!dateStr) return ''
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diff = now.getTime() - date.getTime()
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(diff / 3600000)
+  const days = Math.floor(diff / 86400000)
+
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes}分钟前`
+  if (hours < 24) return `${hours}小时前`
+  if (days < 7) return `${days}天前`
+  return date.toLocaleDateString('zh-CN')
+}
+
+// Scroll to bottom
+function scrollToBottom() {
+  nextTick(() => {
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
     }
-  } catch (e) {
-    console.error('Load history failed:', e)
-    // 加载失败，主动问候
-    await proactiveGreeting()
-  }
+  })
 }
 
-// 关闭对话
-function closeChat() {
-  isOpen.value = false
-}
-
-// 拖动功能
-function startDrag(e: MouseEvent) {
-  isDragging.value = true
-  dragStart.value = { x: e.clientX - panelOffset.value.x, y: e.clientY - panelOffset.value.y }
-  document.addEventListener('mousemove', onDrag)
-  document.addEventListener('mouseup', stopDrag)
-}
-
-function startDragTouch(e: TouchEvent) {
-  isDragging.value = true
-  const touch = e.touches[0]
-  dragStart.value = { x: touch.clientX - panelOffset.value.x, y: touch.clientY - panelOffset.value.y }
-  document.addEventListener('touchmove', onDragTouch)
-  document.addEventListener('touchend', stopDrag)
-}
-
-function onDrag(e: MouseEvent) {
-  if (!isDragging.value) return
-  panelOffset.value = {
-    x: e.clientX - dragStart.value.x,
-    y: e.clientY - dragStart.value.y
-  }
-}
-
-function onDragTouch(e: TouchEvent) {
-  if (!isDragging.value) return
-  const touch = e.touches[0]
-  panelOffset.value = {
-    x: touch.clientX - dragStart.value.x,
-    y: touch.clientY - dragStart.value.y
-  }
-}
-
-function stopDrag() {
-  isDragging.value = false
-  document.removeEventListener('mousemove', onDrag)
-  document.removeEventListener('mouseup', stopDrag)
-  document.removeEventListener('touchmove', onDragTouch)
-  document.removeEventListener('touchend', stopDrag)
-}
-
-// 检测学习变化并主动提示
-async function checkLearningChanges() {
-  try {
-    // 使用独立 key，避免与 AdvisorSuggestionCloud 竞态
-    const lastCheckKey = 'advisor_chat_last_check'
-    const lastCheckStr = localStorage.getItem(lastCheckKey)
-    const lastCheck = lastCheckStr ? JSON.parse(lastCheckStr) : null
-
-    // 获取当前学习数据
-    const [statsRes, plansRes, heatmapRes] = await Promise.all([
-      getDashboardStats().catch(() => ({ data: null })),
-      getPlans({ page: 1, size: 10 }).catch(() => ({ data: { records: [] } })),
-      getStudyHeatmap(30).catch(() => ({ data: null }))
-    ])
-
-    const stats = statsRes.data
-    const plans = plansRes.data?.records || []
-    const streakDays = heatmapRes.data?.currentStreak || 0
-
-    console.log('[AdvisorChat] checkLearningChanges', {
-      lastCheck,
-      currentPlanCount: plans.length,
-      streakDays,
-      quizAccuracy: stats?.quizAccuracy,
-      completedResources: stats?.completedResources,
-    })
-
-    const changes: string[] = []
-
-    if (lastCheck) {
-      // 1. 学习时长变化（增加超过 30 分钟）
-      const lastMinutes = Math.floor((lastCheck.todayDurationSeconds || 0) / 60)
-      const currentMinutes = Math.floor((stats?.todayDurationSeconds || 0) / 60)
-      if (currentMinutes - lastMinutes > 30) {
-        changes.push(`今日学习时长增加了 ${currentMinutes - lastMinutes} 分钟`)
-      }
-
-      // 2. 计划数量变化
-      const lastPlanCount = lastCheck.planCount || 0
-      const currentPlanCount = plans.length
-      if (currentPlanCount > lastPlanCount) {
-        changes.push(`新增了 ${currentPlanCount - lastPlanCount} 个学习计划`)
-      } else if (currentPlanCount < lastPlanCount) {
-        changes.push(`学习计划减少了 ${lastPlanCount - currentPlanCount} 个`)
-      }
-
-      // 3. 答题正确率变化（波动超过 5%）
-      const lastAccuracy = lastCheck.quizAccuracy || 0
-      const currentAccuracy = stats?.quizAccuracy || 0
-      if (lastAccuracy > 0 && Math.abs(currentAccuracy - lastAccuracy) > 5) {
-        const direction = currentAccuracy > lastAccuracy ? '提升' : '下降'
-        changes.push(`答题正确率${direction}了 ${Math.abs(currentAccuracy - lastAccuracy).toFixed(1)}%`)
-      }
-
-      // 4. 连续学习天数变化
-      const lastStreak = lastCheck.streakDays || 0
-      if (streakDays > lastStreak && streakDays >= 3) {
-        changes.push(`连续学习天数达到 ${streakDays} 天`)
-      } else if (lastStreak >= 3 && streakDays === 0) {
-        changes.push('连续学习中断了')
-      }
-
-      // 5. 完成资源数变化
-      const lastCompleted = lastCheck.completedResources || 0
-      const currentCompleted = stats?.completedResources || 0
-      if (currentCompleted > lastCompleted) {
-        changes.push(`新完成了 ${currentCompleted - lastCompleted} 个学习资源`)
-      }
-
-      // 6. 总学习时长里程碑（每 10 小时一个节点）
-      const lastHours = lastCheck.totalStudyHours || 0
-      const currentHours = stats?.totalStudyHours || 0
-      if (currentHours > lastHours && Math.floor(currentHours / 10) > Math.floor(lastHours / 10)) {
-        changes.push(`累计学习时长突破 ${Math.floor(currentHours / 10) * 10} 小时`)
-      }
-    } else {
-      // 首次检查
-      if (plans.length > 0) {
-        changes.push('首次分析学习情况')
-      }
-    }
-
-    // 保存当前数据
-    localStorage.setItem(lastCheckKey, JSON.stringify({
-      todayDurationSeconds: stats?.todayDurationSeconds || 0,
-      totalStudyHours: stats?.totalStudyHours || 0,
-      quizAccuracy: stats?.quizAccuracy || 0,
-      streakDays: streakDays,
-      completedResources: stats?.completedResources || 0,
-      planCount: plans.length,
-      timestamp: Date.now()
-    }))
-
-    // 如果有变化，显示通知
-    if (changes.length > 0) {
-      hasNotification.value = true
-      localStorage.setItem('advisor_change_reason', changes.join('；'))
-    }
-
-    return changes.length > 0
-  } catch (e) {
-    console.error('Check learning changes failed:', e)
-    return false
-  }
-}
-
-// 主动问候 - 根据学习情况主动提问和建议
-async function proactiveGreeting() {
-  try {
-    // 获取学习数据
-    const [statsRes, flashcardRes, plansRes] = await Promise.all([
-      getDashboardStats().catch(() => ({ data: null })),
-      getDueFlashcardCount().catch(() => ({ data: 0 })),
-      getPlans({ page: 1, size: 10 }).catch(() => ({ data: { records: [] } }))
-    ])
-
-    const rawStats = statsRes.data
-    const dueCount = flashcardRes.data || 0
-    const plans = plansRes.data?.records || []
-
-    // 转换字段名，与后端 _format_stats 对齐
-    const stats = rawStats ? {
-      todayStudyMinutes: Math.floor((rawStats.todayDurationSeconds || 0) / 60),
-      totalStudyMinutes: Math.floor((rawStats.totalDurationSeconds || 0) / 60),
-      totalStudyHours: rawStats.totalStudyHours || 0,
-      streakDays: 0, // 由后端从 heatmap 获取
-      quizAccuracy: rawStats.quizAccuracy || 0,
-      completedModules: rawStats.completedResources || 0,
-      totalModules: rawStats.totalResources || 0,
-      dueFlashcards: dueCount,
-    } : null
-
-    // 获取变化原因
-    const changeReason = localStorage.getItem('advisor_change_reason') || ''
-
-    // 调用后端 AI 顾问 API 获取主动建议
-    const ticketRes = await issueTicket()
-    const ticket = ticketRes.data.ticket
-
-    const userMessage = changeReason
-      ? `[系统自动触发] 检测到学生学习情况变化：${changeReason}。请主动分析学生的学习情况，根据学习计划和资源内容，主动提出问题或建议。`
-      : '[系统自动触发] 请主动分析学生的学习情况，根据学习计划和资源内容，主动提出问题或建议。'
-
-    const response = await fetch(`${PYTHON_AI_BASE}/api/ai/plan-advisor/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${ticket}`
-      },
-      body: JSON.stringify({
-        stats: stats,
-        plans: plans,
-        userMessage: userMessage
-      })
-    })
-
-    if (response.ok) {
-      const data = await response.json()
-      if (data.type === 'plan_suggestion' && data.suggestion) {
-        addMessage('assistant', data.message, 'plan_suggestion', data.suggestion)
-      } else {
-        addMessage('assistant', data.message || '你好！有什么我可以帮你的吗？')
-      }
-    } else {
-      addMessage('assistant', '你好！有什么我可以帮你的吗？')
-    }
-
-    // 清除变化原因
-    localStorage.removeItem('advisor_change_reason')
-  } catch (e) {
-    console.error('Proactive greeting failed:', e)
-    addMessage('assistant', '你好！有什么我可以帮你的吗？')
-  }
-}
-
-// 添加消息
+// Add message
 function addMessage(role: 'user' | 'assistant', content: string, type: string = 'text', suggestion?: any) {
   messages.value.push({
     id: Date.now().toString(),
@@ -494,7 +271,7 @@ function addMessage(role: 'user' | 'assistant', content: string, type: string = 
   scrollToBottom()
 }
 
-// 发送消息
+// Send message
 async function sendMessage() {
   const text = inputText.value.trim()
   if (!text || loading.value) return
@@ -507,7 +284,7 @@ async function sendMessage() {
     const ticketRes = await issueTicket()
     const ticket = ticketRes.data.ticket
 
-    // 获取学习数据上下文
+    // Get learning data context
     const [statsRes, plansRes, flashcardRes] = await Promise.all([
       getDashboardStats().catch(() => ({ data: null })),
       getPlans({ page: 1, size: 10 }).catch(() => ({ data: { records: [] } })),
@@ -532,7 +309,7 @@ async function sendMessage() {
       userMessage: text
     }
 
-    // 调用 AI 顾问 API
+    // Call AI advisor API
     const response = await fetch(`${PYTHON_AI_BASE}/api/ai/plan-advisor/chat`, {
       method: 'POST',
       headers: {
@@ -548,11 +325,11 @@ async function sendMessage() {
 
     const data = await response.json()
 
-    // 处理响应
-    if (data.type === 'plan_suggestion') {
+    // Handle response
+    if (data.type === 'plan_suggestion' && data.suggestion) {
       addMessage('assistant', data.message, 'plan_suggestion', data.suggestion)
     } else {
-      addMessage('assistant', data.message)
+      addMessage('assistant', data.message || '抱歉，我没有理解你的问题。')
     }
   } catch (e) {
     console.error('Send message failed:', e)
@@ -562,8 +339,52 @@ async function sendMessage() {
   }
 }
 
-// 接受计划建议
+// Stop generation
+function stopGeneration() {
+  loading.value = false
+}
+
+// Load history
+async function loadHistory() {
+  try {
+    const res = await getDialogueHistoryByIntent('plan_advisor', 20)
+    const history = res.data || []
+    if (history.length > 0) {
+      const reversedHistory = [...history].reverse()
+      for (const item of reversedHistory) {
+        const role = item.dialogueType === 'USER' ? 'user' : 'assistant'
+        messages.value.push({
+          id: item.id?.toString() || Date.now().toString(),
+          role: role as 'user' | 'assistant',
+          content: item.conversationText || '',
+          type: 'text'
+        })
+      }
+      scrollToBottom()
+    }
+  } catch (e) {
+    console.error('Load history failed:', e)
+  }
+}
+
+// New session
+function handleNewSession() {
+  messages.value = []
+  activeSessionId.value = ''
+}
+
+// Select session
+async function handleSelectSession(sessionId: string) {
+  activeSessionId.value = sessionId
+  showSessionList.value = false
+  // Load session messages
+  // TODO: Implement session message loading
+}
+
+// Accept plan suggestion
 async function acceptPlanSuggestion(suggestion: any) {
+  if (!suggestion) return
+
   try {
     loading.value = true
     addMessage('user', `接受建议：${suggestion.title}`)
@@ -571,7 +392,6 @@ async function acceptPlanSuggestion(suggestion: any) {
     const ticketRes = await issueTicket()
     const ticket = ticketRes.data.ticket
 
-    // 调用创建计划 API
     const response = await fetch(`${PYTHON_AI_BASE}/api/ai/plan-advisor/create-plan`, {
       method: 'POST',
       headers: {
@@ -592,14 +412,32 @@ async function acceptPlanSuggestion(suggestion: any) {
     const data = await response.json()
 
     if (data.success) {
-      addMessage('assistant', `✅ ${data.message}\n\n正在跳转到新计划...`)
-      // 通知学习顾问
-      localStorage.setItem('advisor_plan_created', `通过顾问建议创建了学习计划「${suggestion.title}」`)
+      addMessage('assistant', `✅ ${data.message}`)
 
-      // 延迟后跳转到新计划
+      // Trigger resource generation for each resource
+      if (data.resourceIds && data.resourceIds.length > 0) {
+        for (let i = 0; i < data.resourceIds.length; i++) {
+          const resourceId = data.resourceIds[i]
+          const module = (suggestion.modules || [])[i] || { title: suggestion.title, description: '' }
+
+          try {
+            const userMessage = `请为「${module.title}」生成学习资源。学习目标：${module.description || suggestion.title}`
+            await fetch(`${PYTHON_AI_BASE}/api/ai/resource/generate?ticket=${ticket}&plan_id=${data.planId}&module_id=${resourceId}&type=text&title=${encodeURIComponent(module.title)}&description=${encodeURIComponent(module.description || '')}&user_message=${encodeURIComponent(userMessage)}`, {
+              method: 'GET',
+              headers: { 'Authorization': `Bearer ${ticket}` }
+            })
+          } catch (e) {
+            console.error(`Generate resource ${resourceId} failed:`, e)
+          }
+        }
+      }
+
+      // Navigate to new plan
       setTimeout(() => {
         router.push(`/plan/${data.planId}`)
-        closeChat()
+        if (props.isSidebar) {
+          emit('close')
+        }
       }, 1500)
     } else {
       addMessage('assistant', '抱歉，创建计划失败，请稍后再试。')
@@ -612,7 +450,7 @@ async function acceptPlanSuggestion(suggestion: any) {
   }
 }
 
-// 拒绝计划建议
+// Reject plan suggestion
 function rejectPlanSuggestion(messageId: string) {
   const idx = messages.value.findIndex(m => m.id === messageId)
   if (idx !== -1) {
@@ -622,326 +460,147 @@ function rejectPlanSuggestion(messageId: string) {
   }
 }
 
-// 语音识别
-function startListening() {
-  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-    alert('你的浏览器不支持语音识别功能')
-    return
-  }
-
-  const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-  const recognition = new SpeechRecognition()
-
-  recognition.lang = 'zh-CN'
-  recognition.interimResults = false
-  recognition.maxAlternatives = 1
-
-  recognition.onresult = (event: any) => {
-    const transcript = event.results[0][0].transcript
-    inputText.value = transcript
-    isListening.value = false
-    // 自动发送
-    sendMessage()
-  }
-
-  recognition.onerror = (event: any) => {
-    console.error('Speech recognition error:', event.error)
-    isListening.value = false
-  }
-
-  recognition.onend = () => {
-    isListening.value = false
-  }
-
-  isListening.value = true
-  recognition.start()
-}
-
-function stopListening() {
-  isListening.value = false
-}
-
-// 滚动到底部
-function scrollToBottom() {
-  nextTick(() => {
-    if (messagesContainer.value) {
-      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-    }
-  })
-}
-
-// 暴露方法给父组件
-defineExpose({
-  openChat
-})
-
-// 生命周期
-onMounted(() => {
-  // 检查是否有计划创建信号（由 PlanCreateView 写入）
-  const planCreated = localStorage.getItem('advisor_plan_created')
-  console.log('[AdvisorChat] onMounted 检查信号:', planCreated)
-  if (planCreated) {
-    hasNotification.value = true
-    localStorage.setItem('advisor_change_reason', planCreated)
-    console.log('[AdvisorChat] 检测到计划创建信号，已设通知')
-  }
-
-  // 页面加载后检测学习变化（延迟 4 秒，避免与 AdvisorSuggestionCloud 同时请求）
-  setTimeout(() => {
-    checkLearningChanges()
-  }, 4000)
+// Lifecycle
+onMounted(async () => {
+  await loadHistory()
 })
 </script>
 
 <style scoped>
-.plan-advisor-chat {
-  position: fixed;
-  right: 24px;
-  top: 24px;
-  z-index: 100;
-}
-
-.advisor-trigger {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  background: transparent;
+/* Tutor message styles */
+.tutor-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-  transition: all 0.3s ease;
-  position: relative;
-  padding: 0;
-  border: none;
-  cursor: pointer;
+  padding: 40px 20px;
+  gap: 16px;
 }
 
-.advisor-trigger:hover {
-  transform: scale(1.1);
-  box-shadow: 0 6px 25px rgba(0, 0, 0, 0.2);
-}
-
-.advisor-trigger.has-notification {
-  animation: pulse 2s infinite;
-}
-
-.notification-dot {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 12px;
-  height: 12px;
-  background: #ef4444;
-  border-radius: 50%;
-  border: 2px solid white;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3);
-  }
-  50% {
-    box-shadow: 0 4px 30px rgba(16, 185, 129, 0.5);
-  }
-}
-
-.advisor-panel {
-  position: absolute;
-  top: 70px;
-  right: 0;
-  width: 380px;
-  max-height: 500px;
-  background: white;
+.tutor-empty-gif {
+  width: 64px;
+  height: 64px;
   border-radius: 16px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  object-fit: cover;
+}
+
+.tutor-empty-bubble {
+  background: #f0fdf4;
+  border-radius: 16px;
+  border-top-left-radius: 4px;
+  padding: 12px 16px;
+  font-size: 14px;
+  color: #374151;
+  max-width: 240px;
+  text-align: center;
+}
+
+.tutor-msg-row {
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.advisor-header {
-  padding: 16px;
-  border-bottom: 1px solid #e5e7eb;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: linear-gradient(135deg, #f0fdf4, #ecfdf5);
-}
-
-.advisor-messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  max-height: 350px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.message {
-  display: flex;
-  flex-direction: column;
-}
-
-.message.user {
-  align-items: flex-end;
-}
-
-.message.assistant {
+  margin-bottom: 16px;
   align-items: flex-start;
 }
 
-.message-content {
-  max-width: 85%;
+.tutor-msg-row.user {
+  flex-direction: row-reverse;
+}
+
+.tutor-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+.tutor-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tutor-bubble {
+  max-width: 80%;
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: 16px;
   font-size: 14px;
   line-height: 1.5;
 }
 
-.message.user .message-content {
-  background: #f0fdf4;
-  color: #166534;
-  border-bottom-right-radius: 4px;
-}
-
-.message.assistant .message-content {
-  background: #f9fafb;
-  color: #374151;
-  border-bottom-left-radius: 4px;
-}
-
-.plan-suggestion {
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: 12px;
-  padding: 12px;
-}
-
-.advisor-input {
-  padding: 12px 16px;
-  border-top: 1px solid #e5e7eb;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: white;
-}
-
-.voice-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: #f3f4f6;
-  color: #6b7280;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-  flex-shrink: 0;
-}
-
-.voice-btn:hover {
-  background: #e5e7eb;
-  color: #374151;
-}
-
-.voice-btn.is-listening {
-  background: #fee2e2;
-  color: #ef4444;
-  animation: pulse-red 1s infinite;
-}
-
-@keyframes pulse-red {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
-  }
-}
-
-.text-input {
-  flex: 1;
-  height: 40px;
-  padding: 0 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 20px;
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.text-input:focus {
-  border-color: #10b981;
-}
-
-.send-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
+.tutor-bubble.user {
   background: #10b981;
   color: white;
+  border-top-right-radius: 4px;
+}
+
+.tutor-bubble.assistant {
+  background: #f9fafb;
+  color: #374151;
+  border-top-left-radius: 4px;
+}
+
+.tutor-typing {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-  flex-shrink: 0;
+  gap: 4px;
+  padding: 4px 0;
 }
 
-.send-btn:hover:not(:disabled) {
-  background: #059669;
+.tutor-typing span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9ca3af;
+  animation: typing 1.4s infinite;
 }
 
-.send-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.tutor-typing span:nth-child(2) {
+  animation-delay: 0.2s;
 }
 
-/* 动画 */
-.advisor-slide-enter-active {
-  transition: all 0.3s ease-out;
+.tutor-typing span:nth-child(3) {
+  animation-delay: 0.4s;
 }
 
-.advisor-slide-leave-active {
-  transition: all 0.2s ease-in;
+@keyframes typing {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
-.advisor-slide-enter-from,
-.advisor-slide-leave-to {
-  opacity: 0;
-  transform: translateY(20px) scale(0.95);
+.tutor-md-content {
+  line-height: 1.6;
 }
 
-/* Markdown 样式 */
-.markdown-body :deep(p) {
+.tutor-md-content :deep(p) {
   margin-bottom: 0.5em;
 }
 
-.markdown-body :deep(p:last-child) {
+.tutor-md-content :deep(p:last-child) {
   margin-bottom: 0;
 }
 
-.markdown-body :deep(strong) {
+.tutor-md-content :deep(strong) {
   font-weight: 600;
   color: #1f2937;
 }
 
-.markdown-body :deep(em) {
-  font-style: italic;
-}
-
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
+.tutor-md-content :deep(ul),
+.tutor-md-content :deep(ol) {
   margin: 0.5em 0;
   padding-left: 1.5em;
 }
 
-.markdown-body :deep(li) {
+.tutor-md-content :deep(li) {
   margin-bottom: 0.25em;
 }
 
-.markdown-body :deep(code) {
+.tutor-md-content :deep(code) {
   background: #f3f4f6;
   padding: 0.15em 0.4em;
   border-radius: 4px;
@@ -949,7 +608,7 @@ onMounted(() => {
   font-family: 'Fira Code', 'Consolas', monospace;
 }
 
-.markdown-body :deep(pre) {
+.tutor-md-content :deep(pre) {
   background: #f3f4f6;
   padding: 0.75em;
   border-radius: 8px;
@@ -957,45 +616,54 @@ onMounted(() => {
   margin: 0.5em 0;
 }
 
-.markdown-body :deep(pre code) {
+.tutor-md-content :deep(pre code) {
   background: none;
   padding: 0;
 }
 
-.markdown-body :deep(blockquote) {
-  border-left: 3px solid #10b981;
-  padding-left: 0.75em;
-  margin: 0.5em 0;
+/* Plan suggestion card */
+.plan-suggestion-card {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+/* Slide down animation */
+.slide-down-enter-active {
+  transition: all 0.2s ease-out;
+}
+
+.slide-down-leave-active {
+  transition: all 0.15s ease-in;
+}
+
+.slide-down-enter-from,
+.slide-down-leave-to {
+  opacity: 0;
+  max-height: 0;
+}
+
+/* Progress bar */
+.tutor-progress-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
   color: #6b7280;
+  font-size: 12px;
 }
 
-.markdown-body :deep(h1),
-.markdown-body :deep(h2),
-.markdown-body :deep(h3) {
-  font-weight: 600;
-  margin: 0.75em 0 0.5em;
+.tutor-progress-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #10b981;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
-.markdown-body :deep(h1) {
-  font-size: 1.25em;
-}
-
-.markdown-body :deep(h2) {
-  font-size: 1.125em;
-}
-
-.markdown-body :deep(h3) {
-  font-size: 1em;
-}
-
-.markdown-body :deep(a) {
-  color: #10b981;
-  text-decoration: underline;
-}
-
-.markdown-body :deep(hr) {
-  border: none;
-  border-top: 1px solid #e5e7eb;
-  margin: 0.75em 0;
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>

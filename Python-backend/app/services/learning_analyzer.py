@@ -320,7 +320,19 @@ async def save_strategies(user_id: int, analysis_result: Dict[str, Any]):
 
 async def run_analysis_for_user(user_id: int):
     """为单个用户运行分析"""
+    import asyncio
     logger.info(f"[学习分析] 开始分析用户 {user_id}")
+
+    # 清空用户之前的待处理策略，防止堆积
+    try:
+        await asyncio.to_thread(
+            java_client._request, "POST", "/api/tracker/internal/clear-user-strategies",
+            params={"userId": user_id}
+        )
+        logger.info(f"[学习分析] 用户 {user_id} 已清空旧策略")
+    except Exception as e:
+        logger.warning(f"[学习分析] 用户 {user_id} 清空旧策略失败: {e}")
+
     result = await analyze_user_behavior(user_id)
     if result and result.get("strategies"):
         await save_strategies(user_id, result)
