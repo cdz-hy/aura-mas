@@ -117,4 +117,14 @@ object NetworkModule {
     fun providePythonApiService(@Named("python") retrofit: Retrofit): PythonApiService {
         return retrofit.create(PythonApiService::class.java)
     }
+
+    @Provides
+    @Singleton
+    fun provideLearningTracker(
+        application: android.app.Application,
+        apiService: ApiService,
+        authStore: com.aura.mas.data.repository.AuthStore
+    ): com.aura.mas.service.LearningTracker {
+        return com.aura.mas.service.LearningTracker(application, apiService, authStore)
+    }
 }

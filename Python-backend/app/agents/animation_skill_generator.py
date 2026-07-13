@@ -19,9 +19,11 @@ from app.agents.llm_factory import get_animation_skill_generator_llm
 from app.skills.loader import load_skill
 from app.utils.token_recorder import record_from_mimo
 from app.utils import stream_registry
-from app.services.animation_narration import build_narration
+from app.services.animation_narration import build_narration, build_pending_narration
 from app.agents.resource_type_generator import synthesize_speech
 import json
+import asyncio
+from app.services.db.java_client import java_client
 
 logger = logging.getLogger("agents.animation_skill_generator")
 
@@ -867,11 +869,12 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
     quality_check = skill.references.get("quality-check", "")
 
     # ── 阶段 2：构思动画结构 ──
+    _emit_thinking("正在构思动画结构...")
     stream_events.append({
         "event_type": "thinking",
         "agent": "animation_skill_generator",
-        "data": {"message": "正在构思动画结构..."},
-        "step_description": "构思动画结构",
+        "data": {"message": "正在进行教学内容重构与分镜设计..."},
+        "step_description": "构思动画分镜",
     })
 
     # ── 源内容智能处理：过长则摘要 ──
@@ -904,11 +907,12 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
     js_retry_count = 0
 
     # ── 阶段 3：LLM 直出完整 HTML（支持 JS 语法验证 + 重试） ──
+    _emit_thinking("正在生成动画 HTML...")
     stream_events.append({
         "event_type": "thinking",
         "agent": "animation_skill_generator",
-        "data": {"message": "正在生成动画 HTML..."},
-        "step_description": "生成动画 HTML",
+        "data": {"message": "正在生成底层渲染代码及 GSAP 动画序列..."},
+        "step_description": "生成动画代码",
     })
 
     while True:
@@ -946,6 +950,7 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
                 break
 
             logger.info(f"  [动画生成] 成功提取 HTML，长度: {len(html_output)} 字符")
+            _emit_thinking("正在进行代码结构与逻辑验证...")
 
             # ── HTML 验证（JS 语法 + GSAP API 正确性 + 动画结构契约） ──
             is_valid, validation_error = _validate_js_syntax(html_output)
@@ -1013,9 +1018,12 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
             break
 
     # 构造输出（向后兼容结构）
+    _emit_thinking("正在构建初步旁白与字幕...")
     title = f"{source_title} - 动画演示"
     description = "基于源资源自动生成的科普动画。"
-    narration = build_narration(html_output, synthesize_speech)
+    
+    # 阶段1：构建 pending 状态的旁白数据，让前端能立刻看无声版
+    pending_narration = build_pending_narration(html_output)
 
     generated = {
         "module_type": "animation",
@@ -1025,7 +1033,7 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
         "content": html_output,  # 兼容
         "animationSpec": None,   # 不再有 animationSpec
         "duration": 60,
-        "narration": narration,
+        "narration": pending_narration,
         "videoExports": {},
         "metadata": {
             "renderer": "jacky-motion",
@@ -1054,6 +1062,35 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
         "data": generated,
         "step_description": f"已生成动画资源",
     })
+
+    # 阶段2：启动后台异步任务，进行真实 TTS 语音合成并静默更新资源
+    resource_id = None
+    if "placeholder_resource_map" in state and state["placeholder_resource_map"]:
+        resource_id = list(state["placeholder_resource_map"].values())[0].get("id")
+    
+    def _tts_background_task(r_id, h_out):
+        try:
+            logger.info(f"  [动画后台合成] 开始为资源 {r_id} 合成真实语音...")
+            real_narration = build_narration(h_out, synthesize_speech)
+            if r_id:
+                # 获取目前数据库里的最新资源（防覆盖）
+                current = java_client.get_resource_by_id(r_id)
+                if current and current.get("moduleData"):
+                    mod_data = current["moduleData"]
+                    if isinstance(mod_data, str):
+                        try:
+                            mod_data = json.loads(mod_data)
+                        except:
+                            mod_data = {}
+                    mod_data["narration"] = real_narration
+                    java_client.update_resource_content(r_id, json.dumps(mod_data, ensure_ascii=False))
+                    logger.info(f"  [动画后台合成] 资源 {r_id} 真实语音合成并更新完成！")
+        except Exception as e:
+            logger.error(f"  [动画后台合成] 失败: {e}")
+
+    import threading
+    if resource_id:
+        threading.Thread(target=_tts_background_task, args=(resource_id, html_output), daemon=True).start()
 
     return {
         "generated_content": generated,

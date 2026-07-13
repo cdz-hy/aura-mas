@@ -9,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.navigation.compose.NavHost
@@ -21,6 +22,9 @@ import com.aura.mas.ui.plan.PlanListScreen
 import com.aura.mas.ui.note.NoteListScreen
 import com.aura.mas.ui.analytics.AnalyticsScreen
 import com.aura.mas.ui.profile.ProfileScreen
+import com.aura.mas.ui.common.StrategyNotification
+import com.aura.mas.ui.common.StrategyViewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 
 data class BottomNavItem(
     val route: String,
@@ -42,8 +46,31 @@ fun MainLayout(navController: NavController) {
     val innerNavController = rememberNavController()
     val navBackStackEntry by innerNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
+    val strategyViewModel: StrategyViewModel = hiltViewModel()
+
+    val pendingCount by strategyViewModel.pendingCount.collectAsState()
+    val strategies by strategyViewModel.strategies.collectAsState()
+    val strategyLoading by strategyViewModel.loading.collectAsState()
 
     Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("AURA 智学", fontWeight = FontWeight.SemiBold) },
+                actions = {
+                    StrategyNotification(
+                        pendingCount = pendingCount,
+                        strategies = strategies,
+                        loading = strategyLoading,
+                        onLoadStrategies = { strategyViewModel.loadStrategies() },
+                        onAccept = { strategyViewModel.acceptStrategy(it) },
+                        onReject = { strategyViewModel.rejectStrategy(it) }
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        },
         bottomBar = {
             NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surface,
@@ -113,7 +140,6 @@ fun MainLayout(navController: NavController) {
                     onLearningProfileClick = { navController.navigate(NavRoutes.LEARNING_PROFILE) },
                     onSettingsClick = { navController.navigate(NavRoutes.SETTINGS) },
                     onAnalyticsClick = { navController.navigate(NavRoutes.ANALYTICS) },
-                    onAdminClick = { navController.navigate(NavRoutes.ADMIN_DASHBOARD) },
                     onKnowledgeGraphClick = { userId -> navController.navigate(NavRoutes.knowledgeGraph(userId)) }
                 )
             }

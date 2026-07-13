@@ -97,12 +97,27 @@ const reportContent = ref('')
 const aiData = computed(() => props.data.aiInteraction)
 
 const intentLabelMap: Record<string, string> = {
-  simple_qa: '简单问答',
+  // 资源生成类
   generate_resource: '资源生成',
+  resource_generated: '资源已生成',
   generate_quiz: '题目生成',
+  generate_animation: '动画生成',
+  generate_type_resource: '类型资源生成',
   grade_quiz: '题目批改',
-  profile_maintenance: '画像维护',
+  task_breakdown: '任务分解',
+  // 对话类
+  simple_qa: '简单问答',
+  chat: '普通对话',
+  plan_chat: '计划对话',
   follow_up: '追问',
+  ambiguous: '意图模糊',
+  clarify: '需求澄清',
+  // 系统类
+  plan_advisor: '学习顾问',
+  profile: '画像构建',
+  profile_maintenance: '画像维护',
+  stopped: '已停止',
+  cancel: '取消操作',
 }
 
 const intentColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899']

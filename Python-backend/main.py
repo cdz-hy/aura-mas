@@ -63,8 +63,10 @@ async def lifespan(app: FastAPI):
         if missing:
             logger.warning("动画视频导出依赖未就绪，后台导出 worker 未启动: %s", ", ".join(missing))
         else:
-            start_background_worker()
-            logger.info("动画视频导出 worker 已启动")
+            if start_background_worker():
+                logger.info("动画视频导出 worker 已启动（RabbitMQ 模式）")
+            else:
+                logger.warning("RabbitMQ 未就绪，动画导出将使用本地渲染回退")
     except Exception:
         logger.exception("动画视频导出 worker 启动失败，其余服务继续运行")
 

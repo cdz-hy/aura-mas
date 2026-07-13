@@ -92,6 +92,39 @@ public class DatabaseMigrationRunner implements ApplicationRunner {
         if (!columnExists("note", "is_pinned")) {
             jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `is_pinned` TINYINT DEFAULT 0 COMMENT '是否置顶' AFTER `tags`");
         }
+        // Capture workbench metadata (nullable for legacy notes)
+        if (!columnExists("note", "note_type")) {
+            log.info("Adding note.note_type for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `note_type` VARCHAR(32) DEFAULT NULL COMMENT '摘录/速记/提问: excerpt|quick|question' AFTER `is_pinned`");
+        }
+        if (!columnExists("note", "organize_status")) {
+            log.info("Adding note.organize_status for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `organize_status` VARCHAR(32) DEFAULT NULL COMMENT '整理状态: pending|organizing|organized|error' AFTER `note_type`");
+        }
+        if (!columnExists("note", "source_type")) {
+            log.info("Adding note.source_type for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `source_type` VARCHAR(64) DEFAULT NULL COMMENT '来源类型: resource|plan|knowledge_tree|tutor' AFTER `organize_status`");
+        }
+        if (!columnExists("note", "source_id")) {
+            log.info("Adding note.source_id for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `source_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '来源实体ID' AFTER `source_type`");
+        }
+        if (!columnExists("note", "source_title")) {
+            log.info("Adding note.source_title for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `source_title` VARCHAR(255) DEFAULT NULL COMMENT '来源标题' AFTER `source_id`");
+        }
+        if (!columnExists("note", "source_route")) {
+            log.info("Adding note.source_route for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `source_route` VARCHAR(512) DEFAULT NULL COMMENT '来源前端路由' AFTER `source_title`");
+        }
+        if (!columnExists("note", "excerpt")) {
+            log.info("Adding note.excerpt for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `excerpt` TEXT DEFAULT NULL COMMENT '摘录原文（可为空）' AFTER `source_route`");
+        }
+        if (!indexExists("note", "idx_organize_status")) {
+            log.info("Adding note.idx_organize_status for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD INDEX `idx_organize_status` (`organize_status`)");
+        }
         if (!columnExists("note", "is_deleted")) {
             jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `is_deleted` TINYINT DEFAULT 0 AFTER `updated_at`");
         }

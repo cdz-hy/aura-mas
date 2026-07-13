@@ -25,10 +25,12 @@ export function deletePlan(planId: number) {
 // 生成计划SVG图标（Python后端，会直接更新Java后端）
 export async function generatePlanIcon(planId: number, planTitle: string, resourceTitles: string[]): Promise<{ svg: string | null; description?: string }> {
   try {
+    const { useAuthStore } = await import('@/stores/auth')
+    const user_id = useAuthStore().user?.id || 0
     const res = await fetch(`${PYTHON_AI_BASE}/api/analytics/plan-icon`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan_id: planId, plan_title: planTitle, resource_titles: resourceTitles })
+      body: JSON.stringify({ plan_id: planId, plan_title: planTitle, resource_titles: resourceTitles, user_id })
     })
     const data = await res.json()
     return { svg: data.svg || null, description: data.description }

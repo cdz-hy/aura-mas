@@ -1,8 +1,11 @@
+import logging
 import dashscope
 from http import HTTPStatus
 from typing import List, Dict, Any, Generator
 from app.core.config import settings
 from app.prompts import QWEN_CHAT_SYSTEM_PROMPT
+
+logger = logging.getLogger("services.llm")
 
 class QwenChatService:
     def __init__(self):
@@ -67,6 +70,7 @@ class QwenChatService:
                     }
                 yield response.output.choices[0].message.content
             else:
+                logger.error("Dashscope API 错误: status=%s message=%s model=%s", response.status_code, response.message, self.model)
                 yield f"AI 生成失败: {response.message}"
 
         if last_usage:

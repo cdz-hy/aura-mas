@@ -262,6 +262,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value.push(_placeholder)
 
     // 持续轮询更新
+    _stopRecover()
     _recoverTimer.value = setInterval(async () => {
       try {
         const { state: s, pendingConfirmation: pc } = await getStreamState(sessionId)
@@ -849,6 +850,8 @@ export const useChatStore = defineStore('chat', () => {
     if (breakdown && !isKbCheck) {
       extra.task_breakdown = JSON.stringify(breakdown)
     }
+    // 停止恢复轮询
+    _stopRecover()
     await sendMessage(message, planId, extra)
   }
 
@@ -900,6 +903,7 @@ export const useChatStore = defineStore('chat', () => {
     const typeLabels: Record<string, string> = {
       text: '图文', document: '文档', quiz: '测验', mindmap: '思维导图', code: '代码示例', summary: '总结', video: '教学视频', animation: '动画', podcast: '播客', pptx: 'PPT',
     }
+    if (streaming.value) return
     const typeLabel = typeLabels[resourceType] || resourceType
     const capturedSessionId = activeSessionId.value
     persistSessionState()

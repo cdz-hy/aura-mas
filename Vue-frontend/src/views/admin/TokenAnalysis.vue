@@ -417,25 +417,93 @@ function formatTime(t: string | null | undefined): string {
 }
 
 const sceneMap: Record<string, string> = {
-  resource_generation: '资源生成', simple_qa: '简单问答', intent_recognition: '意图识别',
-  content_orchestration: '内容编排', profile_maintenance: '画像维护', task_decomposition: '任务分解',
-  content_review: '内容审核', resource_type_generation: '资源类型生成',
-  quiz_generation: '题目生成', quiz_grading: '题目批改', anomaly_clarify: '异常澄清',
+  // 核心流程
+  controller_react: '控制调度', task_decomposition_react: '任务分解', task_decomposition: '任务分解',
+  simple_qa: '简单问答', anomaly_clarify: '异常澄清', anomaly_check: '异常检测',
+  content_orchestration: '内容编排', content_review: '内容审核',
+  // 资源生成
+  resource_generation: '资源生成', resource_react_search: '资源检索', resource_type_generation: '资源类型生成',
+  quiz_generation: '题目生成', quiz_grading: '题目批改', quiz_grading_inline: '题目批改',
+  animation_generation: '动画生成', animation_summarization: '动画摘要', flashcard_generation: '闪卡生成',
+  // PPT 生成
+  pptx_manuscript: 'PPT文稿', pptx_outline: 'PPT大纲', pptx_content: 'PPT内容',
+  pptx_image_query: 'PPT配图', pptx_image_validate: 'PPT图片校验',
+  // 对话与辅导
+  tutor_react: '智能辅导', tutor_response: '辅导回复', tutor_profile_analysis: '辅导画像分析',
+  conversation_compression: '对话压缩', note_formatting: '笔记格式化',
+  // 搜索与检索
+  video_search_react: '视频检索', video_search_screening: '视频筛选',
+  rag_query_optimization: 'RAG查询优化',
+  // 画像与分析
+  profile_maintenance: '画像维护', intent_recognition: '意图识别',
+  analytics_suggestions: '分析建议', analytics_report: '分析报告',
+  greeting: '智能问候', plan_icon_generation: '计划图标生成',
+  // 学习分析与顾问
+  learning_analysis: '学习分析', plan_advisor: '学习顾问',
+  // 知识树
+  knowledge_tree_explain: '知识树讲解', knowledge_tree_subdivide: '知识树拆分',
+  knowledge_tree_multi_angle: '知识树多角度', knowledge_tree_first_principles: '知识树第一性原理',
+  knowledge_tree_quiz: '知识树测验', knowledge_tree_flashcards: '知识树闪卡',
+  knowledge_tree_bootstrap: '知识树初始化', preview_topics: '主题预览', grow_children: '子节点扩展',
+  // 其他
+  qwen_chat: '通义千问对话',
 }
 
 function sceneLabelFn(scene: string): string { return sceneMap[scene] || scene }
 
 function sceneBadgeClass(scene: string): string {
   const map: Record<string, string> = {
-    resource_generation: 'bg-blue-50 text-blue-700 border border-blue-200',
+    // 蓝色系：核心流程
+    controller_react: 'bg-blue-50 text-blue-700 border border-blue-200',
+    task_decomposition: 'bg-blue-50 text-blue-700 border border-blue-200',
+    task_decomposition_react: 'bg-blue-50 text-blue-700 border border-blue-200',
+    content_orchestration: 'bg-blue-50 text-blue-700 border border-blue-200',
+    content_review: 'bg-blue-50 text-blue-700 border border-blue-200',
+    // 绿色系：问答与辅导
     simple_qa: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
-    intent_recognition: 'bg-purple-50 text-purple-700 border border-purple-200',
-    content_orchestration: 'bg-amber-50 text-amber-700 border border-amber-200',
+    tutor_react: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+    tutor_response: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+    tutor_profile_analysis: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+    plan_advisor: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+    // 紫色系：资源生成
+    resource_generation: 'bg-purple-50 text-purple-700 border border-purple-200',
+    resource_react_search: 'bg-purple-50 text-purple-700 border border-purple-200',
+    resource_type_generation: 'bg-purple-50 text-purple-700 border border-purple-200',
+    animation_generation: 'bg-purple-50 text-purple-700 border border-purple-200',
+    // 琥珀色系：题目
+    quiz_generation: 'bg-amber-50 text-amber-700 border border-amber-200',
+    quiz_grading: 'bg-amber-50 text-amber-700 border border-amber-200',
+    quiz_grading_inline: 'bg-amber-50 text-amber-700 border border-amber-200',
+    // 青色系：知识树
+    knowledge_tree_explain: 'bg-cyan-50 text-cyan-700 border border-cyan-200',
+    knowledge_tree_subdivide: 'bg-cyan-50 text-cyan-700 border border-cyan-200',
+    knowledge_tree_multi_angle: 'bg-cyan-50 text-cyan-700 border border-cyan-200',
+    knowledge_tree_first_principles: 'bg-cyan-50 text-cyan-700 border border-cyan-200',
+    knowledge_tree_quiz: 'bg-cyan-50 text-cyan-700 border border-cyan-200',
+    knowledge_tree_flashcards: 'bg-cyan-50 text-cyan-700 border border-cyan-200',
+    knowledge_tree_bootstrap: 'bg-cyan-50 text-cyan-700 border border-cyan-200',
+    // 玫瑰色系：画像与分析
     profile_maintenance: 'bg-rose-50 text-rose-700 border border-rose-200',
-    task_decomposition: 'bg-cyan-50 text-cyan-700 border border-cyan-200',
-    content_review: 'bg-orange-50 text-orange-700 border border-orange-200',
-    quiz_generation: 'bg-teal-50 text-teal-700 border border-teal-200',
-    quiz_grading: 'bg-pink-50 text-pink-700 border border-pink-200',
+    learning_analysis: 'bg-rose-50 text-rose-700 border border-rose-200',
+    analytics_suggestions: 'bg-rose-50 text-rose-700 border border-rose-200',
+    analytics_report: 'bg-rose-50 text-rose-700 border border-rose-200',
+    // 橙色系：PPT
+    pptx_manuscript: 'bg-orange-50 text-orange-700 border border-orange-200',
+    pptx_outline: 'bg-orange-50 text-orange-700 border border-orange-200',
+    pptx_content: 'bg-orange-50 text-orange-700 border border-orange-200',
+    pptx_image_query: 'bg-orange-50 text-orange-700 border border-orange-200',
+    pptx_image_validate: 'bg-orange-50 text-orange-700 border border-orange-200',
+    // 青绿色系：检索
+    video_search_react: 'bg-teal-50 text-teal-700 border border-teal-200',
+    video_search_screening: 'bg-teal-50 text-teal-700 border border-teal-200',
+    rag_query_optimization: 'bg-teal-50 text-teal-700 border border-teal-200',
+    // 粉色系：其他
+    flashcard_generation: 'bg-pink-50 text-pink-700 border border-pink-200',
+    conversation_compression: 'bg-pink-50 text-pink-700 border border-pink-200',
+    note_formatting: 'bg-pink-50 text-pink-700 border border-pink-200',
+    greeting: 'bg-pink-50 text-pink-700 border border-pink-200',
+    anomaly_clarify: 'bg-pink-50 text-pink-700 border border-pink-200',
+    anomaly_check: 'bg-pink-50 text-pink-700 border border-pink-200',
   }
   return map[scene] || 'bg-navy-50 text-navy-700 border border-navy-200'
 }

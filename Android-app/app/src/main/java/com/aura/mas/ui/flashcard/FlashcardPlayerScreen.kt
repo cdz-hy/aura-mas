@@ -41,7 +41,8 @@ data class FlashcardUiState(
 @HiltViewModel
 class FlashcardViewModel @Inject constructor(
     private val flashcardRepo: FlashcardRepository,
-    private val offlineCache: com.aura.mas.data.offline.OfflineCacheManager
+    private val offlineCache: com.aura.mas.data.offline.OfflineCacheManager,
+    private val tracker: com.aura.mas.service.LearningTracker
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(FlashcardUiState())
     val uiState: StateFlow<FlashcardUiState> = _uiState.asStateFlow()
@@ -106,6 +107,8 @@ class FlashcardViewModel @Inject constructor(
             val state = _uiState.value
             val card = state.cards.getOrNull(state.currentIndex) ?: return@launch
             flashcardRepo.submitReview(card.id, quality)
+            // Track flashcard review
+            tracker.trackFlashcardReview(card.id.toLong(), quality, quality >= 3)
             val nextIndex = state.currentIndex + 1
             _uiState.value = state.copy(
                 currentIndex = nextIndex,

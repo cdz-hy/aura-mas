@@ -345,4 +345,26 @@ interface ApiService {
     // ── Task Extensions ───────────────────────────────────────
     @GET("/api/task/by-resource/{resourceId}")
     suspend fun getTaskByResource(@Path("resourceId") resourceId: Long): ApiResponse<ResourceGenerationTask>
+
+    // ── Learning Tracker ──────────────────────────────────────
+    @POST("/api/tracker/events")
+    suspend fun trackEvents(@Body events: List<Map<String, Any>>): ApiResponse<Unit>
+
+    @GET("/api/tracker/strategies/count")
+    suspend fun getPendingStrategyCount(): ApiResponse<Int>
+
+    @GET("/api/tracker/strategies/pending")
+    suspend fun getPendingStrategies(): ApiResponse<List<LearningStrategy>>
+
+    @GET("/api/tracker/strategies")
+    suspend fun getUserStrategies(
+        @Query("status") status: String? = null,
+        @Query("limit") limit: Int = 20
+    ): ApiResponse<List<LearningStrategy>>
+
+    @POST("/api/tracker/strategies/{strategyId}/accept")
+    suspend fun acceptStrategy(@Path("strategyId") strategyId: Long): ApiResponse<Boolean>
+
+    @POST("/api/tracker/strategies/{strategyId}/reject")
+    suspend fun rejectStrategy(@Path("strategyId") strategyId: Long): ApiResponse<Boolean>
 }

@@ -1,8 +1,12 @@
+import logging
 import threading
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from app.core.config import settings
 from typing import List, Dict, Any
+
+logger = logging.getLogger("services.vector_db")
+
 
 class QdrantService:
     def __init__(self):
@@ -23,6 +27,7 @@ class QdrantService:
         exists = any(c.name == self.collection_name for c in collections)
         
         if not exists:
+            logger.info(f"集合 '{self.collection_name}' 不存在，正在创建...")
             # 配置混合检索：Dense (Qwen) + Sparse (BM25)
             self.client.create_collection(
                 collection_name=self.collection_name,
@@ -35,6 +40,7 @@ class QdrantService:
                     )
                 }
             )
+            logger.info(f"集合 '{self.collection_name}' 创建成功")
 
     def upsert_points(self, points: List[Dict[str, Any]]):
         """
@@ -44,14 +50,13 @@ class QdrantService:
         total_points = len(points)
         total_batches = (total_points + batch_size - 1) // batch_size
         
-        print(f"开始同步数据至向量库: 总计 {total_points} 个点, 分为 {total_batches} 批次")
-        
+        logger.info(f"开始同步数据至向量库: 总计 {total_points} 个点, 分为 {total_batches} 批次")
+
         for i in range(0, total_points, batch_size):
             batch = points[i : i + batch_size]
             current_batch_num = (i // batch_size) + 1
-            
-            print(f"  >> 正在推送第 {current_batch_num}/{total_batches} 批次 ({len(batch)} 点)...", end="", flush=True)
-            
+
+            logger.info(f"正在推送第 {current_batch_num}/{total_batches} 批次 ({len(batch)} 点)...")
             try:
                 self.client.upsert(
                     collection_name=self.collection_name,
@@ -63,9 +68,9 @@ class QdrantService:
                         ) for p in batch
                     ]
                 )
-                print(" [成功]")
+                logger.info(f"第 {current_batch_num}/{total_batches} 批次推送成功")
             except Exception as e:
-                print(f" [失败: {e}]")
+                logger.error(f"第 {current_batch_num}/{total_batches} 批次推送失败: {e}", exc_info=True)
                 raise e
 
     def get_collection_stats(self) -> dict:
@@ -102,6 +107,7 @@ class QdrantService:
 
     def delete_document_chunks(self, doc_id: int):
         """删除指定doc_id的所有切片点"""
+        logger.info(f"正在删除文档 doc_id={doc_id} 的所有切片点")
         self.client.delete(
             collection_name=self.collection_name,
             points_selector=models.FilterSelector(
@@ -110,3 +116,4 @@ class QdrantService:
                 )
             )
         )
+        logger.info(f"文档 doc_id={doc_id} 的切片点删除成功")

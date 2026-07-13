@@ -1412,7 +1412,7 @@ def _generate_image_queries(outline_slides: List[Dict], llm) -> Dict[int, str]:
         return {}
 
 
-def _validate_image_relevance(image_data: io.BytesIO, page_summary: str) -> bool:
+def _validate_image_relevance(image_data: io.BytesIO, page_summary: str, user_id: int = 0) -> bool:
     """用 mimo-v2.5 分析图片是否与 PPT 页面内容相关，相关返回 True"""
     import base64
     try:
@@ -1439,7 +1439,7 @@ def _validate_image_relevance(image_data: io.BytesIO, page_summary: str) -> bool
             ]
         }]
         result = llm.chat(messages).strip().lower()
-        record_from_mimo(llm, 0, "pptx_image_validate")
+        record_from_mimo(llm, user_id, "pptx_image_validate")
         relevant = result.startswith("y")
         if not relevant:
             logger.info(f"[PPT] 图片相关性检查: 不相关 (LLM: {result[:20]})")

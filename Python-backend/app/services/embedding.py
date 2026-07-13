@@ -1,8 +1,11 @@
 import os
 import base64
+import logging
 import requests
 from typing import List, Optional, Dict, Any
 from app.core.config import settings
+
+logger = logging.getLogger("services.embedding")
 
 # 配置 fastembed 模型缓存目录（避免每次启动都下载）
 # 优先使用环境变量，否则默认为项目目录下的 .model_cache
@@ -45,6 +48,7 @@ class BailianEmbeddingService:
             contents.append({"image": f"data:image/jpeg;base64,{self._encode_image(image_path)}"})
         
         if not contents:
+            logger.error("向量化内容为空, 文本和图片至少需要提供一个")
             raise Exception("向量化内容为空, 文本和图片至少需要提供一个")
 
         payload = {
@@ -65,8 +69,10 @@ class BailianEmbeddingService:
             elif "output" in result and "embeddings" in result["output"]:
                 return result["output"]["embeddings"][0]["embedding"]
             else:
+                logger.error(f"未知的 API 返回格式: {result}")
                 raise Exception(f"未知的 API 返回格式: {result}")
         else:
+            logger.error(f"Embedding API 调用失败 ({resp.status_code}): {resp.text}")
             raise Exception(f"Embedding API 调用失败 ({resp.status_code}): {resp.text}")
 
 from fastembed import SparseTextEmbedding

@@ -7,10 +7,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from qiniu import Auth, BucketManager, put_data
+import qiniu.config as qiniu_config
 
 from app.core.config import settings
 
 logger = logging.getLogger("services.qiniu")
+
+# 大文件上传需要更长超时（默认30s不够）
+qiniu_config.set_default(connection_timeout=120)
 
 
 class QiniuClient:

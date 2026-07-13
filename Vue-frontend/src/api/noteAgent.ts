@@ -13,19 +13,36 @@ export interface NoteAnnotation {
   text: string
 }
 
+/** Optional capture context forwarded to the note formatter. */
+export interface NoteFormatContext {
+  excerpt?: string
+  sourceTitle?: string
+  noteType?: string
+}
+
 /** SSE 流式整理笔记（POST 请求，避免 URL 长度限制） */
 export function formatNoteSSE(
   ticket: string,
   content: string,
   handlers: NoteFormatHandlers,
   instruction?: string,
+  context?: NoteFormatContext,
 ): { abort: () => void } {
   const controller = new AbortController()
+
+  const body: Record<string, unknown> = {
+    ticket,
+    content,
+    instruction: instruction || '',
+  }
+  if (context?.excerpt) body.excerpt = context.excerpt
+  if (context?.sourceTitle) body.sourceTitle = context.sourceTitle
+  if (context?.noteType) body.noteType = context.noteType
 
   fetch(`${PYTHON_AI_BASE}/api/ai/note/format`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ticket, content, instruction: instruction || '' }),
+    body: JSON.stringify(body),
     signal: controller.signal,
   })
     .then(async (response) => {

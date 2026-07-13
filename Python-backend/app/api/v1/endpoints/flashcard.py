@@ -131,8 +131,8 @@ async def generate_flashcards(
                 try:
                     java_client._request("DELETE", f"/api/flashcard/internal/by-note/{note_id}",
                                          params={"userId": user_id})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("删除旧闪卡失败(继续生成): note=%s error=%s", note_id, e)
 
             try:
                 java_client._request("POST", "/api/flashcard/internal/save", json={

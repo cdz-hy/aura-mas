@@ -4,6 +4,7 @@ import uuid
 import hashlib
 import asyncio
 import json
+import logging
 import threading
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +13,8 @@ from app.services.embedding import BailianEmbeddingService, SparseEmbeddingServi
 from app.services.vector_db import QdrantService
 from app.utils.md_parser import parse_markdown
 from app.services.ai_analyzer import MultiModalAnalyzer
+
+logger = logging.getLogger("services.processor")
 
 # 入库专属线程池，最大限制 10，防止并发请求过大导致百炼/七牛 API 触发 Rate Limit 报错
 _executor = ThreadPoolExecutor(max_workers=10)
@@ -63,13 +66,13 @@ class DocumentProcessor:
         """
         loop = asyncio.get_running_loop()
         chunks, parent_chunks = parse_markdown(md_content, doc_id, doc_title)
-        print(f"解析完成: 提取出 {len(parent_chunks)} 个大切块, {len(chunks)} 个原始切片数据点。")
+        logger.info(f"解析完成: 提取出 {len(parent_chunks)} 个大切块, {len(chunks)} 个原始切片数据点。")
         
         # 保存大切块到本地 JSON
         parent_json_path = os.path.join(self.parents_dir, f"{doc_id}.json")
         with open(parent_json_path, "w", encoding="utf-8") as f:
             json.dump(parent_chunks, f, ensure_ascii=False, indent=2)
-        print(f"大切块内容已持久化至: {parent_json_path}")
+        logger.info(f"大切块内容已持久化至: {parent_json_path}")
 
         processed_points = []
         total = len(chunks)
@@ -84,17 +87,17 @@ class DocumentProcessor:
                 if chunk["type"] == "text":
                     # 跳过空内容的切块
                     if not chunk["content"] or not chunk["content"].strip():
-                        print(f"  [{idx}/{total}] 跳过空内容切块。")
+                        logger.info(f"  [{idx}/{total}] 跳过空内容切块。")
                         skipped += 1
                         continue
                     # 处理文本块
                     preview = chunk["content"][:30].replace("\n", " ")
-                    print(f"  [{idx}/{total}] 文本块 | 章节: {' > '.join(chunk['heading'])} | 内容: {preview}...")
+                    logger.info(f"  [{idx}/{total}] 文本块 | 章节: {' > '.join(chunk['heading'])} | 内容: {preview}...")
                     dense_task = loop.run_in_executor(_executor, self.embedding_service.embed_query, chunk["content"])
                     sparse_task = loop.run_in_executor(_executor, self.sparse_embedding_service.embed_text, chunk["content"])
                     dense_vector, sparse_vector = await asyncio.gather(dense_task, sparse_task)
                     payload = chunk.copy()
-                    print(f"  [{idx}/{total}] 文本块向量化完成。")
+                    logger.info(f"  [{idx}/{total}] 文本块向量化完成。")
                 else:
                     # 处理图片块
                     local_img_path = os.path.join(image_folder, chunk["image_path"])
@@ -103,7 +106,7 @@ class DocumentProcessor:
                         local_img_path = os.path.join(image_folder, img_name)
 
                     if os.path.exists(local_img_path):
-                        print(f"  [{idx}/{total}] 图片块 | 文件: {os.path.basename(local_img_path)}")
+                        logger.info(f"  [{idx}/{total}] 图片块 | 文件: {os.path.basename(local_img_path)}")
                         
                         # 0. AI 智能分析图片 (先查缓存)
                         img_hash = self._get_file_hash(local_img_path)
@@ -111,13 +114,13 @@ class DocumentProcessor:
                             ai_caption = self.image_cache.get(img_hash)
                         
                         if ai_caption:
-                            print(f"  [{idx}/{total}] 命中图片分析缓存: {ai_caption[:40]}...")
+                            logger.info(f"  [{idx}/{total}] 命中图片分析缓存: {ai_caption[:40]}...")
                         else:
                             parent_context = parent_chunks.get(chunk["parent_id"], "")
-                            print(f"  [{idx}/{total}] 正在调用 AI 分析图片内容...")
+                            logger.info(f"  [{idx}/{total}] 正在调用 AI 分析图片内容...")
                             ai_caption = await loop.run_in_executor(_executor, self.ai_analyzer.analyze_image, local_img_path, parent_context)
                             if ai_caption:
-                                print(f"  [{idx}/{total}] AI 分析完成: {ai_caption[:40]}...")
+                                logger.info(f"  [{idx}/{total}] AI 分析完成: {ai_caption[:40]}...")
                                 # 更新并保存缓存（移到线程池，避免阻塞事件循环）
                                 with self.cache_lock:
                                     self.image_cache[img_hash] = ai_caption
@@ -127,12 +130,12 @@ class DocumentProcessor:
                             chunk["image_caption"] = ai_caption
                             parent_chunks[chunk["parent_id"]] = f"AI 图片描述：{ai_caption}"
                         else:
-                            print(f"  [{idx}/{total}] AI 分析返回空，跳过图片。")
+                            logger.warning(f"  [{idx}/{total}] AI 分析返回空，跳过图片。")
                             skipped += 1
                             continue
 
                         # 1. 上传至七牛云
-                        print(f"  [{idx}/{total}] 正在上传图片至七牛云...")
+                        logger.info(f"  [{idx}/{total}] 正在上传图片至七牛云...")
                         file_ext = os.path.splitext(local_img_path)[1]
                         remote_name = f"docs/{doc_id}/{uuid.uuid4()}{file_ext}"
                         try:
@@ -140,23 +143,23 @@ class DocumentProcessor:
                                 loop.run_in_executor(_executor, self.oss_service.upload_file, local_img_path, remote_name),
                                 timeout=30
                             )
-                            print(f"  [{idx}/{total}] 七牛云上传成功: {qiniu_url}")
+                            logger.info(f"  [{idx}/{total}] 七牛云上传成功: {qiniu_url}")
                         except Exception as e:
-                            print(f"  [{idx}/{total}] 七牛云上传失败: {e}, 跳过图片。")
+                            logger.error(f"  [{idx}/{total}] 七牛云上传失败: {e}, 跳过图片。")
                             skipped += 1
                             continue
 
                         # 2. 向量化
-                        print(f"  [{idx}/{total}] 正在向量化图片...")
+                        logger.info(f"  [{idx}/{total}] 正在向量化图片...")
                         dense_task = loop.run_in_executor(_executor, self.embedding_service.embed_image, local_img_path, chunk["image_caption"])
                         sparse_task = loop.run_in_executor(_executor, self.sparse_embedding_service.embed_text, chunk["image_caption"])
                         dense_vector, sparse_vector = await asyncio.gather(dense_task, sparse_task)
 
                         payload = chunk.copy()
                         payload["image_path"] = qiniu_url
-                        print(f"  [{idx}/{total}] 图片块向量化完成。")
+                        logger.info(f"  [{idx}/{total}] 图片块向量化完成。")
                     else:
-                        print(f"  [{idx}/{total}] 警告: 找不到图片 {local_img_path}, 跳过。")
+                        logger.warning(f"  [{idx}/{total}] 找不到图片 {local_img_path}, 跳过。")
                         skipped += 1
                         continue
 
@@ -166,7 +169,7 @@ class DocumentProcessor:
                     if sparse_vector and sparse_vector.get("indices") and len(sparse_vector["indices"]) > 0:
                         vector_dict["text-sparse"] = sparse_vector
                     else:
-                        print(f"  [{idx}/{total}] [拦截] 发现空稀疏向量，已丢弃 text-sparse 通道")
+                        logger.warning(f"  [{idx}/{total}] [拦截] 发现空稀疏向量，已丢弃 text-sparse 通道")
                     processed_points.append({
                         "id": chunk["id"],
                         "vector": vector_dict,
@@ -175,25 +178,25 @@ class DocumentProcessor:
 
                 # 流式同步
                 if len(processed_points) >= 20:
-                    print(f"\n  [流式同步] 已积累 {len(processed_points)} 个点, 正在执行同步...")
+                    logger.info(f"[流式同步] 已积累 {len(processed_points)} 个点, 正在执行同步...")
                     await loop.run_in_executor(_executor, self.vector_db.upsert_points, processed_points)
                     success_count += len(processed_points)
                     processed_points = []
-                    print(f"  [流式同步] 累计入库数: {success_count}\n")
+                    logger.info(f"  [流式同步] 累计入库数: {success_count}")
 
             except Exception as e:
-                print(f"  [{idx}/{total}] 处理数据块时发生错误: {e}")
+                logger.error(f"  [{idx}/{total}] 处理数据块时发生错误: {e}", exc_info=True)
                 skipped += 1
                 continue
 
         # 处理剩余零头
         if processed_points:
-            print(f"\n  [最终同步] 正在处理剩余 {len(processed_points)} 个点...")
+            logger.info(f"[最终同步] 正在处理剩余 {len(processed_points)} 个点...")
             await loop.run_in_executor(_executor, self.vector_db.upsert_points, processed_points)
             success_count += len(processed_points)
-            print(f"  [最终同步] 累计入库数: {success_count}\n")
+            logger.info(f"  [最终同步] 累计入库数: {success_count}")
 
-        print(f"全部任务结束。最终入库总数: {success_count}, 跳过: {skipped}, 总计: {total}。")
+        logger.info(f"全部任务结束。最终入库总数: {success_count}, 跳过: {skipped}, 总计: {total}。")
 
         # 重新写入 Parent JSON
         with open(parent_json_path, "w", encoding="utf-8") as f:

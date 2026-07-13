@@ -22,6 +22,23 @@ public class Note {
 
     private Integer isPinned;
 
+    /** excerpt | quick | question — null for legacy notes */
+    private String noteType;
+
+    /** pending | organizing | organized | error — null for legacy notes */
+    private String organizeStatus;
+
+    /** plan | resource | knowledge_tree | tutor — null when no automatic source */
+    private String sourceType;
+
+    private Long sourceId;
+
+    private String sourceTitle;
+
+    private String sourceRoute;
+
+    private String excerpt;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 

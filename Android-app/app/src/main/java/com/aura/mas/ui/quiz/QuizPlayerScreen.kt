@@ -50,7 +50,8 @@ data class QuizUiState(
 class QuizViewModel @Inject constructor(
     private val api: ApiService,
     private val sseClient: SseClient,
-    private val networkUtil: com.aura.mas.util.NetworkUtil
+    private val networkUtil: com.aura.mas.util.NetworkUtil,
+    private val tracker: com.aura.mas.service.LearningTracker
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(QuizUiState())
     val uiState: StateFlow<QuizUiState> = _uiState.asStateFlow()
@@ -298,6 +299,14 @@ class QuizViewModel @Inject constructor(
                                     results = questionResultsMap.toMap(),
                                     gradingStreamText = "",
                                     gradingProgress = null
+                                )
+                                // Track quiz submission
+                                tracker.trackQuizSubmit(
+                                    resourceId = resourceId,
+                                    score = percentageScore,
+                                    totalQuestions = finalTotal,
+                                    correctAnswers = finalCorrect,
+                                    planId = planId
                                 )
                             }
                             "error" -> {

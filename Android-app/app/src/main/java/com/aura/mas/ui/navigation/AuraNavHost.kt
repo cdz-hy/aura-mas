@@ -27,8 +27,6 @@ import com.aura.mas.ui.profile.SettingsScreen
 import com.aura.mas.ui.profile.LearningProfileScreen
 import com.aura.mas.ui.profile.PersonalInfoEditScreen
 import com.aura.mas.ui.analytics.AnalyticsScreen
-import com.aura.mas.ui.admin.EnhancedAdminUsersScreen
-import com.aura.mas.ui.admin.EnhancedAdminLogsScreen
 import com.aura.mas.ui.chat.StandaloneChatScreen
 import com.aura.mas.ui.common.MainLayout
 import com.aura.mas.ui.common.NotFoundScreen
@@ -194,17 +192,13 @@ fun AuraNavHost() {
             )
         }
         composable(NavRoutes.ADMIN_DASHBOARD) {
-            com.aura.mas.ui.admin.AdminDashboardScreen(
-                onUsersClick = { navController.navigate(NavRoutes.ADMIN_USERS) },
-                onLogsClick = { navController.navigate(NavRoutes.ADMIN_LOGS) },
-                onBack = { navController.popBackStack() }
-            )
+            NotSupportedScreen(title = "管理后台", message = "该版本暂不支持管理员功能，请使用网页端管理", onBack = { navController.popBackStack() })
         }
         composable(NavRoutes.ADMIN_USERS) {
-            EnhancedAdminUsersScreen(onBack = { navController.popBackStack() })
+            NotSupportedScreen(title = "用户管理", message = "该版本暂不支持管理员功能，请使用网页端管理", onBack = { navController.popBackStack() })
         }
         composable(NavRoutes.ADMIN_LOGS) {
-            EnhancedAdminLogsScreen(onBack = { navController.popBackStack() })
+            NotSupportedScreen(title = "系统日志", message = "该版本暂不支持管理员功能，请使用网页端管理", onBack = { navController.popBackStack() })
         }
         composable(NavRoutes.CHAT) {
             StandaloneChatScreen(onBack = { navController.popBackStack() })
@@ -217,6 +211,48 @@ fun AuraNavHost() {
         }
         composable(NavRoutes.NOT_FOUND) {
             NotFoundScreen(onBack = { navController.popBackStack() })
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NotSupportedScreen(title: String, message: String, onBack: () -> Unit) {
+    androidx.compose.material3.Scaffold(
+        topBar = {
+            androidx.compose.material3.TopAppBar(
+                title = { androidx.compose.material3.Text(title) },
+                navigationIcon = {
+                    androidx.compose.material3.IconButton(onClick = onBack) {
+                        androidx.compose.material3.Icon(
+                            imageVector = androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "返回"
+                        )
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        androidx.compose.foundation.layout.Box(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.foundation.layout.Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
+            ) {
+                androidx.compose.material3.Icon(
+                    imageVector = androidx.compose.material.icons.Icons.Default.Block,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                androidx.compose.material3.Text(
+                    message,
+                    style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

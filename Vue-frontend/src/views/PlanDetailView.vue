@@ -230,7 +230,7 @@
       :class="{
         'resource-panel--closed': !selectedResource && !showResourceStreamPreview,
         '!transition-none': isDragging,
-        'fixed inset-0 z-40 m-0 bg-white rounded-none border-none shadow-none': isFullscreen,
+        'fixed inset-0 z-[55] m-0 bg-white rounded-none border-none shadow-none': isFullscreen,
         'plan-resource-panel--spaced': !isFullscreen
       }"
       :style="isFullscreen ? {} : panelStyle"
@@ -380,6 +380,7 @@
                 :html="animationHtml"
                 :narration="selectedResource.moduleData.narration"
                 :video-exports="selectedResource.moduleData.videoExports"
+                :is-dragging="isDragging"
               />
               <iframe
                 v-else
@@ -643,19 +644,34 @@
         </button>
       </div>
       <!-- Note list for append -->
-      <div v-if="showNoteList" class="selection-note-list">
-        <div
-          v-for="note in availableNotes"
-          :key="note.id"
-          class="selection-note-item"
-          @click="appendToExistingNote(note)"
-        >
-          <p class="text-sm font-medium text-navy-700 truncate">{{ note.noteName || '无标题笔记' }}</p>
-          <p class="text-xs text-navy-400 truncate">{{ (note.content || '').substring(0, 50) }}</p>
+      <div v-if="showNoteList" class="selection-note-list" :class="{ 'selection-note-list--up': noteListOpenUp }">
+        <div class="px-2 pt-2 pb-1">
+          <input
+            v-model="noteListKeyword"
+            type="search"
+            class="w-full text-xs px-2 py-1.5 rounded-md border border-navy-100 outline-none focus:border-navy-300 text-navy-700 placeholder:text-navy-300"
+            placeholder="搜索笔记标题…"
+            @click.stop
+            @mousedown.stop
+          />
         </div>
-        <div v-if="availableNotes.length === 0" class="px-3 py-2 text-xs text-navy-300 text-center">
-          暂无笔记
+        <div v-if="noteListLoading" class="px-3 py-3 text-xs text-navy-400 text-center">
+          加载笔记中…
         </div>
+        <template v-else>
+          <div
+            v-for="note in filteredAvailableNotes"
+            :key="note.id"
+            class="selection-note-item"
+            @click="appendToExistingNote(note)"
+          >
+            <p class="text-sm font-medium text-navy-700 truncate">{{ note.noteName || '无标题笔记' }}</p>
+            <p class="text-xs text-navy-400 truncate">{{ noteListPreview(note, 48) }}</p>
+          </div>
+          <div v-if="filteredAvailableNotes.length === 0" class="px-3 py-2 text-xs text-navy-300 text-center">
+            {{ noteListKeyword.trim() ? '无匹配笔记' : '暂无已保存的笔记（侧栏草稿需先点保存）' }}
+          </div>
+        </template>
       </div>
     </div>
   </Teleport>
@@ -682,7 +698,7 @@ import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi
 import { parseMarkdown, extractCitations, normalizeMermaidCode } from '@/utils/markdown'
 import { normalizeAnimationHtml, prepareAnimationHtmlForPlayer } from '@/utils/animationHtml'
 import { rewriteEmbeddedAudioUrls } from '@/utils/animationPlayback'
-import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
+import { getNotes } from '@/api/note'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
 import { issueTicket } from '@/api/auth'
 import { PYTHON_AI_BASE } from '@/api/request'
@@ -712,6 +728,8 @@ import TreeSubdividePopover from '@/components/tree/TreeSubdividePopover.vue'
 import TreeBootstrapPreview from '@/components/tree/TreeBootstrapPreview.vue'
 import { buildTreePlanOutline } from '@/components/tree/useTreePlanOutline'
 import { useKnowledgeTreeStore } from '@/stores/knowledgeTree'
+import { resolveNoteCaptureSource, useNoteCaptureStore } from '@/stores/noteCapture'
+import { noteListPreview } from '@/components/note/notePresentation'
 import { updateKnowledgeNode } from '@/api/knowledgeTree'
 import type { KnowledgeNode } from '@/types/knowledgeTree'
 import type { LearningPlan, LearningResource } from '@/types/plan'
@@ -726,6 +744,7 @@ const router = useRouter()
 const planId = computed(() => Number(route.params.id))
 const planIdStr = computed(() => String(planId.value))
 const isTreeMode = computed(() => route.query.view === 'tree')
+const noteCaptureStore = useNoteCaptureStore()
 const chatStore = useChatStore()
 const authStore = useAuthStore()
 const knowledgeTreeStore = useKnowledgeTreeStore()
@@ -765,6 +784,22 @@ const selectionPopup = ref({
 })
 const showNoteList = ref(false)
 const availableNotes = ref<Note[]>([])
+const noteListKeyword = ref('')
+const noteListLoading = ref(false)
+const noteListOpenUp = ref(false)
+const filteredAvailableNotes = computed(() => {
+  const q = noteListKeyword.value.trim().toLowerCase()
+  if (!q) return availableNotes.value
+  return availableNotes.value.filter((n) => {
+    const name = (n.noteName || '').toLowerCase()
+    try {
+      const preview = noteListPreview(n, 80).toLowerCase()
+      return name.includes(q) || preview.includes(q)
+    } catch {
+      return name.includes(q)
+    }
+  })
+})
 const highlightedEls: HTMLElement[] = []
 
 function clearHighlight() {
@@ -960,6 +995,39 @@ function formatNoteContent(text: string): string {
   return text
 }
 
+function buildLearningCaptureSource() {
+  const routeLike = {
+    name: route.name,
+    fullPath: route.fullPath,
+    params: route.params as Record<string, unknown>,
+    query: route.query as Record<string, unknown>,
+  }
+
+  if (isTreeMode.value) {
+    const node = knowledgeTreeStore.nodes.find(n => n.id === knowledgeTreeStore.currentNodeId)
+    return resolveNoteCaptureSource(routeLike, {
+      sourceType: 'knowledge-node',
+      sourceId: knowledgeTreeStore.currentNodeId || undefined,
+      title: node?.title || knowledgeTreeStore.tree?.title || plan.value?.title || '知识树',
+    })
+  }
+
+  const res = selectedResource.value
+  if (res?.id) {
+    return resolveNoteCaptureSource(routeLike, {
+      sourceType: 'resource',
+      sourceId: res.id,
+      title: res.moduleData?.title || selectionPopup.value.resourceTitle || '学习资源',
+    })
+  }
+
+  return resolveNoteCaptureSource(routeLike, {
+    sourceType: 'plan',
+    sourceId: planId.value,
+    title: plan.value?.title || '学习计划',
+  })
+}
+
 function buildPositionInfo(): string {
   const p = selectionPopup.value
   // 去掉图片 markdown，只保留纯文本用于定位
@@ -972,75 +1040,86 @@ function buildPositionInfo(): string {
   return `selection:${snippet}`
 }
 
-async function addToNewNote() {
+/** 新建笔记 → 侧栏创建带默认标题的摘录笔记（原文立刻写入正文 fence） */
+function addToNewNote() {
   const text = selectionPopup.value.text
   clearHighlight()
   selectionPopup.value.show = false
   showNoteList.value = false
+  noteListKeyword.value = ''
   if (!text) return
 
-  try {
-    const p = selectionPopup.value
-    const noteName = `摘录 - ${p.resourceTitle}`
-    const content = formatNoteContent(text)
-    const res = await createNote({ noteName, content })
-    const noteId = (res as any)?.data?.id
-    if (noteId && p.resourceId) {
-      await linkNoteToResource(noteId, {
-        resourceId: p.resourceId,
-        selectedText: text.substring(0, 5000),
-        positionInfo: buildPositionInfo(),
-        planId: p.planId,
-        moduleName: p.moduleName,
-        resourceTitle: p.resourceTitle,
-      }).catch(() => {})
-    }
-  } catch (e) {
-    console.error('Failed to create note from selection:', e)
+  const p = selectionPopup.value
+  const source = buildLearningCaptureSource()
+  noteCaptureStore.requestCapture({
+    mode: 'excerpt',
+    ...(source ? { source } : {}),
+    excerpt: text,
+    noteName: p.resourceTitle ? `摘录 - ${p.resourceTitle}` : '摘录笔记',
+  })
+}
+
+function extractNoteRecords(data: unknown): Note[] {
+  if (Array.isArray(data)) return data as Note[]
+  if (data && typeof data === 'object') {
+    const rec = (data as { records?: unknown }).records
+    if (Array.isArray(rec)) return rec as Note[]
   }
+  return []
 }
 
 async function loadAvailableNotes() {
+  noteListLoading.value = true
   try {
-    const res = await getNotes({ page: 1, size: 20 })
-    availableNotes.value = res.data?.records || []
+    const res = await getNotes({ page: 1, size: 50 })
+    availableNotes.value = extractNoteRecords(res.data)
   } catch {
     availableNotes.value = []
+    showToast('笔记列表加载失败', 'error')
+  } finally {
+    noteListLoading.value = false
   }
 }
 
 function toggleNoteList() {
   if (!showNoteList.value) {
-    loadAvailableNotes()
+    noteListKeyword.value = ''
+    // Open upward when popup is in the lower half of the viewport
+    noteListOpenUp.value = selectionPopup.value.y > window.innerHeight * 0.55
+    void loadAvailableNotes()
   }
   showNoteList.value = !showNoteList.value
 }
 
-async function appendToExistingNote(note: Note) {
+// Sidebar / list page created or deleted notes while picker is open
+watch(
+  () => noteCaptureStore.notesListEpoch,
+  () => {
+    if (!showNoteList.value) return
+    const removedId = noteCaptureStore.lastRemovedNoteId
+    if (removedId != null && removedId > 0) {
+      availableNotes.value = availableNotes.value.filter(n => n.id !== removedId)
+    }
+    void loadAvailableNotes()
+  },
+)
+
+/** 追加到已有笔记 → 侧栏追加原文 fence（手动保存） */
+function appendToExistingNote(note: Note) {
   const text = selectionPopup.value.text
   clearHighlight()
   selectionPopup.value.show = false
   showNoteList.value = false
+  noteListKeyword.value = ''
   if (!text) return
 
-  try {
-    const p = selectionPopup.value
-    const existing = note.content || ''
-    const newContent = existing + (existing ? '\n\n' : '') + formatNoteContent(text)
-    await updateNote(note.id, { noteName: note.noteName, content: newContent })
-    if (p.resourceId) {
-      await linkNoteToResource(note.id, {
-        resourceId: p.resourceId,
-        selectedText: text.substring(0, 5000),
-        positionInfo: buildPositionInfo(),
-        planId: p.planId,
-        moduleName: p.moduleName,
-        resourceTitle: p.resourceTitle,
-      }).catch(() => {})
-    }
-  } catch (e) {
-    console.error('Failed to append to note:', e)
-  }
+  const source = buildLearningCaptureSource()
+  noteCaptureStore.requestCapture({
+    mode: 'excerpt',
+    ...(source ? { source } : {}),
+    excerpt: text,
+    openNoteId: note.id,
+  })
 }
 
 function onDocumentMouseDown(e: MouseEvent) {
@@ -1188,7 +1267,10 @@ const questionResults = computed(() => {
   return map
 })
 const quizSubmitting = ref(false)
-const sidebarCollapsed = ref(false)
+const sidebarCollapsed = ref(localStorage.getItem('aura-sidebar-collapsed') === 'true')
+watch(sidebarCollapsed, (val) => {
+  localStorage.setItem('aura-sidebar-collapsed', String(val))
+})
 
 function clearSelectedResource() {
   if (selectedResourceId.value !== null) {
@@ -2590,15 +2672,6 @@ function toggleResource(res: LearningResource, options: ToggleResourceOptions = 
   selectedResourceId.value = res.id
   selectedResource.value = res
 
-  // #region agent log
-  {
-    const md = res.moduleData || {}
-    const narration = md.narration || null
-    const htmlSnippet = String(md.content || md.html || '').slice(0, 200)
-    fetch('http://127.0.0.1:7296/ingest/e9514b2d-72ba-413a-b7bd-0ae318ec510a', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '84be90' }, body: JSON.stringify({ sessionId: '84be90', runId: 'pre-fix', hypothesisId: 'B,C', location: 'PlanDetailView.vue:selectResource', message: 'resource selected for preview', data: { resourceId: res.id, moduleType: res.moduleType, hasNarrationV1: narration?.version === 1, narrationAudioUrl: narration?.audioUrl || null, narrationAudioStatus: narration?.audioStatus || null, htmlHasPodcastAudio: /podcast-audio/.test(htmlSnippet) || /podcast-audio/.test(String(md.content || md.html || '')), audioUrlInHtml: (String(md.content || md.html || '').match(/https?:\/\/[^"'\\s]+(?:podcast-audio|wav|mp3)[^"'\\s]*/i) || [null])[0] }, timestamp: Date.now() }) }).catch(() => {})
-  }
-  // #endregion
-
   // 联动左侧大纲：找到资源对应的节点并高亮
   const nodeId = findNodeIdForResource(res)
   if (nodeId) {
@@ -3470,9 +3543,7 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
 
 .animation-stage {
   width: min(100%, calc((100vh - 250px) * 16 / 9));
-  aspect-ratio: 16 / 9;
   margin: 0 auto;
-  overflow: hidden;
   background: #050505;
 }
 
@@ -3611,6 +3682,10 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
   position: fixed;
   z-index: 1200;
   animation: selectionPopupFade 0.15s ease;
+  /* Anchor for upward-opening note list */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
 }
 
 .selection-popup-inner {
@@ -3649,9 +3724,18 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
   border: 1px solid rgba(26, 40, 71, 0.1);
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  max-height: 200px;
+  max-height: 240px;
+  min-width: 220px;
   overflow-y: auto;
   padding: 4px;
+}
+
+.selection-note-list--up {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  margin-top: 0;
 }
 
 .selection-note-item {

@@ -28,6 +28,7 @@ async def get_template_detail(name: str):
     try:
         engine = get_template_engine(name)
     except Exception as e:
+        logger.error("加载模板失败: name=%s error=%s", name, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"加载模板失败: {e}")
 
     desc_file = template_dir / "description.txt"
@@ -122,4 +123,5 @@ async def delete_template(name: str):
         raise HTTPException(status_code=404, detail=f"模板 '{name}' 不存在")
 
     shutil.rmtree(template_dir)
+    logger.info("模板已删除: name=%s", name)
     return {"message": f"模板 '{name}' 已删除"}

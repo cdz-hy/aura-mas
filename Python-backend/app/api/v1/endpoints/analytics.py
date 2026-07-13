@@ -142,7 +142,7 @@ async def generate_ai_suggestions(request: LearningReportRequest):
             for chunk in llm.chat_stream([{"role": "user", "content": prompt}]):
                 if chunk:
                     content += chunk
-            record_from_mimo(llm, 0, "analytics_suggestions")
+            record_from_mimo(llm, request.user_id, "analytics_suggestions")
 
             yield f"data: {json.dumps({'type': 'done', 'content': content}, ensure_ascii=False)}\n\n"
 
@@ -426,7 +426,7 @@ async def generate_plan_icon(request: dict):
         # 调用 LLM 选择图标（温度 0.0，确保稳定输出）
         llm = get_simple_answer_llm()
         result = llm.chat_json(messages, temperature=0.0, max_tokens=1024)
-        record_from_mimo(llm, 0, "plan_icon_generation")
+        record_from_mimo(llm, request.get("user_id", 0), "plan_icon_generation")
 
         # 解析结果
         icon_key = result.get("icon_key", "")
