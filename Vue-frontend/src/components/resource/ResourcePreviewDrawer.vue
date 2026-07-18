@@ -1,6 +1,6 @@
 <template>
   <div 
-    class="fixed top-0 w-[420px] h-full bg-white shadow-[-8px_0_32px_rgba(26,40,71,0.1)] z-40 border-l border-navy-100/50 flex flex-col transition-all duration-300"
+    class="fixed top-0 w-[420px] h-full bg-white shadow-[-8px_0_32px_rgba(26,40,71,0.1)] z-50 border-l border-navy-100/50 flex flex-col transition-all duration-300"
     :style="{ right: `calc(${baseOffset}px + ${index * 420}px)` }"
   >
     <!-- Header -->
