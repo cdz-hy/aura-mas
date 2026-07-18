@@ -93,6 +93,12 @@
         </div>
         <div class="tutor-bubble" :class="msg.role">
           <template v-if="msg.role === 'assistant'">
+            <!-- Thinking process -->
+            <ThinkingProcess
+              v-if="msg.thinkings && msg.thinkings.length > 0"
+              :thinkings="msg.thinkings"
+              :isStreaming="loading && i === messages.length - 1"
+            />
             <!-- Plan suggestion card -->
             <div v-if="msg.type === 'plan_suggestion'" class="plan-suggestion-card">
               <div class="flex items-center gap-2 mb-2">
@@ -179,9 +185,10 @@ import { parseMarkdown } from '@/utils/markdown'
 import { getDashboardStats } from '@/api/stats'
 import { getDueFlashcardCount } from '@/api/flashcard'
 import { getPlans } from '@/api/plan'
-import { getDialogueHistoryByIntent } from '@/api/chat'
+import { getDialogueHistoryByIntent, getSessionMessages, getSessions } from '@/api/chat'
 import { issueTicket } from '@/api/auth'
 import { PYTHON_AI_BASE } from '@/api/request'
+import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
 
 // Props & Emits
 const props = defineProps<{
@@ -200,6 +207,7 @@ interface Message {
   content: string
   type?: 'text' | 'plan_suggestion'
   suggestion?: any
+  thinkings?: Array<{ agent: string; content: string }>
 }
 
 interface Session {
@@ -260,13 +268,20 @@ function scrollToBottom() {
 }
 
 // Add message
-function addMessage(role: 'user' | 'assistant', content: string, type: string = 'text', suggestion?: any) {
+function addMessage(
+  role: 'user' | 'assistant',
+  content: string,
+  type: string = 'text',
+  suggestion?: any,
+  thinkings?: Array<{ agent: string; content: string }>
+) {
   messages.value.push({
     id: Date.now().toString(),
     role,
     content,
     type: type as any,
-    suggestion
+    suggestion,
+    thinkings: thinkings || []
   })
   scrollToBottom()
 }
@@ -279,6 +294,10 @@ async function sendMessage() {
   addMessage('user', text)
   inputText.value = ''
   loading.value = true
+
+  // Add empty assistant message for streaming
+  const assistantMsgIndex = messages.value.length
+  addMessage('assistant', '')
 
   try {
     const ticketRes = await issueTicket()
@@ -303,38 +322,119 @@ async function sendMessage() {
       dueFlashcards: dueCount,
     } : null
 
-    const context = {
-      stats: stats,
-      plans: plansRes.data?.records || [],
-      userMessage: text
+    const plans = plansRes.data?.records || []
+
+    // 确保有会话 ID
+    if (!activeSessionId.value) {
+      const userId = JSON.parse(atob(localStorage.getItem('token')?.split('.')[1] || '{}')).sub || 0
+      activeSessionId.value = `advisor-${userId}-${Date.now()}`
     }
 
-    // Call AI advisor API
-    const response = await fetch(`${PYTHON_AI_BASE}/api/ai/plan-advisor/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${ticket}`
-      },
-      body: JSON.stringify(context)
+    // Build SSE URL
+    const params = new URLSearchParams({
+      ticket,
+      user_message: text,
+      session_id: activeSessionId.value,
+      stats: JSON.stringify(stats || {}),
+      plans: JSON.stringify(plans),
     })
 
-    if (!response.ok) {
-      throw new Error('请求失败')
+    const url = `${PYTHON_AI_BASE}/api/ai/plan-advisor/chat?${params}`
+    const source = new EventSource(url)
+
+    // Track thinking steps
+    const thinkings: Array<{ agent: string; content: string }> = []
+
+    source.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+
+        switch (data.type) {
+          case 'thinking_start':
+            // Add new thinking step
+            thinkings.push({ agent: data.agent || 'AI学习顾问', content: data.content || '' })
+            if (messages.value[assistantMsgIndex]) {
+              messages.value[assistantMsgIndex].thinkings = [...thinkings]
+            }
+            break
+
+          case 'thinking_chunk':
+            // Append to last thinking step
+            if (thinkings.length > 0) {
+              thinkings[thinkings.length - 1].content += data.content
+              if (messages.value[assistantMsgIndex]) {
+                messages.value[assistantMsgIndex].thinkings = [...thinkings]
+              }
+            }
+            break
+
+          case 'thinking':
+            // Add thinking step (complete)
+            thinkings.push({ agent: data.agent || 'AI学习顾问', content: data.content })
+            if (messages.value[assistantMsgIndex]) {
+              messages.value[assistantMsgIndex].thinkings = [...thinkings]
+            }
+            break
+
+          case 'progress':
+            // Update progress
+            if (messages.value[assistantMsgIndex]) {
+              messages.value[assistantMsgIndex].content += `\n\n[${data.content}]`
+            }
+            break
+
+          case 'chunk':
+            // Append streaming text
+            if (messages.value[assistantMsgIndex]) {
+              // Remove progress indicators and append content
+              let content = messages.value[assistantMsgIndex].content
+              content = content.replace(/\[.*?\]\s*$/g, '') // Remove progress markers
+              messages.value[assistantMsgIndex].content = content + data.content
+            }
+            scrollToBottom()
+            break
+
+          case 'plan_suggestion':
+            // Handle plan suggestion
+            if (messages.value[assistantMsgIndex]) {
+              messages.value[assistantMsgIndex].type = 'plan_suggestion'
+              messages.value[assistantMsgIndex].suggestion = data.suggestion
+            }
+            break
+
+          case 'done':
+            // Stream complete
+            source.close()
+            loading.value = false
+            // 刷新会话列表
+            loadSessions()
+            break
+
+          case 'error':
+            source.close()
+            if (messages.value[assistantMsgIndex]) {
+              messages.value[assistantMsgIndex].content = data.content || '抱歉，处理请求时出现了问题。'
+            }
+            loading.value = false
+            break
+        }
+      } catch (e) {
+        console.error('Parse SSE data failed:', e)
+      }
     }
 
-    const data = await response.json()
-
-    // Handle response
-    if (data.type === 'plan_suggestion' && data.suggestion) {
-      addMessage('assistant', data.message, 'plan_suggestion', data.suggestion)
-    } else {
-      addMessage('assistant', data.message || '抱歉，我没有理解你的问题。')
+    source.onerror = () => {
+      source.close()
+      if (messages.value[assistantMsgIndex] && !messages.value[assistantMsgIndex].content) {
+        messages.value[assistantMsgIndex].content = '抱歉，连接出现问题。请稍后再试。'
+      }
+      loading.value = false
     }
   } catch (e) {
     console.error('Send message failed:', e)
-    addMessage('assistant', '抱歉，处理你的请求时出现了问题。请稍后再试。')
-  } finally {
+    if (messages.value[assistantMsgIndex]) {
+      messages.value[assistantMsgIndex].content = '抱歉，处理你的请求时出现了问题。请稍后再试。'
+    }
     loading.value = false
   }
 }
@@ -346,18 +446,36 @@ function stopGeneration() {
 
 // Load history
 async function loadHistory() {
+  if (!activeSessionId.value) return
+
   try {
-    const res = await getDialogueHistoryByIntent('plan_advisor', 20)
+    const res = await getSessionMessages(activeSessionId.value, 50)
     const history = res.data || []
+
     if (history.length > 0) {
-      const reversedHistory = [...history].reverse()
-      for (const item of reversedHistory) {
+      // 数据库返回的是按 id 升序排列（最早的在前），直接使用即可
+      for (const item of history) {
         const role = item.dialogueType === 'USER' ? 'user' : 'assistant'
+
+        // 解析思考过程
+        let thinkings: Array<{ agent: string; content: string }> = []
+        if (item.conversationContext) {
+          try {
+            const ctx = JSON.parse(item.conversationContext)
+            if (ctx.thinkings) {
+              thinkings = ctx.thinkings
+            }
+          } catch (e) {
+            // 解析失败，忽略
+          }
+        }
+
         messages.value.push({
           id: item.id?.toString() || Date.now().toString(),
           role: role as 'user' | 'assistant',
           content: item.conversationText || '',
-          type: 'text'
+          type: 'text',
+          thinkings: thinkings
         })
       }
       scrollToBottom()
@@ -371,14 +489,44 @@ async function loadHistory() {
 function handleNewSession() {
   messages.value = []
   activeSessionId.value = ''
+  // 生成新的会话 ID
+  const userId = JSON.parse(atob(localStorage.getItem('token')?.split('.')[1] || '{}')).sub || 0
+  activeSessionId.value = `advisor-${userId}-${Date.now()}`
+  loadSessions()
 }
 
 // Select session
 async function handleSelectSession(sessionId: string) {
   activeSessionId.value = sessionId
   showSessionList.value = false
-  // Load session messages
-  // TODO: Implement session message loading
+  // 加载会话消息
+  messages.value = []
+  await loadHistory()
+}
+
+// Load sessions
+async function loadSessions() {
+  sessionsLoading.value = true
+  try {
+    const res = await getSessions('plan_advisor')
+    const sessionList = res.data || []
+
+    // 过滤 plan_advisor 类型的会话
+    sessions.value = sessionList
+      .filter((s: any) => s.sessionId?.startsWith('advisor-'))
+      .map((s: any) => ({
+        sessionId: s.sessionId,
+        title: s.title || '新对话',
+        messageCount: s.messageCount || 0,
+        lastMessageAt: s.lastMessageAt || ''
+      }))
+      .sort((a: any, b: any) => b.lastMessageAt.localeCompare(a.lastMessageAt))
+
+  } catch (e) {
+    console.error('Load sessions failed:', e)
+  } finally {
+    sessionsLoading.value = false
+  }
 }
 
 // Accept plan suggestion
@@ -401,7 +549,8 @@ async function acceptPlanSuggestion(suggestion: any) {
       body: JSON.stringify({
         title: suggestion.title,
         description: suggestion.description || '',
-        modules: suggestion.modules || []
+        modules: suggestion.modules || [],
+        session_id: activeSessionId.value
       })
     })
 
@@ -462,6 +611,7 @@ function rejectPlanSuggestion(messageId: string) {
 
 // Lifecycle
 onMounted(async () => {
+  await loadSessions()
   await loadHistory()
 })
 </script>
