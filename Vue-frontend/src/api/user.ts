@@ -38,3 +38,7 @@ export function updateProfile(data: {
 }) {
   return request.put('/user/profile', data)
 }
+
+export function replaceLearningBehavior(learningBehavior: string) {
+  return request.put('/user/profile/behavior', { learningBehavior })
+}

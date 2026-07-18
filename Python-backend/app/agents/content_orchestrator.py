@@ -9,11 +9,12 @@
 """
 import logging
 import json
+import re
 import asyncio
 from typing import Dict, Any, List
 from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_content_orchestrator_llm
-from app.prompts import CONTENT_ORCHESTRATOR_BATCH_PROMPT, CONTENT_ORCHESTRATOR_PARALLEL_PROMPT
+from app.prompts import CONTENT_ORCHESTRATOR_BATCH_PROMPT, CONTENT_ORCHESTRATOR_PARALLEL_PROMPT, build_image_section
 from app.utils.token_recorder import record
 from app.utils import stream_registry
 
@@ -31,6 +32,74 @@ def _normalize_modules(modules: list) -> list:
     for m in modules:
         if "module_type" in m:
             m["module_type"] = _normalize_module_type(m["module_type"])
+    return modules
+
+
+# 匹配 <img src="..."> 和 ![alt](url) 中的图片 URL
+_IMG_SRC_RE = re.compile(r'<img\s[^>]*src=["\']([^"\']+)["\']', re.IGNORECASE)
+_MD_IMG_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+
+
+def _sanitize_images(content: str, valid_urls: set) -> tuple:
+    """
+    清除内容中所有非白名单的图片引用（防止 LLM 编造 URL）。
+    返回 (清洗后的内容, 是否有幻觉被清除)。
+    """
+    if not valid_urls:
+        # 没有任何真实图片 → 删除所有图片标签和 Markdown 图片语法
+        cleaned = re.sub(r'<div[^>]*>.*?<img\b.*?</div>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        cleaned = _MD_IMG_RE.sub('', cleaned)
+        had_hallucination = cleaned != content
+        return cleaned, had_hallucination
+
+    had_hallucination = False
+
+    # 1. 清除包含非法 URL 的整块图片 div（float/居中排版模板）
+    def _check_div(match):
+        nonlocal had_hallucination
+        div_html = match.group(0)
+        urls = _IMG_SRC_RE.findall(div_html)
+        if all(u not in valid_urls for u in urls):
+            had_hallucination = True
+            return ''
+        return div_html
+
+    cleaned = re.sub(r'<div[^>]*>.*?<img\b.*?</div>', _check_div, content, flags=re.DOTALL | re.IGNORECASE)
+
+    # 2. 清除残留的非法 <img> 标签
+    def _check_img(match):
+        nonlocal had_hallucination
+        url = match.group(1)
+        if url not in valid_urls:
+            had_hallucination = True
+            return ''
+        return match.group(0)
+
+    cleaned = _IMG_SRC_RE.sub(_check_img, cleaned)
+
+    # 3. 清除非法的 Markdown 图片语法
+    def _check_md_img(match):
+        nonlocal had_hallucination
+        url = match.group(2).strip()
+        if url not in valid_urls:
+            had_hallucination = True
+            return ''
+        return match.group(0)
+
+    cleaned = _MD_IMG_RE.sub(_check_md_img, cleaned)
+
+    return cleaned, had_hallucination
+
+
+def _sanitize_modules(modules: list, rag_chunks: list) -> list:
+    """对模块列表执行幻觉图片清洗，返回清洗后的模块列表（原地修改）"""
+    valid_urls = {c.get("image_path", "") for c in rag_chunks if c.get("type") == "image" and c.get("image_path")}
+    for m in modules:
+        if m.get("content"):
+            cleaned, had_hallucination = _sanitize_images(m["content"], valid_urls)
+            if had_hallucination:
+                m["content"] = cleaned
+                logger.warning(f"  [模块{m.get('module_order')}] 检测到幻觉图片 URL，已自动清除")
     return modules
 
 
@@ -89,11 +158,11 @@ def _get_personalized_preferences(user_profile: Dict[str, Any]) -> str:
 
     # 2. 图片数量与图文配比偏好 (Visual vs Verbal)
     if vv <= -0.8:
-        image_pref = "极度偏好视觉学习。1. 必须积极且合理地将上下文中提供的所有相关的真实图片嵌入内容中。2. 请极其频繁地自主生成能够提纲挈领的 Mermaid 各种图表（flowchart、sequenceDiagram、mindmap等）来直观展现知识点逻辑。注意：必须确保内容有意义需要时才生成，严禁胡编乱造事实，必须基于提供的RAG文本或网络资源生成，且必须严格遵循 Mermaid 语法。"
+        image_pref = "极度偏好视觉学习。1. 必须积极且合理地将上下文中提供的所有相关的真实图片嵌入内容中（前提是上下文中确实带有 `图片URL:` 前缀的资源，绝不能自行捏造）。2. 请极其频繁地自主生成能够提纲挈领的 Mermaid 各种图表（flowchart、sequenceDiagram、mindmap等）来直观展现知识点逻辑。注意：必须确保内容有意义需要时才生成，严禁胡编乱造事实，必须基于提供的RAG文本或网络资源生成，且必须严格遵循 Mermaid 语法。"
     elif vv <= -0.4:
-        image_pref = "强偏好视觉。1. 必须积极且合理地将上下文中提供的相关的真实图片嵌入内容中。2. 对于关键且复杂的概念，请较常地自主生成一些 Mermaid 图表（如 flowchart）来辅助说明。注意：必须有必要且有意义时才生成，严禁胡编乱造，必须基于检索资源生成，严格遵循 Mermaid 语法。"
+        image_pref = "强偏好视觉。1. 必须积极且合理地将上下文中提供的相关的真实图片嵌入内容中（前提是上下文中确实带有 `图片URL:` 前缀的资源，绝不能自行捏造）。2. 对于关键且复杂的概念，请较常地自主生成一些 Mermaid 图表（如 flowchart）来辅助说明。注意：必须有必要且有意义时才生成，严禁胡编乱造，必须基于检索资源生成，严格遵循 Mermaid 语法。"
     elif vv < 0:
-        image_pref = "轻微偏好视觉。正常搭配真实图片。当内容极度复杂且确有必要时，偶尔可以选择性地自主生成少量的 Mermaid 流程图（flowchart）辅助说明。严禁胡编乱造，严格遵循 Mermaid 语法。"
+        image_pref = "轻微偏好视觉。正常搭配真实图片（前提是上下文中有提供）。当内容极度复杂且确有必要时，偶尔可以选择性地自主生成少量的 Mermaid 流程图（flowchart）辅助说明。严禁胡编乱造，严格遵循 Mermaid 语法。"
     elif vv > 0.3:
         image_pref = "强偏好纯文字与逻辑表述。尽量少用图片（每个模块最多 1 张，无核心图则不用）。严禁自主生成任何 Mermaid 图表。"
     else:
@@ -206,8 +275,17 @@ def _generate_single_module(
         if forced_type == "mindmap":
             type_hint += "- 重要: 必须输出 MindElixir nodeData JSON 格式，详见系统提示\n"
 
+    # 检测是否有可用图片，动态构造图片排版指令
+    has_images = any(
+        c.get("type") == "image" and c.get("image_path")
+        for c in relevant_chunks[:10]
+    )
+    system_prompt = CONTENT_ORCHESTRATOR_PARALLEL_PROMPT.format(
+        image_section=build_image_section(has_images)
+    )
+
     messages = [
-        {"role": "system", "content": CONTENT_ORCHESTRATOR_PARALLEL_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"""学习目标: {learning_goal}
 
 对话历史:
@@ -232,7 +310,7 @@ def _generate_single_module(
         def _on_chunk(chunk: str):
             _emit_resource_stream(sse_callback, "resource_stream_text", resource_id, chunk)
 
-        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, max_tokens=16384, stream_field="content")
+        result = llm.chat_json_stream(messages, on_chunk=_on_chunk, stream_field="content")
         result["module_order"] = module_order
         result["module_id"] = module_info.get("module_id", module_order)
         result["_usage_records"] = llm.get_usage_records()
@@ -290,6 +368,32 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  [内容编排智能体] 开始处理")
     logger.info(f"  学习目标: {learning_goal[:100]}")
     logger.info(f"  输入内容块: {len(rag_chunks)} 个")
+
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(session_id)
+
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "内容编排智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在编排学习内容，整合检索资料...")
     logger.info(f"  自主生成内容: {'有' if generated_content else '无'}")
     logger.info(f"  编排模式: {'并行' if use_parallel else '批量'}")
     
@@ -370,6 +474,9 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             # 按 module_order 排序
             final_modules.sort(key=lambda x: x.get("module_order", 0))
             _normalize_modules(final_modules)
+
+            # 幻觉清洗：清除编排智能体编造的图片 URL
+            _sanitize_modules(final_modules, rag_chunks)
 
             # 构造完整结果
             orchestrated_content = {
@@ -490,7 +597,7 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
         try:
             tasks = []
             for i, module in enumerate(modules):
-                module_order = i + 1
+                module_order = module.get("module_order") or (i + 1)
                 placeholder = placeholder_map.get(module_order, {})
                 res_id = placeholder.get("id", 0)
                 task = asyncio.to_thread(
@@ -513,11 +620,12 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             modules_list = []
             for i, result in enumerate(module_results):
                 if isinstance(result, Exception):
-                    logger.error(f"  [模块{i+1}] 生成异常: {str(result)}")
+                    mod_order = modules[i].get("module_order") or (i + 1)
+                    logger.error(f"  [模块{mod_order}] 生成异常: {str(result)}")
                     modules_list.append({
-                        "module_order": i + 1,
+                        "module_order": mod_order,
                         "module_type": "text",
-                        "title": modules[i].get("title", f"模块 {i+1}"),
+                        "title": modules[i].get("title", f"模块 {mod_order}"),
                         "content": f"内容生成失败: {str(result)}",
                         "metadata": {"error": str(result)},
                     })
@@ -527,6 +635,9 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
             # 按 module_order 排序
             modules_list.sort(key=lambda x: x.get("module_order", 0))
             _normalize_modules(modules_list)
+
+            # 幻觉清洗：清除编排智能体编造的图片 URL
+            _sanitize_modules(modules_list, rag_chunks)
 
             # 构造完整结果
             orchestrated_content = {
@@ -614,6 +725,9 @@ async def content_orchestrator_node(state: AgentState) -> Dict[str, Any]:
                             "content_orchestration", state.get("task_id"),
                             extra_records=extra_records)
 
+        # 幻觉清洗：清除编排智能体编造的图片 URL
+        _sanitize_modules(batch_result.get("module_list", []), rag_chunks)
+
         # 自主异常检测：批量模式
         batch_modules = batch_result.get("module_list", [])
         content_previews = []
@@ -655,6 +769,7 @@ def _batch_orchestration(
     generated_content: Dict[str, Any],
     chat_history: List[Dict[str, str]],
     sse_callback=None,
+    on_chunk=None,
 ) -> Dict[str, Any]:
     """批量编排模式：一次性生成所有模块（原有逻辑）"""
     llm = get_content_orchestrator_llm()
@@ -680,6 +795,12 @@ def _batch_orchestration(
             )
 
     content_text = "\n\n---\n\n".join(content_parts)
+
+    # 检测是否有可用图片，动态构造图片排版指令
+    has_images = any(
+        c.get("type") == "image" and c.get("image_path")
+        for c in rag_chunks[:15]
+    )
 
     generated_text = ""
     if generated_content:
@@ -714,8 +835,12 @@ def _batch_orchestration(
             history_lines.append(f"{role}: {content}")
         history_text = "\n".join(history_lines)
 
+    system_prompt = CONTENT_ORCHESTRATOR_BATCH_PROMPT.format(
+        image_section=build_image_section(has_images)
+    )
+
     messages = [
-        {"role": "system", "content": CONTENT_ORCHESTRATOR_BATCH_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"""学习目标: {learning_goal}
 
 对话历史（请结合上下文理解用户需求）:
@@ -736,7 +861,7 @@ def _batch_orchestration(
 
     try:
         logger.info(f"  [内容编排智能体] 正在调用 LLM 进行批量编排...")
-        result = llm.chat_json(messages, max_tokens=16384)
+        result = llm.chat_json(messages)
         modules_list = result.get("modules", [])
         _normalize_modules(modules_list)
 

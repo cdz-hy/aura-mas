@@ -110,7 +110,18 @@
 
             <!-- 普通消息 -->
             <div v-else class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
-              <div class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
+              <ThinkingProcess 
+                v-if="msg.thinkings && msg.thinkings.length > 0" 
+                :thinkings="msg.thinkings" 
+                :isStreaming="store.streaming && i === store.messages.length - 1"
+              />
+              <div v-if="msg.content" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
+              <div v-else-if="store.streaming && i === store.messages.length - 1 && store.streamBuffer" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(store.streamBuffer)"></div>
+              <div v-else-if="store.streaming && i === store.messages.length - 1" class="flex gap-1.5 py-1">
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0s"></span>
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.15s"></span>
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.3s"></span>
+              </div>
             </div>
           </template>
 
@@ -121,37 +132,18 @@
             </div>
           </template>
         </div>
-
-        <!-- Streaming -->
-        <div v-if="store.streaming" class="flex items-start gap-3">
-          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-navy-500 to-navy-700 flex items-center justify-center flex-shrink-0">
-            <svg class="w-4 h-4 text-white animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-            </svg>
-          </div>
-          <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
-            <div v-if="store.streamBuffer" class="text-navy-700 leading-relaxed markdown-body">
-              <div>{{ store.streamBuffer }}<span class="inline-block w-0.5 h-4 bg-navy-400 ml-0.5 animate-pulse align-text-bottom"></span></div>
-            </div>
-            <!-- 加载动画 -->
-            <div v-else class="flex gap-1.5 py-1">
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0s"></span>
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.15s"></span>
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.3s"></span>
-            </div>
-          </div>
-        </div>
       </div>
 
       <!-- Input -->
       <div class="px-6 py-4 border-t border-navy-100/50 bg-white">
-        <form @submit.prevent="sendMessage" class="flex gap-3">
-          <input
+        <form @submit.prevent="sendMessage" class="flex gap-3 items-end">
+          <AutoGrowTextarea
             v-model="inputText"
-            type="text"
-            class="input-field flex-1"
             :placeholder="store.streaming ? 'AI回复中...' : store.awaitingConfirmation ? '输入补充说明或直接发送确认...' : '输入你的问题...'"
             :disabled="store.streaming"
+            show-voice
+            :voice-recording="voice.isRecording.value"
+            @voice-toggle="voice.toggle"
           />
           <button type="submit" class="btn-primary px-6" :disabled="!inputText.trim() || store.streaming">
             发送
@@ -177,7 +169,11 @@ import { ref, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { parseMarkdown } from '@/utils/markdown'
 import { useChatStore } from '@/stores/chat'
+import { tracker } from '@/utils/tracker'
 import ChatSessionSidebar from '@/components/chat/ChatSessionSidebar.vue'
+import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
+import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
+import { useVoiceInput } from '@/composables/useVoiceInput'
 
 const route = useRoute()
 const planId = route.params.id as string
@@ -187,6 +183,12 @@ const messagesContainer = ref<HTMLElement>()
 const inputText = ref('')
 const showModifyInput = ref(false)
 const modifyText = ref('')
+
+// 语音输入
+const voice = useVoiceInput({
+  onText: (text) => { inputText.value += text },
+  onError: (err) => { console.error('[Voice]', err) },
+})
 
 const quickQuestions = [
   '这个知识点我不太理解，能详细解释一下吗？',
@@ -222,6 +224,14 @@ function sendMessage() {
   if (!text) return
   inputText.value = ''
   showModifyInput.value = false
+
+  // 追踪 AI 对话事件
+  tracker.trackAiChat({
+    sessionId: store.activeSessionId || '',
+    planId: Number(planId) || undefined,
+    messageLength: text.length
+  })
+
   // 确认状态下，底部输入也走 confirmBreakdown 以携带 task_breakdown 上下文
   if (store.awaitingConfirmation && store.pendingTaskBreakdown) {
     store.confirmBreakdown(planId, text)

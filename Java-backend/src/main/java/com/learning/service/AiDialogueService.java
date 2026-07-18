@@ -1,8 +1,10 @@
 package com.learning.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.learning.entity.AiDialogue;
 import com.learning.entity.LearningPlan;
+import com.learning.entity.LearningResource;
 import com.learning.mapper.AiDialogueMapper;
 import com.learning.mapper.LearningPlanMapper;
 import com.learning.mapper.LearningResourceMapper;
@@ -26,7 +28,7 @@ public class AiDialogueService {
 
     @Transactional
     public AiDialogue createDialogue(Long userId, String sessionId, Long planId,
-                                     String conversationText, String dialogueType, String intentType) {
+                                     String conversationText, String dialogueType, String intentType, String conversationContext) {
         AiDialogue dialogue = new AiDialogue();
         dialogue.setUserId(userId);
         dialogue.setSessionId(sessionId);
@@ -34,6 +36,7 @@ public class AiDialogueService {
         dialogue.setConversationText(conversationText);
         dialogue.setDialogueType(dialogueType);
         dialogue.setIntentType(intentType);
+        dialogue.setConversationContext(conversationContext);
         dialogue.setDialogueTime(LocalDateTime.now());
         dialogueMapper.insert(dialogue);
         return dialogue;
@@ -115,12 +118,30 @@ public class AiDialogueService {
 
     @Transactional
     public void deleteDialogue(Long dialogueId) {
-        AiDialogue dialogue = dialogueMapper.selectById(dialogueId);
-        if (dialogue != null) {
-            dialogue.setIsDeleted(1);
-            dialogue.setDeletedAt(LocalDateTime.now());
-            dialogueMapper.updateById(dialogue);
-        }
+        dialogueMapper.update(null, new LambdaUpdateWrapper<AiDialogue>()
+                .eq(AiDialogue::getId, dialogueId)
+                .set(AiDialogue::getIsDeleted, 1)
+                .set(AiDialogue::getDeletedAt, LocalDateTime.now()));
+    }
+
+    @Transactional
+    public void deleteUserDialogue(Long dialogueId, Long userId) {
+        dialogueMapper.update(null, new LambdaUpdateWrapper<AiDialogue>()
+                .eq(AiDialogue::getId, dialogueId)
+                .eq(AiDialogue::getUserId, userId)
+                .set(AiDialogue::getIsDeleted, 1)
+                .set(AiDialogue::getDeletedAt, LocalDateTime.now()));
+    }
+
+    @Transactional
+    public void deleteUserDialogueBatch(List<Long> dialogueIds, Long userId) {
+        if (dialogueIds == null || dialogueIds.isEmpty()) return;
+        
+        dialogueMapper.update(null, new LambdaUpdateWrapper<AiDialogue>()
+                .in(AiDialogue::getId, dialogueIds)
+                .eq(AiDialogue::getUserId, userId)
+                .set(AiDialogue::getIsDeleted, 1)
+                .set(AiDialogue::getDeletedAt, LocalDateTime.now()));
     }
 
     @Transactional
@@ -162,13 +183,12 @@ public class AiDialogueService {
 
         if (dialogues.isEmpty()) return;
 
-        // Soft-delete all dialogues in this session
+        // Soft-delete all dialogues in this session using LambdaUpdateWrapper
         LocalDateTime now = LocalDateTime.now();
-        for (AiDialogue d : dialogues) {
-            d.setIsDeleted(1);
-            d.setDeletedAt(now);
-            dialogueMapper.updateById(d);
-        }
+        dialogueMapper.update(null, new LambdaUpdateWrapper<AiDialogue>()
+                .eq(AiDialogue::getSessionId, sessionId)
+                .set(AiDialogue::getIsDeleted, 1)
+                .set(AiDialogue::getDeletedAt, now));
 
         // If intent_type is "profile", also delete associated plan + resources
         String intentType = dialogues.get(0).getIntentType();
@@ -185,15 +205,17 @@ public class AiDialogueService {
     }
 
     private void cascadeDeletePlan(Long planId) {
-        // Soft-delete plan
-        LearningPlan plan = planMapper.selectById(planId);
-        if (plan != null) {
-            plan.setIsDeleted(1);
-            plan.setDeletedAt(LocalDateTime.now());
-            planMapper.updateById(plan);
-        }
-        // Resources are cascade-deleted via is_deleted on learning_resource table
-        // (MyBatis-Plus @TableLogic handles this if configured)
+        // Soft-delete plan using LambdaUpdateWrapper
+        planMapper.update(null, new LambdaUpdateWrapper<LearningPlan>()
+                .eq(LearningPlan::getId, planId)
+                .set(LearningPlan::getIsDeleted, 1)
+                .set(LearningPlan::getDeletedAt, LocalDateTime.now()));
+
+        // Soft-delete resources under this plan using LambdaUpdateWrapper
+        resourceMapper.update(null, new LambdaUpdateWrapper<LearningResource>()
+                .eq(LearningResource::getPlanId, planId)
+                .set(LearningResource::getIsDeleted, 1)
+                .set(LearningResource::getDeletedAt, LocalDateTime.now()));
     }
 
     public String getSessionTitle(String sessionId) {

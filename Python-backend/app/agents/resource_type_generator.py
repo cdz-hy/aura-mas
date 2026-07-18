@@ -12,6 +12,8 @@ from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_resource_type_generator_llm
 from app.prompts import RESOURCE_TYPE_GENERATOR_PROMPTS, RESOURCE_TYPE_GENERATOR_DEFAULT_PROMPT
 from app.utils.token_recorder import record_from_mimo
+from app.utils import stream_registry
+import json
 
 logger = logging.getLogger("agents.resource_type_generator")
 
@@ -170,6 +172,35 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  目标类型: {resource_type}")
     logger.info(f"  模块标题: {module_title}")
 
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "类型资源生成智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking_start("类型资源生成智能体", "思考: ")
+    _emit_thinking_chunk(f"收到生成指令，目标类型为 {resource_type}。")
+    _emit_thinking_chunk(f"正在结合用户画像、内容摘要和上下文要求，分析并构造高质量的学习资源。")
+    _emit_thinking(f"正在生成{resource_type}类型的学习资源...")
+
     llm = get_resource_type_generator_llm()
 
     # 选择对应的系统提示
@@ -208,6 +239,9 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
     # 构造用户消息
     user_content = f"""学习目标: {learning_goal}
 
+用户具体指令 (最重要，请务必严格遵循此指令的格式、数量、语气等要求):
+{user_message if user_message else "按照该类型的默认规则生成高质量内容"}
+
 对话历史:
 {history_text if history_text else "无历史记录"}
 
@@ -235,7 +269,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [类型资源生成] 正在调用 LLM 生成 {resource_type}...")
-        result = llm.chat_json(messages, max_tokens=8192)
+        result = llm.chat_json(messages)
         record_from_mimo(llm, state.get("user_id", 0), "resource_type_generation", state.get("task_id"))
 
         # 标准化输出
@@ -247,7 +281,19 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
         }
 
         # mindmap 类型：content 字段是 nodeData 的 JSON 字符串
-        if resource_type == "mindmap":
+        if resource_type == "pptx":
+            # PPT 走专用生成流程
+            from app.agents.pptx_generator import generate_pptx
+            pptx_result = generate_pptx(
+                module_content=content_summary or source_resource_content or learning_goal,
+                title=module_title,
+                description=module_desc,
+                user_id=state.get("user_id", 0),
+                user_profile=user_profile,
+                sse_callback=_sse_cb,
+            )
+            generated.update(pptx_result)
+        elif resource_type == "mindmap":
             node_data = result.get("nodeData")
             if node_data:
                 import json
@@ -779,7 +825,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
                 audio.pause();
                 isPlaying = false;
             }} else {{
-                audio.play().catch(err => console.log("播放失败: ", err));
+                audio.play().catch(err => console.log("播放失败: ", err && err.message ? err.message : String(err)));
                 isPlaying = true;
             }}
             updatePlayerState();
@@ -801,6 +847,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
             if (!audio) return;
             const cur = audio.currentTime;
             const dur = audio.duration || 1;
+            if (!isFinite(dur) || dur <= 0) return;
             const pct = (cur / dur) * 100;
             document.getElementById('progressFill').style.width = `${{pct}}%`;
             document.getElementById('currentTime').innerText = formatTime(cur);
@@ -808,6 +855,7 @@ def resource_type_generator_node(state: AgentState) -> Dict[str, Any]:
         
         function seekAudio(e) {{
             if (!audio) return;
+            if (!isFinite(audio.duration) || audio.duration <= 0) return;
             const bar = document.getElementById('progressBar');
             const rect = bar.getBoundingClientRect();
             const clickX = e.clientX - rect.left;

@@ -16,14 +16,16 @@ _profile_ttl = 300  # 5 分钟
 _delay_ms = 2000    # 延迟双删间隔 2 秒
 
 _redis_client: Optional[redis.Redis] = None
+_redis_checked = False  # 是否已尝试过连接（无论成功失败，只检查一次）
 
 # ==================== Redis 读写 ====================
 
 
 def _get_redis() -> Optional[redis.Redis]:
-    global _redis_client
-    if _redis_client is not None:
+    global _redis_client, _redis_checked
+    if _redis_checked:
         return _redis_client
+    _redis_checked = True
     try:
         _redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True, socket_connect_timeout=2)
         _redis_client.ping()

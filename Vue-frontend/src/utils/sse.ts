@@ -17,6 +17,9 @@ export interface SSEHandlers {
   onProgress?: (content: string) => void
   onChunk?: (content: string) => void
   onStreamText?: (content: string) => void
+  onThinking?: (agent: string, content: string) => void
+  onThinkingStart?: (agent: string, content: string) => void
+  onThinkingChunk?: (content: string) => void
   onResourceStreamStart?: (placeholders: Array<{ id: number; type: string; title: string }>) => void
   onResourceStreamText?: (resourceId: number, content: string) => void
   onResourceStreamFailed?: (resourceId: number) => void
@@ -31,7 +34,7 @@ export interface SSEHandlers {
   onResourceTypeGenerated?: (resource: GeneratedResourceRef) => void
   onStreamingResource?: (resource: { id: number; type: string; title: string }, content: string) => void
   onRecommendations?: (data: any[]) => void
-  onNeedConfirmation?: (message: string, taskBreakdown: any) => void
+  onNeedConfirmation?: (message: string, taskBreakdown: any, confirmationType?: string) => void
   onDone?: () => void
   onError?: (error: string) => void
 }
@@ -58,6 +61,15 @@ export function createSSEConnection(
           break
         case 'stream_text':
           handlers.onStreamText?.(data.content)
+          break
+        case 'thinking':
+          handlers.onThinking?.(data.agent, data.content)
+          break
+        case 'thinking_start':
+          handlers.onThinkingStart?.(data.agent, data.content)
+          break
+        case 'thinking_chunk':
+          handlers.onThinkingChunk?.(data.content)
           break
         case 'resource_stream_text':
           handlers.onResourceStreamText?.(data.resource_id, data.content)
@@ -108,7 +120,7 @@ export function createSSEConnection(
           source.close()
           break
         case 'need_confirmation':
-          handlers.onNeedConfirmation?.(data.message || '请确认', data.task_breakdown)
+          handlers.onNeedConfirmation?.(data.message || '请确认', data.task_breakdown, data.confirmation_type)
           break
         case 'resource_generated':
           handlers.onResourceGenerated?.(data.resources || [])
@@ -131,7 +143,7 @@ export function createSSEConnection(
   }
 
   // Listen for custom event types (question, progress, done, error, etc.)
-  const customEvents = ['question', 'progress', 'profile_update', 'profile_complete', 'done', 'error', 'chunk', 'format_chunk', 'resource', 'resource_trigger', 'resource_generated', 'resource_type_generated', 'resource_stream_update', 'plan', 'modules', 'resource_stream_start', 'resource_stream_text', 'resource_stream_failed']
+  const customEvents = ['question', 'progress', 'thinking', 'thinking_start', 'thinking_chunk', 'profile_update', 'profile_complete', 'done', 'error', 'chunk', 'format_chunk', 'resource', 'resource_trigger', 'resource_generated', 'resource_type_generated', 'resource_stream_update', 'plan', 'modules', 'resource_stream_start', 'resource_stream_text', 'resource_stream_failed']
   for (const eventType of customEvents) {
     source.addEventListener(eventType, (event: MessageEvent) => {
       handleSSEData(event.data)

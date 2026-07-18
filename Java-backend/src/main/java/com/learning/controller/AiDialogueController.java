@@ -1,5 +1,7 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.Result;
 import com.learning.entity.AiDialogue;
 import com.learning.service.AiDialogueService;
@@ -30,7 +32,8 @@ public class AiDialogueController {
         String conversationText = (String) body.get("conversationText");
         String dialogueType = (String) body.get("dialogueType");
         String intentType = (String) body.get("intentType");
-        return Result.success(dialogueService.createDialogue(userId, sessionId, planId, conversationText, dialogueType, intentType));
+        String conversationContext = (String) body.get("conversationContext");
+        return Result.success(dialogueService.createDialogue(userId, sessionId, planId, conversationText, dialogueType, intentType, conversationContext));
     }
 
     @Operation(summary = "内部接口：软删除对话记录")
@@ -78,10 +81,14 @@ public class AiDialogueController {
     @GetMapping("/api/dialogue/history")
     public Result<List<AiDialogue>> getDialogueHistory(
             Authentication authentication,
-            @RequestParam Long planId,
+            @RequestParam(required = false) Long planId,
+            @RequestParam(required = false) String intentType,
             @RequestParam(defaultValue = "200") int limit) {
         Long userId = (Long) authentication.getPrincipal();
-        return Result.success(dialogueService.getHistoryByPlan(userId, planId, limit));
+        if (intentType != null && !intentType.isEmpty()) {
+            return Result.success(dialogueService.getHistory(userId, null, intentType, limit));
+        }
+        return Result.success(dialogueService.getHistoryByPlan(userId, planId != null ? planId : 0, limit));
     }
 
     @Operation(summary = "获取会话列表")
@@ -103,6 +110,9 @@ public class AiDialogueController {
     }
 
     @Operation(summary = "删除会话")
+    @OperationLog(type = OperationType.DIALOGUE_DELETE_SESSION, module = "Dialogue",
+            desc = "'删除对话会话: ' + #sessionId",
+            resourceId = "#sessionId")
     @DeleteMapping("/api/dialogue/session/{sessionId}")
     public Result<Void> deleteSession(@PathVariable String sessionId) {
         dialogueService.deleteBySession(sessionId);
@@ -113,6 +123,29 @@ public class AiDialogueController {
     @PutMapping("/api/dialogue/session/{sessionId}/link-plan/{planId}")
     public Result<Void> linkSessionToPlan(@PathVariable String sessionId, @PathVariable Long planId) {
         dialogueService.linkSessionToPlan(sessionId, planId);
+        return Result.success();
+    }
+
+    @Operation(summary = "删除单条消息")
+    @OperationLog(type = OperationType.DIALOGUE_DELETE_MESSAGE, module = "Dialogue",
+            desc = "'删除对话消息ID: ' + #id",
+            resourceId = "#id?.toString()")
+    @DeleteMapping("/api/dialogue/{id}")
+    public Result<Void> deleteMessage(Authentication authentication, @PathVariable Long id) {
+        Long userId = (Long) authentication.getPrincipal();
+        dialogueService.deleteUserDialogue(id, userId);
+        return Result.success();
+    }
+
+    @Operation(summary = "批量删除消息")
+    @OperationLog(type = OperationType.DIALOGUE_BATCH_DELETE, module = "Dialogue", desc = "批量删除对话消息")
+    @DeleteMapping("/api/dialogue/batch")
+    public Result<Void> deleteMessages(Authentication authentication, @RequestBody Map<String, List<Long>> body) {
+        Long userId = (Long) authentication.getPrincipal();
+        List<Long> ids = body.get("ids");
+        if (ids != null && !ids.isEmpty()) {
+            dialogueService.deleteUserDialogueBatch(ids, userId);
+        }
         return Result.success();
     }
 }

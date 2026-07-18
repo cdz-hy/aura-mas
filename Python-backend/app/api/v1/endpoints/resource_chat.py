@@ -14,24 +14,47 @@ import json
 import logging
 import asyncio
 import threading
+import time
 from datetime import datetime
 from typing import AsyncGenerator
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from app.services.db.java_client import java_client
 from app.graph.learning_graph import get_learning_graph
-from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR, NODE_ANIMATION_SKILL_GENERATOR, NODE_HUMAN_CONFIRM
+from app.agents.schemas import AgentState, NODE_RESOURCE_TYPE_GENERATOR, NODE_ANIMATION_SKILL_GENERATOR, NODE_HUMAN_CONFIRM, NODE_WAIT_USER_REPLY, NODE_KB_CONFIRM
 from app.prompts import QUIZ_GRADER_PROMPT
 from app.agents.profile_maintainer import profile_maintainer_node
 from app.agents.conversation_compressor import build_chat_history_with_context, async_compress_and_save
 from app.schemas.sse_bridge import graph_step_to_sse
 from app.utils.profile_utils import ensure_learning_behavior_fields
 from app.utils.token_recorder import record_from_mimo
-from app.services.stream_state import update_stream_text, mark_stream_done, mark_stream_error, request_stop, check_stop, clear_stop
+from app.services.stream_state import update_stream_text, mark_stream_done, mark_stream_error, request_stop, check_stop, clear_stop, add_thinking, append_thinking_chunk
 from app.utils import stream_registry
 
 logger = logging.getLogger("api.resource_chat")
 router = APIRouter()
+
+
+def _persist_confirmation_if_needed(sse_item: str, user_id: int, session_id: str, plan_id_int: int):
+    """检测 SSE 中的 need_confirmation 事件，将 AI 确认消息持久化到数据库"""
+    if not sse_item or '"need_confirmation"' not in sse_item:
+        return
+    try:
+        import re
+        m = re.search(r'data:\s*(\{.*\})', sse_item)
+        if m:
+            d = json.loads(m.group(1))
+            msg = d.get("message", "")
+            confirm_type = d.get("confirmation_type", "task_breakdown")
+            if msg:
+                intent_type = "kb_check" if confirm_type == "kb_check" else "plan_chat"
+                java_client.create_dialogue(
+                    user_id=user_id, session_id=session_id,
+                    conversation_text=msg, dialogue_type="AI",
+                    plan_id=plan_id_int, intent_type=intent_type,
+                )
+    except Exception as e:
+        logger.warning(f"持久化确认消息失败: {e}")
 
 
 def _is_confirmation_message(message: str) -> bool:
@@ -103,6 +126,7 @@ def _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, us
                                 placeholder["id"],
                                 json.dumps(module_data, ensure_ascii=False),
                                 status=2,
+                                module_type=placeholder.get("type"),
                             )
                             try:
                                 res_task = java_client.create_generation_task(
@@ -182,19 +206,63 @@ def _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, us
                 logger.info(f"[增量保存] 已保存 {len(unpassed)} 个无占位的通过模块")
 
 
-def _collect_stream_text(sse_data: str, ai_response_parts: list, session_id: str) -> list:
-    """从 SSE 事件中提取流式文本并更新 stream_state"""
-    if '"chunk"' in sse_data or '"stream_text"' in sse_data:
+def _collect_stream_events(sse_data: str, bg_state: dict, session_id: str):
+    """从 SSE 事件中提取流式文本及思考过程并更新状态"""
+    if '"chunk"' in sse_data:
         try:
             d = json.loads(sse_data.replace("data: ", "").strip())
             content = d.get("content", "")
             if content:
-                ai_response_parts.append(content)
-                accumulated = "".join(ai_response_parts)
+                if "chunk_accumulator" not in bg_state:
+                    bg_state["chunk_accumulator"] = []
+                bg_state["chunk_accumulator"].append(content)
+                accumulated = "".join(bg_state["chunk_accumulator"])
                 update_stream_text(session_id, accumulated, "chat")
         except Exception:
             pass
-    return ai_response_parts
+    elif '"node_content"' in sse_data:
+        try:
+            d = json.loads(sse_data.replace("data: ", "").strip())
+            content = d.get("content", "")
+            if content:
+                bg_state["ai_response_parts"].append(content)
+                accumulated = "".join(bg_state["ai_response_parts"])
+                update_stream_text(session_id, accumulated, "chat")
+        except Exception:
+            pass
+    elif '"thinking_start"' in sse_data:
+        try:
+            d = json.loads(sse_data.replace("data: ", "").strip())
+            agent = d.get("agent", "")
+            content = d.get("content", "")
+            if "thinkings" not in bg_state:
+                bg_state["thinkings"] = []
+            bg_state["thinkings"].append({"agent": agent, "content": content})
+            add_thinking(session_id, agent, content)
+        except Exception:
+            pass
+    elif '"thinking_chunk"' in sse_data:
+        try:
+            d = json.loads(sse_data.replace("data: ", "").strip())
+            content = d.get("content", "")
+            if content and bg_state.get("thinkings"):
+                bg_state["thinkings"][-1]["content"] += content
+                append_thinking_chunk(session_id, content)
+        except Exception:
+            pass
+    elif '"thinking"' in sse_data:
+        try:
+            d = json.loads(sse_data.replace("data: ", "").strip())
+            if "content" in d:
+                agent = d.get("agent", "")
+                content = d["content"]
+                if "thinkings" not in bg_state:
+                    bg_state["thinkings"] = []
+                bg_state["thinkings"].append({"agent": agent, "content": content})
+                # 同步写入 stream_state，供刷新后恢复
+                add_thinking(session_id, agent, content)
+        except Exception:
+            pass
 
 
 @router.get("/chat")
@@ -204,6 +272,8 @@ async def plan_chat(
     message: str = Query(..., description="用户消息"),
     session_id: str = Query("", description="会话 ID"),
     task_breakdown: str = Query("", description="前端回传的任务分解 JSON（确认时）"),
+    current_module_id: str = Query("", description="当前正在学习的模块ID"),
+    current_module_title: str = Query("", description="当前模块标题"),
 ):
     """
     计划关联 AI 对话 - SSE 流式输出
@@ -239,6 +309,31 @@ async def plan_chat(
 
     logger.info(f"[计划对话] 用户 {user_id}, 计划 {plan_id}, 会话 {session_id}")
     logger.info(f"[计划对话] 消息: {message[:100]}")
+
+    current_module_id_int = int(current_module_id) if current_module_id and current_module_id.isdigit() else 0
+    source_resource_content = ""
+    current_module_order = 0
+    current_node_id = ""
+    if current_module_id_int:
+        try:
+            current_resource = await asyncio.to_thread(java_client.get_resource_by_id, current_module_id_int)
+            current_module_order, source_resource_content = _extract_source_resource_context(
+                current_resource,
+                fallback_title=current_module_title,
+                fallback_description="",
+                plan_id=plan_id_int,
+            )
+            # 从已有资源的 moduleData 中提取 node_id
+            try:
+                md = current_resource.get("moduleData") or current_resource.get("module_data") or {}
+                if isinstance(md, str):
+                    md = json.loads(md)
+                current_node_id = md.get("node_id") or md.get("nodeId") or ""
+            except Exception:
+                pass
+            logger.info(f"[计划对话] 获取到当前模块内容长度: {len(source_resource_content)}, order: {current_module_order}, node_id: {current_node_id}")
+        except Exception as e:
+            logger.warning(f"[计划对话] 获取当前模块内容失败: {e}")
 
     # 获取用户画像（同步调用，放到线程池）
     user_profile = {}
@@ -289,18 +384,29 @@ async def plan_chat(
     except Exception:
         pass
 
-    # ── 恢复路径检测：checkpointer 中是否有中断在 human_confirm 的状态 ──
+    # ── 恢复路径检测：checkpointer 中是否有中断的状态 ──
     _can_resume = False
+    _resume_node = None
     graph = get_learning_graph()
     config = {"configurable": {"thread_id": session_id}}
-    if breakdown_confirmed or human_feedback:
-        try:
-            existing = graph.get_state(config)
-            if existing and existing.next and NODE_HUMAN_CONFIRM in existing.next:
+    
+    try:
+        existing = graph.get_state(config)
+        if existing and existing.next:
+            if NODE_HUMAN_CONFIRM in existing.next:
                 _can_resume = True
-                logger.info(f"[计划对话] 检测到中断状态，将从 checkpointer 恢复")
-        except Exception:
-            pass
+                _resume_node = NODE_HUMAN_CONFIRM
+                logger.info(f"[计划对话] 检测到中断状态，将从 checkpointer 恢复 (human_confirm)")
+            elif NODE_KB_CONFIRM in existing.next:
+                _can_resume = True
+                _resume_node = NODE_KB_CONFIRM
+                logger.info(f"[计划对话] 检测到中断状态，将从 checkpointer 恢复 (kb_confirm)")
+            elif NODE_WAIT_USER_REPLY in existing.next:
+                _can_resume = True
+                _resume_node = NODE_WAIT_USER_REPLY
+                logger.info(f"[计划对话] 检测到中断状态，将从 checkpointer 恢复 (wait_user_reply)")
+    except Exception:
+        pass
 
     if _can_resume:
         # ── 恢复路径：aupdate_state + astream(None) ──
@@ -310,8 +416,10 @@ async def plan_chat(
         if breakdown_confirmed and parsed_breakdown and plan_id_int:
             modules = parsed_breakdown.get("modules", [])
             if modules:
-                placeholder_map = _create_placeholder_resources(plan_id_int, modules)
-                logger.info(f"[占位资源] 已创建 {len(placeholder_map)} 个占位记录")
+                # 有 current_module_order 时用 fixed_order，确保新资源与原模块同 moduleOrder
+                fixed = current_module_order if len(modules) == 1 and current_module_order else None
+                placeholder_map = _create_placeholder_resources(plan_id_int, modules, fixed)
+                logger.info(f"[占位资源-恢复] 已创建 {len(placeholder_map)} 个占位记录, fixed_order={fixed}")
 
         bg_state = {
             "events": [],
@@ -337,13 +445,17 @@ async def plan_chat(
 
             # sse_callback 线程安全：从后台线程 put 到 async queue
             def _threadsafe_cb(data):
+                if data and isinstance(data, str):
+                    _collect_stream_events(data, bg_state, session_id)
                 loop.call_soon_threadsafe(_queue.put_nowait, data)
 
             # 注入占位回调（graph 节点内部调用）
             def _create_placeholder_callback(modules: list) -> dict:
                 if not plan_id_int or not modules:
                     return {}
-                ph_map = _create_placeholder_resources(plan_id_int, modules)
+                # 单模块时用 fixed_order，新资源与原模块同 moduleOrder
+                fixed = current_module_order if len(modules) == 1 and current_module_order else None
+                ph_map = _create_placeholder_resources(plan_id_int, modules, fixed)
                 if ph_map:
                     bg_state["placeholder_map"] = ph_map
                     stream_registry.update_placeholder_map(session_id, ph_map)
@@ -375,17 +487,35 @@ async def plan_chat(
                             )
                             logger.info(f"[对话流-恢复] 推送已创建的 {len(placeholder_map)} 个占位记录到前端")
 
-                        await graph_inner.aupdate_state(config, {
+                        update_payload = {
                             "user_message": message,
-                            "human_feedback": None if breakdown_confirmed else (human_feedback or message),
-                            "task_breakdown_confirmed": breakdown_confirmed,
-                            "needs_human_confirm": False,
                             "sse_callback": _threadsafe_cb,
                             "create_placeholder_callback": _create_placeholder_callback,
                             "placeholder_resource_map": placeholder_map,
                             "chat_history": chat_history,
                             "user_profile": user_profile,
-                        })
+                        }
+                        
+                        if _resume_node == NODE_HUMAN_CONFIRM:
+                            update_payload["human_feedback"] = None if breakdown_confirmed else (human_feedback or message)
+                            update_payload["task_breakdown_confirmed"] = breakdown_confirmed
+                            update_payload["needs_human_confirm"] = False
+
+                        elif _resume_node == NODE_KB_CONFIRM:
+                            # 按钮确认（前端发送固定文案）走快速路径，自然语言交给节点 LLM 判断
+                            if message in ("继续生成", "确认，开始生成学习资源"):
+                                update_payload["kb_confirmed"] = True
+                                update_payload["human_feedback"] = None
+                            else:
+                                update_payload["kb_confirmed"] = False
+                                update_payload["human_feedback"] = message
+                            update_payload["needs_human_confirm"] = False
+                            logger.info(f"[计划对话-KB确认] 用户回复: {message[:80]}")
+
+                        # 如果是 wait_user_reply 恢复，仅更新 user_message 等基础信息即可
+                        # 图会正常执行从 wait_user_reply 路由到 controller_node，controller 就能读到新的 user_message
+
+                        await graph_inner.aupdate_state(config, update_payload)
                         async for event in graph_inner.astream(None, config=config, stream_mode="updates"):
                             if check_stop(session_id):
                                 _threadsafe_cb(None)  # sentinel
@@ -395,17 +525,16 @@ async def plan_chat(
                                     continue
                                 _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, user_id, session_id, emit=_threadsafe_cb)
                                 # module 事件已由 sse_callback 通过 resource_stream_text 实时推送，跳过避免重复
-                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") != "module"]
+                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") not in ("module", "thinking")]
                                 filtered_output = {**node_output, "stream_events": filtered_events}
                                 for sse_data in graph_step_to_sse(node_name, filtered_output):
-                                    bg_state["ai_response_parts"] = _collect_stream_text(sse_data, bg_state["ai_response_parts"], session_id)
                                     _persist_profile_update(sse_data, user_id)
                                     _threadsafe_cb(sse_data)
 
                     asyncio.run(_do_resume())
                     _bg_save_resources(bg_state, plan_id_int, user_id, session_id, message, chat_history, user_profile, chat_task_id, emit=_threadsafe_cb)
                     _save_plain_text_reply(bg_state["breakdown_confirmed"], bg_state["generated_resource_info"],
-                                           bg_state["ai_response_parts"], user_id, session_id, plan_id_int)
+                                           bg_state["ai_response_parts"], user_id, session_id, plan_id_int, bg_state.get("thinkings"))
                 except Exception as e:
                     logger.error(f"[对话流-恢复] 线程异常: {e}", exc_info=True)
                     mark_stream_error(session_id, str(e))
@@ -429,19 +558,26 @@ async def plan_chat(
             threading.Thread(target=_run_graph, daemon=True).start()
 
             # 实时消费 queue：节点内部的 sse_callback 事件立即 yield
+            _completed_normally = False
             try:
                 while True:
                     item = await _queue.get()
                     if item is _sentinel:
+                        yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
+                        _completed_normally = True
                         break
                     if item is None:
                         # stopped 信号
                         yield f'data: {json.dumps({"type": "done", "stopped": True}, ensure_ascii=False)}\n\n'
+                        _completed_normally = True
                         break
+                    _persist_confirmation_if_needed(item, user_id, session_id, plan_id_int)
                     yield item
             finally:
-                # 客户端断开连接或发生异常时，主动触发停止信号，通知后台线程停止大模型调用
-                request_stop(session_id)
+                # 客户端断开连接时不停止后台线程，让生成继续运行
+                # 刷新后前端通过 recoverStreaming 轮询 stream_state 恢复显示
+                # 用户主动停止通过 POST /api/ai/stop 调用 request_stop
+                pass
 
     else:
         # ── 新建路径：构造 initial_state 从头执行 ──
@@ -451,8 +587,10 @@ async def plan_chat(
         if breakdown_confirmed and parsed_breakdown and plan_id_int:
             modules = parsed_breakdown.get("modules", [])
             if modules:
-                placeholder_map = _create_placeholder_resources(plan_id_int, modules)
-                logger.info(f"[占位资源] 已创建 {len(placeholder_map)} 个占位记录")
+                # 有 current_module_order 时用 fixed_order，确保新资源与原模块同 moduleOrder
+                fixed = current_module_order if len(modules) == 1 and current_module_order else None
+                placeholder_map = _create_placeholder_resources(plan_id_int, modules, fixed)
+                logger.info(f"[占位资源] 已创建 {len(placeholder_map)} 个占位记录, fixed_order={fixed}")
 
         from app.utils.goal_utils import resolve_session_learning_goal
         _checkpoint_learning_goal = resolve_session_learning_goal(plan_id_int, session_id)
@@ -473,6 +611,9 @@ async def plan_chat(
             "task_id": chat_task_id,
             "session_id": session_id,
             "user_message": message,
+            "current_module_id": int(current_module_id) if current_module_id and current_module_id.isdigit() else None,
+            "current_module_title": current_module_title,
+            "current_module_order": current_module_order,
             "human_feedback": human_feedback,
             "chat_history": chat_history,
             "user_profile": user_profile,
@@ -507,6 +648,7 @@ async def plan_chat(
             "max_iterations": 15,
             "accumulated_context": "",
             "placeholder_resource_map": placeholder_map,
+            "source_resource_content": source_resource_content,
         }
 
         bg_state = {
@@ -533,6 +675,8 @@ async def plan_chat(
 
             # sse_callback 线程安全：从后台线程 put 到 async queue
             def _threadsafe_cb(data):
+                if data and isinstance(data, str):
+                    _collect_stream_events(data, bg_state, session_id)
                 loop.call_soon_threadsafe(_queue.put_nowait, data)
 
             # 注入 sse_callback（graph 节点内部调用）
@@ -542,7 +686,23 @@ async def plan_chat(
             def _create_placeholder_callback(modules: list) -> dict:
                 if not plan_id_int or not modules:
                     return {}
-                ph_map = _create_placeholder_resources(plan_id_int, modules)
+                # 如果 current_module_order 为 0，尝试从 current_module_id 获取
+                effective_order = current_module_order
+                if not effective_order and current_module_id_int:
+                    try:
+                        res = java_client.get_resource_by_id(current_module_id_int)
+                        effective_order = res.get("moduleOrder", 0) or 0
+                        logger.info(f"[占位回调] 从资源 {current_module_id_int} 获取 moduleOrder={effective_order}")
+                    except Exception as e:
+                        logger.warning(f"[占位回调] 获取资源 moduleOrder 失败: {e}")
+                # 对于类型资源生成（单模块），必须使用 fixed_order 确保在同一模块下
+                if len(modules) == 1:
+                    fixed_order = effective_order if effective_order else None
+                else:
+                    fixed_order = None
+                logger.info(f"[占位回调] effective_order={effective_order}, fixed_order={fixed_order}")
+
+                ph_map = _create_placeholder_resources(plan_id_int, modules, fixed_order)
                 if ph_map:
                     bg_state["placeholder_map"] = ph_map
                     stream_registry.update_placeholder_map(session_id, ph_map)
@@ -576,17 +736,16 @@ async def plan_chat(
                                     continue
                                 _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, user_id, session_id, emit=_threadsafe_cb)
                                 # module 事件已由 sse_callback 通过 resource_stream_text 实时推送，跳过避免重复
-                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") != "module"]
+                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") not in ("module", "thinking")]
                                 filtered_output = {**node_output, "stream_events": filtered_events}
                                 for sse_data in graph_step_to_sse(node_name, filtered_output):
-                                    bg_state["ai_response_parts"] = _collect_stream_text(sse_data, bg_state["ai_response_parts"], session_id)
                                     _persist_profile_update(sse_data, user_id)
                                     _threadsafe_cb(sse_data)
 
                     asyncio.run(_do_run())
                     _bg_save_resources(bg_state, plan_id_int, user_id, session_id, message, chat_history, user_profile, chat_task_id, emit=_threadsafe_cb)
                     _save_plain_text_reply(bg_state["breakdown_confirmed"], bg_state["generated_resource_info"],
-                                           bg_state["ai_response_parts"], user_id, session_id, plan_id_int)
+                                           bg_state["ai_response_parts"], user_id, session_id, plan_id_int, bg_state.get("thinkings"))
                 except Exception as e:
                     logger.error(f"[对话流] 线程异常: {e}", exc_info=True)
                     mark_stream_error(session_id, str(e))
@@ -610,18 +769,25 @@ async def plan_chat(
             threading.Thread(target=_run_graph, daemon=True).start()
 
             # 实时消费 queue：节点内部的 sse_callback 事件立即 yield
+            _completed_normally = False
             try:
                 while True:
                     item = await _queue.get()
                     if item is _sentinel:
+                        yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
+                        _completed_normally = True
                         break
                     if item is None:
                         yield f'data: {json.dumps({"type": "done", "stopped": True}, ensure_ascii=False)}\n\n'
+                        _completed_normally = True
                         break
+                    _persist_confirmation_if_needed(item, user_id, session_id, plan_id_int)
                     yield item
             finally:
-                # 客户端断开连接或发生异常时，主动触发停止信号，通知后台线程停止大模型调用
-                request_stop(session_id)
+                # 客户端断开连接时不停止后台线程，让生成继续运行
+                # 刷新后前端通过 recoverStreaming 轮询 stream_state 恢复显示
+                # 用户主动停止通过 POST /api/ai/stop 调用 request_stop
+                pass
 
     def _bg_save_resources(bg_state, plan_id_int, user_id, session_id, message, chat_history, user_profile, chat_task_id, emit=None):
         """图执行完成后保存资源和记录"""
@@ -632,11 +798,11 @@ async def plan_chat(
         if bs["generated_content"] and not bs["module_list"] and not bs["orchestrated_content"]:
             gc = bs["generated_content"]
             bs["module_list"] = [{
-                "module_order": 1,
+                "module_order": current_module_order or 1,
                 "module_id": gc.get("module_id", 1),
                 "title": gc.get("title", ""),
                 "content": gc.get("content", ""),
-                "module_type": _normalize_module_type(gc.get("content_type", "text")),
+                "module_type": _normalize_module_type(gc.get("module_type") or gc.get("content_type") or "text"),
                 "key_points": gc.get("key_points", []),
                 "images": gc.get("images", []),
                 "references": gc.get("references", []),
@@ -654,7 +820,7 @@ async def plan_chat(
             new_modules = [m for m in bs["module_list"]
                            if m.get("module_order") not in bs["saved_module_orders"]]
             if new_modules:
-                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"])
+                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"], placeholder_map=bs.get("placeholder_map"), fixed_order=current_module_order or None, node_id=current_node_id or None)
                 for idx, rid in enumerate(new_ids):
                     mod = new_modules[idx] if idx < len(new_modules) else {}
                     bs["generated_resource_info"].append({
@@ -673,12 +839,20 @@ async def plan_chat(
                     except Exception:
                         pass
                 logger.info(f"[资源持久化] 保存 {len(new_modules)} 个新增模块")
+            breakdown_payload = bs.get("new_breakdown") or bs.get("orchestrated_content")
+            if not breakdown_payload and bs.get("module_list"):
+                breakdown_payload = {"modules": bs["module_list"]}
+            if breakdown_payload:
+                profile_bg = ""
+                if isinstance(user_profile, dict):
+                    profile_bg = str(user_profile.get("learning_background") or user_profile.get("background") or "")
+                _try_sync_knowledge_tree(plan_id_int, user_id, breakdown_payload, profile_bg)
 
         if not bs["breakdown_confirmed"] and bs["module_list"] and plan_id_int:
             new_modules = [m for m in bs["module_list"]
                            if m.get("module_order") not in bs["saved_module_orders"]]
             if new_modules:
-                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"])
+                new_ids = _save_modules_as_resources(plan_id_int, new_modules, bs["orchestrated_content"], placeholder_map=bs.get("placeholder_map"), fixed_order=current_module_order or None, node_id=current_node_id or None)
                 for idx, rid in enumerate(new_ids):
                     mod = new_modules[idx] if idx < len(new_modules) else {}
                     bs["generated_resource_info"].append({
@@ -696,9 +870,27 @@ async def plan_chat(
                     except Exception:
                         pass
                 logger.info(f"[资源持久化] 保存 {len(new_modules)} 个网络搜索资源")
+            if bs.get("module_list"):
+                breakdown_payload = {"modules": bs["module_list"]}
+                profile_bg = ""
+                if isinstance(user_profile, dict):
+                    profile_bg = str(user_profile.get("learning_background") or user_profile.get("background") or "")
+                _try_sync_knowledge_tree(plan_id_int, user_id, breakdown_payload, profile_bg)
 
         if bs["quiz_questions"] and plan_id_int:
-            quiz_res_id = _save_quiz_resource(plan_id_int, bs["quiz_questions"], bs["quiz_config"])
+            placeholder_id = None
+            for key, ph in bs.get("placeholder_map", {}).items():
+                if ph.get("type") == "quiz":
+                    placeholder_id = ph.get("id")
+                    break
+
+            quiz_res_id = _save_quiz_resource(
+                plan_id_int, 
+                bs["quiz_questions"], 
+                bs["quiz_config"], 
+                module_order=current_module_order if current_module_order else None,
+                placeholder_id=placeholder_id
+            )
             if quiz_res_id:
                 bs["generated_resource_info"].append({
                     "id": quiz_res_id,
@@ -722,10 +914,14 @@ async def plan_chat(
                 "resources": bs["generated_resource_info"],
             }
             try:
+                conversation_context = None
+                if bs.get("thinkings"):
+                    conversation_context = json.dumps({"thinkings": bs["thinkings"]}, ensure_ascii=False)
                 result = java_client.create_dialogue(
                     user_id=user_id, session_id=session_id,
                     conversation_text=json.dumps(dialogue_data, ensure_ascii=False),
                     dialogue_type="AI", plan_id=plan_id_int, intent_type="resource_generated",
+                    conversation_context=conversation_context,
                 )
                 dialogue_id = result.get("data", {}).get("id") if isinstance(result, dict) else None
                 if dialogue_id and bs["generated_resource_info"]:
@@ -757,11 +953,50 @@ async def plan_chat(
             user_id=user_id, session_id=session_id, plan_id=plan_id_int,
         )), daemon=True).start()
 
+        # 知识图谱异步更新 (仅限图文类资源)
+        has_text_resource = any(r.get("type") in ["document", "text"] for r in bs.get("generated_resource_info", []))
+        if bs.get("generated_resource_info") and bs.get("orchestrated_content") and has_text_resource:
+            from app.graph.knowledge_updater_graph import get_knowledge_updater_graph
+            def _async_knowledge_updater():
+                try:
+                    # 优先取图文类资源的ID
+                    text_resources = [r for r in bs["generated_resource_info"] if r.get("type") in ["document", "text"] and r.get("id")]
+                    if not text_resources:
+                        return
+                    resource_id = min(r["id"] for r in text_resources)
+                    
+                    resource_text_to_pass = bs["orchestrated_content"]
+                    if isinstance(resource_text_to_pass, dict):
+                        texts = []
+                        if "title" in resource_text_to_pass:
+                            texts.append(f"# {resource_text_to_pass['title']}")
+                        for m in resource_text_to_pass.get("modules", []):
+                            if "content" in m:
+                                texts.append(m["content"])
+                        resource_text_to_pass = "\n\n".join(texts)
+                    
+                    updater_state = {
+                        "user_id": user_id,
+                        "resource_id": resource_id,
+                        "resource_text": resource_text_to_pass
+                    }
+                    updater_graph = get_knowledge_updater_graph()
+                    updater_graph.invoke(updater_state)
+                except Exception as e:
+                    logger.error(f"知识图谱异步更新失败: {e}")
+            threading.Thread(target=_async_knowledge_updater, daemon=True).start()
+
         # 最终事件
         if bs["generated_resource_info"]:
             _emit(
                 f'data: {json.dumps({"type": "resource_generated", "resources": bs["generated_resource_info"]}, ensure_ascii=False)}\n\n'
             )
+            # 资源生成完成，将计划状态从"生成中(1)"或"确认中(2)"更新为"学习中(3)"
+            if plan_id_int:
+                try:
+                    java_client.update_plan_status(plan_id_int, 3)
+                except Exception:
+                    pass
         _emit(
             f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
         )
@@ -777,6 +1012,41 @@ async def plan_chat(
     )
 
 
+def _build_knowledge_tree_node_context(plan_id: int, user_id: int, node_id: str) -> str:
+    """从知识树节点构建大纲路径上下文，供内容生成使用。"""
+    if not node_id:
+        return ""
+    try:
+        tree_payload = java_client.get_tree_by_plan(plan_id, user_id)
+        nodes = tree_payload.get("nodes") or []
+        node_map = {n.get("id"): n for n in nodes if n.get("id")}
+        node = node_map.get(node_id)
+        if not node:
+            return ""
+
+        path_titles: list[str] = []
+        current = node
+        seen: set[str] = set()
+        while current and current.get("id") not in seen:
+            seen.add(current["id"])
+            if current.get("title"):
+                path_titles.insert(0, current["title"])
+            parent_id = current.get("parentId")
+            current = node_map.get(parent_id) if parent_id else None
+
+        parts = [f"知识树节点: {node.get('title', '')}"]
+        if path_titles:
+            parts.append(f"大纲路径: {' > '.join(path_titles)}")
+        if node.get("summary"):
+            parts.append(f"节点摘要: {node['summary']}")
+        if node.get("content"):
+            parts.append(f"节点说明: {node['content'][:800]}")
+        return "\n".join(parts)
+    except Exception as e:
+        logger.warning(f"[资源生成] 读取知识树节点上下文失败: {e}")
+        return ""
+
+
 @router.get("/resource/generate")
 async def generate_single_resource(
     ticket: str = Query(..., description="Java 后端签发的短期 Ticket"),
@@ -786,6 +1056,8 @@ async def generate_single_resource(
     title: str = Query("", description="模块标题"),
     description: str = Query("", description="模块描述"),
     session_id: str = Query("", description="会话 ID（前端传入，为空时自动生成）"),
+    user_message: str = Query("", description="用户自定义指令，如果为空则使用默认模板"),
+    node_id: str = Query("", description="知识树节点 ID（从大纲生成时传入）"),
 ):
     """
     单资源生成 - SSE 流式输出
@@ -805,6 +1077,7 @@ async def generate_single_resource(
 
     plan_id_int = int(plan_id) if plan_id and plan_id.isdigit() else 0
     module_id_int = int(module_id) if module_id and module_id.isdigit() else 0
+    generated_parent_id = module_id_int or None
 
     logger.info(f"[资源生成] 用户 {user_id}, 计划 {plan_id_int}, 模块 {module_id_int}")
     logger.info(f"[资源生成] 类型: {type}, 标题: {title}")
@@ -856,16 +1129,43 @@ async def generate_single_resource(
     except Exception as e:
         logger.warning(f"[资源生成] 获取当前资源信息失败: {e}")
 
+    # 知识树大纲节点上下文（从左侧大纲触发生成时注入）
+    tree_node_context = ""
+    if node_id:
+        tree_node_context = await asyncio.to_thread(
+            _build_knowledge_tree_node_context, plan_id_int, user_id, node_id
+        )
+        if tree_node_context:
+            logger.info(f"[资源生成] 知识树节点 {node_id} 上下文已注入")
+
     # 构造以资源生成为目标的初始状态
-    resource_message = f"请为以下模块生成{type}类型的学习资源: {title}"
-    if description:
-        resource_message += f"\n模块描述: {description}"
+    if user_message:
+        resource_message = f"用户指令: {user_message}\n目标模块: {title}"
+        if description:
+            resource_message += f"\n模块描述: {description}"
+        db_resource_message = user_message
+    else:
+        resource_message = f"请为以下模块生成{type}类型的学习资源: {title}"
+        if description:
+            resource_message += f"\n模块描述: {description}"
+        type_name_map = {
+            "quiz": "测验",
+            "mindmap": "思维导图",
+            "code": "代码示例",
+            "summary": "总结",
+            "video": "教学视频",
+            "animation": "动画",
+            "podcast": "播客"
+        }
+        db_resource_message = f"请为模块「{title}」生成{type_name_map.get(type, type)}资源"
+    if tree_node_context:
+        resource_message += f"\n\n{tree_node_context}"
 
     # quiz 和 video 走独立流程，mindmap/summary/code 走类型资源生成，animation 走动画节点，其他走 RAG + 编排
     is_quiz = (type == "quiz")
     is_video = (type == "video")
     is_animation = (type == "animation")
-    is_type_resource = type in ("mindmap", "summary", "code", "podcast")
+    is_type_resource = type in ("mindmap", "summary", "code", "podcast", "pptx")
 
     # 路由决策
     if is_quiz:
@@ -881,8 +1181,9 @@ async def generate_single_resource(
         intent = "generate_resource"
         next_node = "rag_retriever"
 
-    # 优先使用前端传入的 session_id，保持会话连续性
-    effective_session_id = session_id if session_id else f"resource-{plan_id_int}-{module_id_int}"
+    # 资源生成必须使用独立 thread_id，避免与聊天会话的 checkpointer 状态冲突
+    # 如果复用聊天 session_id，checkpoint 中旧的 task_breakdown_confirmed=False 会覆盖 initial_state
+    effective_session_id = f"resource-{plan_id_int}-{module_id_int}-{type}-{int(datetime.now().timestamp())}"
 
     # 创建资源生成任务，用于关联 Token 消耗记录
     generation_task_id = None
@@ -898,6 +1199,16 @@ async def generate_single_resource(
     except Exception as e:
         logger.warning(f"[资源生成] 创建生成任务失败: {e}")
 
+    # 记录用户消息（单资源生成通过按钮点击触发，也计入对话历史）
+    try:
+        await asyncio.to_thread(
+            java_client.create_dialogue,
+            user_id, session_id, db_resource_message, "USER", plan_id_int,
+            intent_type="generate_resource",
+        )
+    except Exception as e:
+        logger.warning(f"记录用户生成资源消息失败: {e}")
+
     initial_state: AgentState = {
         "user_id": user_id,
         "plan_id": plan_id_int,
@@ -912,11 +1223,17 @@ async def generate_single_resource(
         "needs_human_confirm": False,
         "profile_update_needed": False,
         "learning_goal": resource_message,
+        "current_module_id": module_id_int,
+        "current_module_title": title,
+        "current_module_order": current_module_order,
         "task_breakdown": {
+            "title": title,
             "modules": [{
                 "module_id": module_id,
+                "module_order": current_module_order,
                 "title": title,
                 "description": description,
+                "node_id": node_id or None,
                 "resources": [{"resource_type": type}],
             }]
         },
@@ -942,12 +1259,11 @@ async def generate_single_resource(
         "error": None,
         "iteration_count": 0,
         "max_iterations": 10,
-        "accumulated_context": "",
+        "accumulated_context": tree_node_context,
         "source_resource_content": source_resource_content,
         "placeholder_resource_map": {1: {"id": module_id_int, "type": type, "title": title}},
     }
 
-    session_id = effective_session_id
 
     # SSE 实时回调 + 业务状态追踪（复用与 /chat 一致的 bg_state 模式）
     bg_state = {
@@ -1008,9 +1324,31 @@ async def generate_single_resource(
                             yield f'data: {json.dumps({"type": "error", "content": item.get("error")}, ensure_ascii=False)}\n\n'
 
                 if videos:
-                    res_id = _save_video_resource(plan_id_int, videos, current_module_order)
+                    res_id = _save_video_resource(
+                        plan_id_int, videos, current_module_order,
+                        parent_id=generated_parent_id, node_id=node_id,
+                    )
                     if res_id:
-                        yield f'data: {json.dumps({"type": "resource_generated", "resources": [{"id": res_id, "type": "video", "title": f"{title} - 教学视频"}]}, ensure_ascii=False)}\n\n'
+                        res_info = [{"id": res_id, "type": "video", "title": f"{title} - 教学视频"}]
+                        yield f'data: {json.dumps({"type": "resource_generated", "resources": res_info}, ensure_ascii=False)}\n\n'
+                        # 记录AI回复对话
+                        try:
+                            summary = f"为您找到 {len(videos)} 个相关的教学视频。"
+                            dialogue_data = {
+                                "type": "resource_generated",
+                                "summary": summary,
+                                "resources": res_info,
+                            }
+                            result = java_client.create_dialogue(
+                                user_id=user_id, session_id=session_id,
+                                conversation_text=json.dumps(dialogue_data, ensure_ascii=False),
+                                dialogue_type="AI", plan_id=plan_id_int, intent_type="resource_generated",
+                            )
+                            dialogue_id = result.get("data", {}).get("id") if isinstance(result, dict) else None
+                            if dialogue_id:
+                                java_client.update_dialogue_resource_id(dialogue_id, res_id)
+                        except Exception as e:
+                            logger.warning(f"记录视频资源生成AI对话失败: {e}")
                 else:
                     yield f'data: {json.dumps({"type": "progress", "content": "未找到相关教学视频，建议直接在视频平台搜索"}, ensure_ascii=False)}\n\n'
                 yield f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n'
@@ -1023,6 +1361,8 @@ async def generate_single_resource(
                 return
 
             # quiz 和其他类型走 LangGraph
+            clear_stop(session_id)
+            update_stream_text(session_id, "", "chat")
             yield f'data: {json.dumps({"type": "progress", "content": "开始生成资源..."}, ensure_ascii=False)}\n\n'
 
             _sentinel = object()
@@ -1030,13 +1370,81 @@ async def generate_single_resource(
             loop = asyncio.get_event_loop()
 
             def _threadsafe_cb(data):
+                if data and isinstance(data, str):
+                    _collect_stream_events(data, bg_state, session_id)
                 loop.call_soon_threadsafe(_queue.put_nowait, data)
 
             initial_state["sse_callback"] = _threadsafe_cb
+            real_placeholder_id = None
+            # 只有当前端占位类型与目标类型一致时才复用，否则创建新占位
+            can_reuse_frontend = module_id_int and current_module_order and _placeholder_type_matches(module_id_int, type)
+            if is_quiz:
+                if can_reuse_frontend:
+                    ph_map = {
+                        current_module_order: {
+                            "id": module_id_int,
+                            "type": type,
+                            "title": title,
+                            "moduleOrder": current_module_order,
+                        }
+                    }
+                    real_placeholder_id = module_id_int
+                    stream_start_id = module_id_int
+                    placeholder_order = current_module_order
+                else:
+                    ph_map = _create_placeholder_resources(
+                        plan_id_int,
+                        [{"title": title, "description": description, "resources": [{"resource_type": type}]}],
+                        fixed_order=current_module_order if current_module_order else None,
+                        parent_id=generated_parent_id,
+                        node_id=node_id,
+                    )
+                    real_placeholder_id = list(ph_map.values())[0].get("id") if ph_map else None
+                    stream_start_id = real_placeholder_id if real_placeholder_id else module_id_int
+                    placeholder_order = list(ph_map.values())[0].get("moduleOrder") if ph_map else current_module_order
+
+                initial_state["placeholder_resource_map"] = ph_map
+                bg_state["placeholder_map"] = ph_map
+
+                # 注入占位回调（为了 quiz_generator）
+                def _create_placeholder_callback(modules: list) -> dict:
+                    return ph_map
+                initial_state["create_placeholder_callback"] = _create_placeholder_callback
+            else:
+                if can_reuse_frontend:
+                    ph_map = {
+                        current_module_order: {
+                            "id": module_id_int,
+                            "type": type,
+                            "title": title,
+                            "moduleOrder": current_module_order,
+                        }
+                    }
+                    real_placeholder_id = module_id_int
+                    stream_start_id = module_id_int
+                    placeholder_order = current_module_order
+                else:
+                    ph_map = _create_placeholder_resources(
+                        plan_id_int,
+                        [{"title": title, "description": description, "resources": [{"resource_type": type}]}],
+                        fixed_order=current_module_order if current_module_order else None
+                    )
+                    real_placeholder_id = list(ph_map.values())[0].get("id") if ph_map else None
+                    stream_start_id = real_placeholder_id if real_placeholder_id else module_id_int
+                    placeholder_order = list(ph_map.values())[0].get("moduleOrder") if ph_map else current_module_order
+
+                initial_state["placeholder_resource_map"] = ph_map
+                bg_state["placeholder_map"] = ph_map
 
             # 提前推送占位记录，通知前端初始化对应的资源流式区域
             _threadsafe_cb(
-                f'data: {json.dumps({"type": "resource_stream_start", "content": json.dumps([{"id": module_id_int, "type": type, "title": title}], ensure_ascii=False)}, ensure_ascii=False)}\n\n'
+                f'data: {json.dumps({"type": "resource_stream_start", "content": json.dumps([{"id": stream_start_id, "type": type, "title": title, "moduleOrder": placeholder_order}], ensure_ascii=False)}, ensure_ascii=False)}\n\n'
+            )
+            
+            stream_registry.register_session(
+                session_id,
+                sse_callback=_threadsafe_cb,
+                placeholder_resource_map=ph_map,
             )
 
             def _run_graph():
@@ -1044,7 +1452,7 @@ async def generate_single_resource(
                 try:
                     async def _do_run():
                         graph = get_learning_graph()
-                        config = {"configurable": {"thread_id": session_id}}
+                        config = {"configurable": {"thread_id": effective_session_id}}
                         async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
                             if check_stop(session_id):
                                 _threadsafe_cb(None)
@@ -1054,10 +1462,9 @@ async def generate_single_resource(
                                     continue
                                 _update_bg_state_from_node(bg_state, node_output, node_name, plan_id_int, user_id, session_id, emit=_threadsafe_cb)
                                 # module 事件已由 sse_callback 通过 resource_stream_text 实时推送，跳过避免重复
-                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") != "module"]
+                                filtered_events = [e for e in node_output.get("stream_events", []) if e.get("event_type") not in ("module", "thinking")]
                                 filtered_output = {**node_output, "stream_events": filtered_events}
                                 for sse_data in graph_step_to_sse(node_name, filtered_output):
-                                    bg_state["ai_response_parts"] = _collect_stream_text(sse_data, bg_state["ai_response_parts"], session_id)
                                     _persist_profile_update(sse_data, user_id)
                                     _threadsafe_cb(sse_data)
 
@@ -1075,11 +1482,11 @@ async def generate_single_resource(
                     if generated_content and not module_list and not orchestrated_content:
                         gc = generated_content
                         module_list = [{
-                            "module_order": 1,
+                            "module_order": current_module_order or 1,
                             "module_id": gc.get("module_id", 1),
                             "title": gc.get("title", ""),
                             "content": gc.get("content", ""),
-                            "module_type": _normalize_module_type(gc.get("module_type") or gc.get("content_type", "text")),
+                            "module_type": _normalize_module_type(gc.get("module_type") or gc.get("content_type") or "text"),
                             "key_points": gc.get("key_points", []),
                             "images": gc.get("images", []),
                             "references": gc.get("references", []),
@@ -1099,10 +1506,19 @@ async def generate_single_resource(
                         quiz_questions, quiz_config,
                         generated_content,
                         current_module_order, session_id,
+                        bg_state.get("thinkings", []),
+                        placeholder_id=real_placeholder_id,
+                        parent_id=generated_parent_id,
+                        node_id=node_id,
                     )
                     if res_info:
                         bg_state["generated_resource_info"].extend(res_info)
                         _threadsafe_cb(f'data: {json.dumps({"type": "resource_generated", "resources": res_info}, ensure_ascii=False)}\n\n')
+                        # 单资源生成完成，更新计划状态为"学习中(3)"
+                        try:
+                            java_client.update_plan_status(plan_id_int, 3)
+                        except Exception:
+                            pass
                     _threadsafe_cb(f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n')
 
                     if generation_task_id:
@@ -1119,6 +1535,9 @@ async def generate_single_resource(
                             plan_id_int, user_id, is_quiz, type, title, description,
                             [], None, None, None, None,
                             current_module_order, session_id,
+                            bg_state.get("thinkings", []),
+                            parent_id=generated_parent_id,
+                            node_id=node_id,
                         )
                     if generation_task_id:
                         try:
@@ -1126,6 +1545,9 @@ async def generate_single_resource(
                         except Exception:
                             pass
                 finally:
+                    stream_registry.unregister_session(session_id)
+                    mark_stream_done(session_id)
+                    clear_stop(session_id)
                     _threadsafe_cb(_sentinel)
 
             threading.Thread(target=_run_graph, daemon=True).start()
@@ -1144,9 +1566,8 @@ async def generate_single_resource(
                         break
                     yield item
             finally:
-                # 仅在客户端断开连接或异常退出时触发停止信号，正常完成不触发
-                if not _completed_normally:
-                    request_stop(session_id)
+                # 客户端断开连接时不停止后台线程，让生成继续运行
+                pass
 
         except Exception as e:
             logger.error(f"[资源生成] 异常: {e}", exc_info=True)
@@ -1217,6 +1638,17 @@ async def submit_quiz(
         )
 
     logger.info(f"[测验批改] 用户 {user_id}, 资源 {resource_id_int}, 共 {len(raw_questions)} 题")
+
+    try:
+        user_profile = await asyncio.to_thread(java_client.get_user_profile, user_id)
+        if isinstance(user_profile.get("learning_behavior"), str):
+            try:
+                user_profile["learning_behavior"] = json.loads(user_profile["learning_behavior"])
+            except Exception:
+                user_profile["learning_behavior"] = {}
+    except Exception as e:
+        logger.warning(f"[测验批改] 获取用户画像失败: {e}")
+        user_profile = {}
 
     async def stream():
         from app.agents.llm_factory import get_quiz_grader_llm
@@ -1289,7 +1721,7 @@ async def submit_quiz(
                 result = await loop.run_in_executor(
                     None, lambda: llm.chat_json_stream(messages, on_chunk=on_token, max_tokens=2048)
                 )
-                record_from_mimo(llm, user_id, "quiz_grading_inline", generation_task_id)
+                record_from_mimo(llm, user_id, "quiz_grading_inline")
             except Exception as e:
                 logger.error(f"[测验批改] Q{idx + 1} LLM 批改异常: {e}")
                 result = {"score": 0, "is_correct": False, "feedback": f"批改异常: {str(e)}",
@@ -1388,7 +1820,7 @@ async def submit_quiz(
                     "user_id": user_id,
                     "user_message": f"完成测验，得分 {overall_score}",
                     "chat_history": [],
-                    "user_profile": {},
+                    "user_profile": user_profile,
                     "quiz_result": summary,
                 }, daemon=True).start()
 
@@ -1431,6 +1863,8 @@ async def tutor_chat(
     resource_id: str = Query(..., description="当前模块资源 ID"),
     message: str = Query(..., description="用户消息"),
     session_id: str = Query("", description="会话 ID"),
+    context_type: str = Query("", description="页面上下文类型"),
+    context_data: str = Query("", description="页面上下文数据 JSON"),
 ):
     """
     智能辅导对话 - SSE 流式输出
@@ -1470,8 +1904,24 @@ async def tutor_chat(
 
     # 事件队列（tutor_agent 通过 sse_callback 推入）
     _sse_events = []
+    _thinkings = []
+    _thinking_chunks = []
     def _sse_callback(data):
         _sse_events.append(data)
+        if '"thinking"' in data:
+            try:
+                d = json.loads(data.replace("data: ", "").strip())
+                if d.get("type") == "thinking" and "content" in d:
+                    _thinkings.append({"agent": d.get("agent", ""), "content": d["content"]})
+            except Exception:
+                pass
+        elif '"thinking_chunk"' in data:
+            try:
+                d = json.loads(data.replace("data: ", "").strip())
+                if d.get("type") == "thinking_chunk" and "content" in d:
+                    _thinking_chunks.append(d["content"])
+            except Exception:
+                pass
 
     async def event_stream() -> AsyncGenerator[str, None]:
         try:
@@ -1487,9 +1937,19 @@ async def tutor_chat(
                     resource_id=resource_id_int,
                     user_message=message,
                     sse_callback=_sse_callback,
+                    context_type=context_type,
+                    context_data=context_data,
                 ))
                 if res:
                     try:
+                        conversation_context = None
+                        if _thinkings or _thinking_chunks:
+                            context_obj = {}
+                            if _thinkings:
+                                context_obj["thinkings"] = _thinkings
+                            if _thinking_chunks:
+                                context_obj["thinking_process"] = "".join(_thinking_chunks)
+                            conversation_context = json.dumps(context_obj, ensure_ascii=False)
                         java_client.create_dialogue(
                             user_id=user_id,
                             session_id=session_id,
@@ -1497,6 +1957,7 @@ async def tutor_chat(
                             dialogue_type="AI",
                             plan_id=plan_id_int,
                             intent_type="chat",
+                            conversation_context=conversation_context,
                         )
                     except Exception as e:
                         logger.warning(f"[智能辅导] 记录 AI 回复失败: {e}")
@@ -1732,6 +2193,18 @@ def _build_resource_summary(module_list: list, quiz_questions: list = None, orch
     return "；".join(parts) if parts else "学习资源生成完成"
 
 
+def _placeholder_type_matches(placeholder_id: int, target_type: str) -> bool:
+    """检查占位资源的 module_type 是否与目标类型一致，不一致时不应覆盖"""
+    if not placeholder_id:
+        return False
+    try:
+        existing = java_client.get_resource_by_id(placeholder_id)
+        existing_type = (existing.get("moduleType") or existing.get("module_type") or "text") if existing else "text"
+        return existing_type == target_type
+    except Exception:
+        return True  # 查询失败时保守处理，允许更新
+
+
 def _persist_generated_resources(
     plan_id_int: int,
     user_id: int,
@@ -1746,12 +2219,16 @@ def _persist_generated_resources(
     generated_content: dict = None,
     current_module_order: int = 0,
     session_id: str = "",
+    thinkings: list = None,
+    placeholder_id: int = None,
+    parent_id: int = None,
+    node_id: str = "",
 ) -> list:
     """将生成的资源持久化到数据库（与 SSE 解耦，确保断开连接时也能保存）"""
     generated_resource_info = []
 
     # 类型资源（mindmap/summary/code/animation）：直接从 generated_content 保存
-    is_direct_generated_resource = resource_type in ("mindmap", "summary", "code", "animation")
+    is_direct_generated_resource = resource_type in ("mindmap", "summary", "code", "animation", "pptx")
     if is_direct_generated_resource and generated_content and plan_id_int:
         module_data = {
             "title": generated_content.get("title", title),
@@ -1760,40 +2237,85 @@ def _persist_generated_resources(
             "module_title": generated_content.get("title", title),
             "references": generated_content.get("references", []),
         }
+        if node_id:
+            module_data["node_id"] = node_id
         if resource_type == "animation":
             module_data["html"] = generated_content.get("html", generated_content.get("content", ""))
             module_data["animationSpec"] = generated_content.get("animationSpec", {})
             module_data["duration"] = generated_content.get("duration")
             module_data["metadata"] = generated_content.get("metadata", {})
+            module_data["narration"] = generated_content.get("narration")
+            module_data["videoExports"] = generated_content.get("videoExports", {})
+        if resource_type == "pptx":
+            module_data["html"] = generated_content.get("content", "")
+            module_data["pptx_filename"] = generated_content.get("pptx_filename", "")
+            module_data["pptx_url"] = generated_content.get("pptx_url", "")
+            module_data["slide_count"] = generated_content.get("slide_count", 0)
+        module_data = _attach_node_metadata(module_data, node_id)
         try:
-            result = java_client.create_resource(
-                plan_id=plan_id_int,
-                module_type=resource_type,
-                module_data=json.dumps(module_data, ensure_ascii=False),
-                module_order=current_module_order,
-                status=2,
-                generated_by_agent="animation_skill_generator" if resource_type == "animation" else "resource_type_generator",
-            )
-            new_resource_id = result.get("id") if isinstance(result, dict) else 0
-            if new_resource_id:
+            # 如果有占位资源且类型匹配，更新它；类型不同时创建新资源
+            if _placeholder_type_matches(placeholder_id, resource_type):
+                java_client.update_resource_content(
+                    placeholder_id,
+                    json.dumps(module_data, ensure_ascii=False),
+                    status=2,
+                    module_type=resource_type,
+                )
                 generated_resource_info.append({
-                    "id": new_resource_id,
+                    "id": placeholder_id,
                     "type": resource_type,
                     "title": module_data.get("title", title),
                 })
-                logger.info(f"[资源持久化] 已创建{resource_type}补充资源，ID={new_resource_id}，moduleOrder={current_module_order}")
+                logger.info(f"[资源持久化] 已更新{resource_type}占位资源，ID={placeholder_id}，moduleOrder={current_module_order}")
+            else:
+                result = java_client.create_resource(
+                    plan_id=plan_id_int,
+                    module_type=resource_type,
+                    module_data=json.dumps(module_data, ensure_ascii=False),
+                    module_order=current_module_order,
+                    parent_id=parent_id,
+                    status=2,
+                    generated_by_agent="animation_skill_generator" if resource_type == "animation" else "resource_type_generator",
+                )
+                new_resource_id = result.get("id") if isinstance(result, dict) else 0
+                if new_resource_id:
+                    generated_resource_info.append({
+                        "id": new_resource_id,
+                        "type": resource_type,
+                        "title": module_data.get("title", title),
+                    })
+                    logger.info(f"[资源持久化] 已创建{resource_type}补充资源，ID={new_resource_id}，moduleOrder={current_module_order}")
         except Exception as e:
             logger.warning(f"[资源持久化] 创建{resource_type}补充资源失败: {e}")
 
     elif is_quiz:
         if quiz_questions and plan_id_int:
-            quiz_res_id = _save_quiz_resource(plan_id_int, quiz_questions, quiz_config, module_order=current_module_order)
+            quiz_res_id = _save_quiz_resource(
+                plan_id_int,
+                quiz_questions,
+                quiz_config,
+                module_order=current_module_order,
+                placeholder_id=placeholder_id,
+                parent_id=parent_id,
+                node_id=node_id,
+            )
             if quiz_res_id:
                 generated_resource_info.append({
                     "id": quiz_res_id,
                     "type": "quiz",
                     "title": (quiz_config or {}).get("title", title),
                 })
+        elif placeholder_id:
+            # 题目生成失败：标记占位为失败状态，避免卡在"生成中"
+            try:
+                java_client.update_resource_content(
+                    placeholder_id,
+                    json.dumps({"title": title, "content": "题目生成失败"}, ensure_ascii=False),
+                    status=3,
+                )
+                logger.warning(f"[资源持久化] 题目生成失败，占位 {placeholder_id} 已标记为失败")
+            except Exception as e:
+                logger.warning(f"[资源持久化] 标记占位失败: {e}")
     else:
         if (orchestrated_content or module_list) and plan_id_int:
             module_data = {}
@@ -1806,8 +2328,12 @@ def _persist_generated_resources(
                     module_data["references"] = orchestrated_content["references"]
             if module_list:
                 module_data["content"] = module_list[0].get("content", "") if module_list else ""
-                if not module_data.get("title"):
-                    module_data["title"] = module_list[0].get("title", title)
+                # 优先使用单个模块自身的标题，而非 orchestrated_content 的全局标题
+                module_own_title = module_list[0].get("title")
+                if module_own_title:
+                    module_data["title"] = module_own_title
+                elif not module_data.get("title"):
+                    module_data["title"] = title
                 # 传递图片数据
                 images = module_list[0].get("images", [])
                 if images:
@@ -1818,23 +2344,40 @@ def _persist_generated_resources(
                     module_data["references"] = references
             if not module_data.get("title"):
                 module_data["title"] = title
+            module_data = _attach_node_metadata(module_data, node_id)
             try:
-                result = java_client.create_resource(
-                    plan_id=plan_id_int,
-                    module_type=resource_type,
-                    module_data=json.dumps(module_data, ensure_ascii=False),
-                    module_order=current_module_order,
-                    status=2,
-                    generated_by_agent="content_orchestrator",
-                )
-                new_resource_id = result.get("id") if isinstance(result, dict) else 0
-                if new_resource_id:
+                # 如果有占位资源且类型匹配，更新它；类型不同时创建新资源
+                if _placeholder_type_matches(placeholder_id, resource_type):
+                    java_client.update_resource_content(
+                        placeholder_id,
+                        json.dumps(module_data, ensure_ascii=False),
+                        status=2,
+                        module_type=resource_type,
+                    )
                     generated_resource_info.append({
-                        "id": new_resource_id,
+                        "id": placeholder_id,
                         "type": resource_type,
                         "title": module_data.get("title", title),
                     })
-                    logger.info(f"[资源持久化] 已创建{resource_type}补充资源，ID={new_resource_id}，moduleOrder={current_module_order}")
+                    logger.info(f"[资源持久化] 已更新{resource_type}占位资源，ID={placeholder_id}，moduleOrder={current_module_order}")
+                else:
+                    result = java_client.create_resource(
+                        plan_id=plan_id_int,
+                        module_type=resource_type,
+                        module_data=json.dumps(module_data, ensure_ascii=False),
+                        module_order=current_module_order,
+                        parent_id=parent_id,
+                        status=2,
+                        generated_by_agent="content_orchestrator",
+                    )
+                    new_resource_id = result.get("id") if isinstance(result, dict) else 0
+                    if new_resource_id:
+                        generated_resource_info.append({
+                            "id": new_resource_id,
+                            "type": resource_type,
+                            "title": module_data.get("title", title),
+                        })
+                        logger.info(f"[资源持久化] 已创建{resource_type}补充资源，ID={new_resource_id}，moduleOrder={current_module_order}")
             except Exception as e:
                 logger.warning(f"[资源持久化] 创建{resource_type}补充资源失败: {e}")
 
@@ -1847,14 +2390,25 @@ def _persist_generated_resources(
             "resources": generated_resource_info,
         }
         try:
-            java_client.create_dialogue(
+            conversation_context = None
+            if thinkings:
+                conversation_context = json.dumps({"thinkings": thinkings}, ensure_ascii=False)
+            result = java_client.create_dialogue(
                 user_id=user_id,
                 session_id=session_id,
                 conversation_text=json.dumps(dialogue_data, ensure_ascii=False),
                 dialogue_type="AI",
                 plan_id=plan_id_int,
                 intent_type="resource_generated",
+                conversation_context=conversation_context,
             )
+            dialogue_id = result.get("data", {}).get("id") if isinstance(result, dict) else None
+            if dialogue_id:
+                min_resource_id = min(r["id"] for r in generated_resource_info if r.get("id"))
+                try:
+                    java_client.update_dialogue_resource_id(dialogue_id, min_resource_id)
+                except Exception as e:
+                    logger.warning(f"[资源生成对话] 关联资源ID失败: {e}")
         except Exception as e:
             logger.warning(f"记录资源生成对话失败: {e}")
 
@@ -1923,16 +2477,17 @@ def _search_videos(module_title: str) -> list:
     return videos
 
 
-def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -> int:
+def _save_video_resource(plan_id: int, videos: list, module_order: int = None,
+                         parent_id: int = None, node_id: str = "") -> int:
     """将视频搜索结果保存为 video 类型的学习资源"""
     try:
         if not videos:
             return 0
-        module_data = {
+        module_data = _attach_node_metadata({
             "title": "教学视频",
             "description": "相关教学视频资源",
             "videos": videos,
-        }
+        }, node_id)
         if module_order is None:
             existing = java_client.get_plan_resources(plan_id)
             module_order = max((r.get("moduleOrder", 0) for r in existing), default=0) + 1
@@ -1941,6 +2496,7 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -
             module_type="video",
             module_data=json.dumps(module_data, ensure_ascii=False),
             module_order=module_order,
+            parent_id=parent_id,
             status=2,
             generated_by_agent="video_search",
         )
@@ -1952,13 +2508,96 @@ def _save_video_resource(plan_id: int, videos: list, module_order: int = None) -
         return 0
 
 
+def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None, module_order: int = None,
+                        placeholder_id: int = None, parent_id: int = None, node_id: str = "") -> int:
+    """将生成的题目保存为 quiz 类型的学习资源，返回资源 ID。如果有 placeholder_id 则覆盖更新。"""
+    try:
+        if not questions:
+            return 0
+        config = quiz_config or {}
+        module_data = {
+            "title": config.get("title", "练习题"),
+            "description": config.get("description", ""),
+            "questions": [
+                {
+                    "index": i,
+                    "type": q.get("question_type", "short_answer"),
+                    "question": q.get("question_text", ""),
+                    "options": q.get("options"),
+                    "correctAnswer": q.get("correct_answer", ""),
+                    "explanation": q.get("explanation", ""),
+                    "difficulty": q.get("difficulty", 3),
+                    "points": 1,
+                }
+                for i, q in enumerate(questions)
+            ],
+            "totalPoints": len(questions),
+            "estimatedMinutes": len(questions) * 2,
+        }
+        module_data = _attach_node_metadata(module_data, node_id)
+
+        if _placeholder_type_matches(placeholder_id, "quiz"):
+            java_client.update_resource_content(
+                placeholder_id,
+                json.dumps(module_data, ensure_ascii=False),
+                status=2,
+                module_type="quiz",
+            )
+            return placeholder_id
+
+        # 使用指定的 moduleOrder（与所属模块一致），否则取最大值 +1
+        if module_order is None:
+            existing = java_client.get_plan_resources(plan_id)
+            module_order = max((r.get("moduleOrder", 0) for r in existing), default=0) + 1
+        result = java_client.create_resource(
+            plan_id=plan_id,
+            module_type="quiz",
+            module_data=json.dumps(module_data, ensure_ascii=False),
+            module_order=module_order,
+            parent_id=parent_id,
+            status=2,
+            generated_by_agent="quiz_generator",
+        )
+        return result.get("id") if isinstance(result, dict) else 0
+    except Exception as e:
+        logger.warning(f"[资源持久化] 保存题目资源失败: {e}")
+        return 0
+
+
+def _try_sync_knowledge_tree(plan_id: int, user_id: int, breakdown, learning_background: str = "") -> None:
+    """任务分解确认后，将模块结构同步到知识树。"""
+    if not plan_id or not user_id or not breakdown or not isinstance(breakdown, dict):
+        return
+    from app.services.knowledge_tree_ai import get_knowledge_tree_ai_service
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            get_knowledge_tree_ai_service().sync_task_breakdown(
+                user_id=user_id,
+                plan_id=plan_id,
+                breakdown=breakdown,
+                learning_background=learning_background,
+            )
+            logger.info("[知识树] 已同步 task_breakdown 到 plan %s", plan_id)
+            return
+        except Exception as exc:
+            if attempt < max_retries - 1:
+                logger.warning("[知识树] sync task_breakdown 失败，第 %d 次重试: %s", attempt + 1, exc)
+                time.sleep(1)
+            else:
+                logger.error("[知识树] sync task_breakdown 最终失败 (plan %s): %s", plan_id, exc)
+
+
 def _save_plain_text_reply(breakdown_confirmed, generated_resource_info,
-                           ai_response_parts, user_id, session_id, plan_id_int):
+                           ai_response_parts, user_id, session_id, plan_id_int, thinkings=None):
     """未生成资源时，保存纯文本 AI 回复"""
     if not breakdown_confirmed and not generated_resource_info:
         ai_response = "\n".join(ai_response_parts) if ai_response_parts else "处理完成"
         if ai_response and ai_response != "处理完成":
             try:
+                conversation_context = None
+                if thinkings:
+                    conversation_context = json.dumps({"thinkings": thinkings}, ensure_ascii=False)
                 java_client.create_dialogue(
                     user_id=user_id,
                     session_id=session_id,
@@ -1966,6 +2605,7 @@ def _save_plain_text_reply(breakdown_confirmed, generated_resource_info,
                     dialogue_type="AI",
                     plan_id=plan_id_int,
                     intent_type="plan_chat",
+                    conversation_context=conversation_context,
                 )
             except Exception as e:
                 logger.warning(f"记录 AI 回复失败: {e}")
@@ -2023,7 +2663,14 @@ def _async_profile_maintenance_sync(
         logger.error(f"[画像维护] 更新失败: {str(e)}", exc_info=True)
 
 
-VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap", "animation"}
+VALID_MODULE_TYPES = {"text", "image", "diagram", "code", "summary", "mindmap", "animation", "quiz", "video", "podcast", "pptx"}
+
+
+def _attach_node_metadata(module_data: dict, node_id: str = "") -> dict:
+    if node_id:
+        module_data["nodeId"] = node_id
+        module_data["node_id"] = node_id
+    return module_data
 
 
 def _normalize_module_type(module_type) -> str:
@@ -2075,75 +2722,41 @@ def _save_breakdown_dialogue(user_id: int, session_id: str, plan_id: int, breakd
         logger.warning(f"[任务分解持久化] 保存失败: {e}")
 
 
-def _save_quiz_resource(plan_id: int, questions: list, quiz_config: dict = None, module_order: int = None) -> int:
-    """将生成的题目保存为 quiz 类型的学习资源，返回资源 ID"""
-    try:
-        if not questions:
-            return 0
-        config = quiz_config or {}
-        module_data = {
-            "title": config.get("title", "练习题"),
-            "description": config.get("description", ""),
-            "questions": [
-                {
-                    "index": i,
-                    "type": q.get("question_type", "short_answer"),
-                    "question": q.get("question_text", ""),
-                    "options": q.get("options"),
-                    "correctAnswer": q.get("correct_answer", ""),
-                    "explanation": q.get("explanation", ""),
-                    "difficulty": q.get("difficulty", 3),
-                    "points": 1,
-                }
-                for i, q in enumerate(questions)
-            ],
-            "totalPoints": len(questions),
-            "estimatedMinutes": len(questions) * 2,
-        }
-        # 使用指定的 moduleOrder（与所属模块一致），否则取最大值 +1
-        if module_order is None:
-            existing = java_client.get_plan_resources(plan_id)
-            module_order = max((r.get("moduleOrder", 0) for r in existing), default=0) + 1
-        result = java_client.create_resource(
-            plan_id=plan_id,
-            module_type="quiz",
-            module_data=json.dumps(module_data, ensure_ascii=False),
-            module_order=module_order,
-            status=2,
-            generated_by_agent="quiz_generator",
-        )
-        resource_id = result.get("id") if isinstance(result, dict) else 0
-        logger.info(f"[资源持久化] 已保存题目资源到计划 {plan_id}，共 {len(questions)} 题，ID={resource_id}，moduleOrder={module_order}")
-        return resource_id
-    except Exception as e:
-        logger.warning(f"[资源持久化] 保存题目资源失败: {e}")
-        return 0
-
-
-def _create_placeholder_resources(plan_id: int, modules: list) -> dict:
+def _create_placeholder_resources(plan_id: int, modules: list, fixed_order: int = None,
+                                  parent_id: int = None, node_id: str = "") -> dict:
     """在 learning_resource 表中创建占位记录，返回 {module_order: {id, type, title}} 映射"""
     placeholder_map = {}
     try:
-        existing = java_client.get_plan_resources(plan_id)
-        max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
+        max_order = 0
+        use_fixed_order = fixed_order is not None and fixed_order > 0
+        if not use_fixed_order:
+            existing = java_client.get_plan_resources(plan_id)
+            max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
 
         for i, mod in enumerate(modules):
             module_order = mod.get("module_order", i + 1)
-            module_type = "text"
-            resources = mod.get("resources", [])
-            if resources:
-                module_type = _normalize_module_type(resources[0].get("resource_type", "text"))
+            module_type = mod.get("module_type")
+            if not module_type:
+                resources = mod.get("resources", [])
+                if resources:
+                    module_type = resources[0].get("resource_type", "text")
+                else:
+                    module_type = "text"
+            module_type = _normalize_module_type(module_type)
             title = mod.get("title", f"模块 {module_order}")
-            module_data = {
+            module_data = _attach_node_metadata({
                 "title": title,
                 "description": mod.get("description", ""),
-            }
+            }, node_id)
             try:
+                final_order = fixed_order if use_fixed_order else (max_order + module_order)
+                logger.info(f"[占位资源] 创建模块 {module_order}, type={module_type}, final_order={final_order}")
                 result = java_client.create_resource(
                     plan_id=plan_id,
                     module_type=module_type,
                     module_data=json.dumps(module_data, ensure_ascii=False),
-                    module_order=max_order + module_order,
+                    module_order=final_order,
+                    parent_id=parent_id,
                     status=1,  # 生成中
                     generated_by_agent="content_orchestrator",
                 )
@@ -2153,6 +2766,7 @@ def _create_placeholder_resources(plan_id: int, modules: list) -> dict:
                         "id": res_id,
                         "type": module_type,
                         "title": title,
+                        "moduleOrder": final_order,
                     }
                     # 立即创建 task 记录（resource_id=真实资源ID），确保后端崩溃后前端能检测到卡死
                     try:
@@ -2161,7 +2775,7 @@ def _create_placeholder_resources(plan_id: int, modules: list) -> dict:
                         )
                     except Exception as e:
                         logger.warning(f"[占位资源] 创建 task 记录失败: {e}")
-                    logger.info(f"[占位资源] 创建模块 {module_order} 占位记录，ID={res_id}")
+                    logger.info(f"[占位资源] 创建模块 {module_order} 占位记录，ID={res_id}, moduleOrder={final_order}")
             except Exception as e:
                 logger.warning(f"[占位资源] 创建模块 {module_order} 占位记录失败: {e}")
     except Exception as e:
@@ -2169,8 +2783,8 @@ def _create_placeholder_resources(plan_id: int, modules: list) -> dict:
     return placeholder_map
 
 
-def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_content: dict = None) -> list:
-    """将确认后的学习模块保存为 learning_resource 记录，返回创建的资源ID列表"""
+def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_content: dict = None, placeholder_map: dict = None, fixed_order: int = None, node_id: str = None) -> list:
+    """将确认后的学习模块保存为 learning_resource 记录，如果有对应的占位符则优先更新，返回资源ID列表"""
     try:
         if not module_list:
             return []
@@ -2183,6 +2797,7 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
         max_order = max((r.get("moduleOrder", 0) for r in existing), default=0)
 
         resources = []
+        resource_ids = []
         for mod in sorted_modules:
             module_order_in_list = mod.get("module_order", 0)
             module_type = _normalize_module_type(mod.get("module_type", "text"))
@@ -2196,24 +2811,47 @@ def _save_modules_as_resources(plan_id: int, module_list: list, orchestrated_con
                 "estimated_hours": mod.get("estimated_hours", 2),
                 "references": mod.get("references", []),
             }
+            if node_id:
+                module_data["node_id"] = node_id
             images = mod.get("images", [])
             if images:
                 module_data["images"] = images
-            resources.append({
-                "planId": plan_id,
-                "moduleType": module_type,
-                "moduleData": json.dumps(module_data, ensure_ascii=False),
-                "moduleOrder": max_order + module_order_in_list,
-                "status": 2,
-                "generatedByAgent": "content_orchestrator",
-            })
+
+            placeholder_id = None
+            if placeholder_map and module_order_in_list in placeholder_map:
+                placeholder_id = placeholder_map[module_order_in_list].get("id")
+
+            if placeholder_id:
+                try:
+                    java_client.update_resource_content(
+                        placeholder_id,
+                        json.dumps(module_data, ensure_ascii=False),
+                        status=2,
+                        module_type=module_type,
+                    )
+                    resource_ids.append(placeholder_id)
+                except Exception as e:
+                    logger.warning(f"更新占位资源失败: {e}")
+            else:
+                # fixed_order 存在时用绝对位置，否则用相对偏移
+                final_order = fixed_order if fixed_order else (max_order + module_order_in_list)
+                resources.append({
+                    "planId": plan_id,
+                    "moduleType": module_type,
+                    "moduleData": json.dumps(module_data, ensure_ascii=False),
+                    "moduleOrder": final_order,
+                    "status": 2,
+                    "generatedByAgent": "content_orchestrator",
+                })
 
         if resources:
             result = java_client.create_resources_bulk(resources)
-            resource_ids = [r.get("id") for r in (result or []) if r.get("id")]
-            logger.info(f"[资源持久化] 已保存 {len(resources)} 个学习资源到计划 {plan_id}，编号从 {max_order + 1} 开始")
+            created_ids = [r.get("id") for r in (result or []) if r.get("id")]
+            resource_ids.extend(created_ids)
+            logger.info(f"[资源持久化] 已批量保存 {len(resources)} 个学习资源到计划 {plan_id}，编号从 {max_order + 1} 开始")
             logger.info(f"[资源持久化] 模块顺序: {[mod.get('module_order') for mod in sorted_modules]}")
-            return resource_ids
+            
+        return resource_ids
     except Exception as e:
         logger.warning(f"[资源持久化] 保存模块资源失败: {e}")
     return []
@@ -2289,12 +2927,42 @@ async def get_stream_state(
     """
     查询当前会话的流式输出状态
     前端刷新后轮询此端点，获取已累积的流式文本并恢复动画
+    同时检测图中断状态（kb_confirm / human_confirm），返回待确认信息
     """
     from app.services.stream_state import get_stream_state as _get_state
     state = _get_state(session_id)
     if state is None:
-        return {"data": None}
-    return {"data": state}
+        state = {}
+
+    # 检测图是否有未完成的中断
+    pending_confirmation = None
+    try:
+        graph = get_learning_graph()
+        config = {"configurable": {"thread_id": session_id}}
+        existing = graph.get_state(config)
+        if existing and existing.next:
+            next_nodes = existing.next
+            if NODE_KB_CONFIRM in next_nodes:
+                # 知识库确认中断 — 从 state 中恢复确认消息
+                kb_msg = existing.values.get("kb_check_message", "") if existing.values else ""
+                if not kb_msg:
+                    kb_msg = "知识库中暂无相关资料，生成内容将主要参考网络资源。是否继续？"
+                pending_confirmation = {
+                    "type": "kb_check",
+                    "message": kb_msg,
+                }
+            elif NODE_HUMAN_CONFIRM in next_nodes:
+                # 任务分解确认中断
+                task_breakdown = existing.values.get("task_breakdown") if existing.values else None
+                pending_confirmation = {
+                    "type": "task_breakdown",
+                    "message": "学习路径已生成，请确认",
+                    "task_breakdown": task_breakdown,
+                }
+    except Exception as e:
+        logger.warning("获取流状态异常(已降级): session=%s error=%s", session_id, e)
+
+    return {"data": state, "pending_confirmation": pending_confirmation}
 
 
 @router.post("/stop")
@@ -2307,6 +2975,8 @@ async def stop_generation(
     前端调用后，后台线程会在下一个节点边界检查到停止信号并终止
     """
     request_stop(session_id)
+    # 立即将 stream-state 缓存标记为非流式，防止前端恢复轮询再次检测到 is_streaming=true
+    mark_stream_done(session_id)
     logger.info(f"[停止] 会话 {session_id} 收到停止请求")
 
     # 记录一条对话说明用户主动停止
@@ -2318,6 +2988,30 @@ async def stop_generation(
         pass
 
     return {"data": {"status": "stop_requested"}}
+
+
+def _assert_qiniu_audio_url_allowed(url: str) -> None:
+    """Only proxy audio objects for this project's Qiniu prefixes / bound domains.
+
+    Stored narration URLs may still use a retired CDN host; allow known object
+    path prefixes so rewrite_to_public_url can fetch via the active domain.
+    """
+    from urllib.parse import urlparse
+    from fastapi import HTTPException
+    from app.services.qiniu_client import qiniu_client
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Invalid audio URL")
+
+    path = parsed.path or ""
+    if path.startswith(("/animation-audio/", "/podcast-audio/", "/animation-video/")):
+        return
+
+    host = parsed.netloc.lower()
+    allowed = qiniu_client.allowed_audio_hosts()
+    if host not in allowed:
+        raise HTTPException(status_code=403, detail="Audio host not allowed")
 
 
 @router.get("/proxy-image")
@@ -2335,3 +3029,60 @@ def proxy_image(url: str = Query(..., description="图片 URL")):
         return {"data_url": f"data:{content_type};base64,{b64}"}
     except Exception as e:
         return {"data_url": None, "error": str(e)}
+
+
+@router.get("/proxy-audio")
+def proxy_audio(url: str = Query(..., description="配音音频 URL")):
+    """Proxy narration audio via API origin so the browser does not hit Qiniu directly."""
+    import requests as req
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+    from app.services.qiniu_client import qiniu_client
+
+    _assert_qiniu_audio_url_allowed(url)
+    fetch_url = qiniu_client.rewrite_to_public_url(url)
+
+    try:
+        resp = req.get(fetch_url, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("proxy-audio fetch failed for %s (via %s): %s", url, fetch_url, exc)
+        raise HTTPException(status_code=502, detail=f"Audio fetch failed: {exc}") from exc
+
+    content_type = resp.headers.get("Content-Type", "audio/wav")
+    if ";" in content_type:
+        content_type = content_type.split(";")[0].strip()
+    if not content_type.startswith("audio/") and content_type not in ("application/octet-stream", "binary/octet-stream"):
+        content_type = "audio/wav"
+
+    return Response(
+        content=resp.content,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "Accept-Ranges": "bytes",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+@router.get("/resource/pptx/download/{filename}")
+async def download_pptx(filename: str):
+    """PPT 文件下载接口，直接从本地临时目录返回文件"""
+    import re
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+
+    # 安全校验：只允许合法文件名
+    if not re.match(r'^[a-f0-9]{12}\.pptx$', filename):
+        return {"error": "非法文件名"}
+
+    file_path = Path(__file__).resolve().parent.parent.parent.parent.parent / "temp" / "pptx" / filename
+    if not file_path.exists():
+        return {"error": "文件不存在或已过期"}
+
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=filename,
+    )

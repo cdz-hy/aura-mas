@@ -10,6 +10,8 @@ from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_reviewer_llm
 from app.prompts import REVIEWER_BATCH_PROMPT, REVIEWER_MODULE_PROMPT
 from app.utils.token_recorder import record
+from app.utils import stream_registry
+import json
 
 logger = logging.getLogger("agents.reviewer")
 
@@ -70,7 +72,7 @@ def _review_single_module(
     ]
     
     try:
-        result = llm.chat_json(messages, max_tokens=1536)
+        result = llm.chat_json(messages)
         result["module_order"] = module_order
         result["module_title"] = module_title
         result["_usage_records"] = llm.get_usage_records()
@@ -111,7 +113,33 @@ async def reviewer_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"  [审查智能体] 开始处理")
     logger.info(f"  审查模式: {'模块级别' if use_module_review else '批量RAG'}")
     logger.info(f"  学习目标: {learning_goal[:100]}")
-    
+
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "审查智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在审查内容质量与目标匹配度...")
+
     # 模块级别审查
     if use_module_review:
         result = await _review_modules(module_list, task_breakdown, learning_goal)
@@ -122,7 +150,7 @@ async def reviewer_node(state: AgentState) -> Dict[str, Any]:
             "content_review", state.get("task_id"),
             extra_records=extra_records)
         return result
-    
+
     # 批量 RAG 审查（原有逻辑）
     result = _review_rag_content(rag_chunks, learning_goal)
     extra_records = result.pop("_usage_records", None) or []

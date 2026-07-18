@@ -2,6 +2,7 @@ package com.learning.controller;
 
 import com.learning.common.Result;
 import com.learning.entity.ResourceGenerationTask;
+import com.learning.mapper.ResourceGenerationTaskMapper;
 import com.learning.service.LearningResourceService;
 import com.learning.service.TaskDispatchService;
 import com.learning.service.TaskSseService;
@@ -27,6 +28,7 @@ class TaskControllerTest {
                 taskDispatchService,
                 resourceService,
                 taskSseService,
+                mock(ResourceGenerationTaskMapper.class),
                 new ObjectMapper()
         );
 
@@ -60,6 +62,7 @@ class TaskControllerTest {
                 taskDispatchService,
                 resourceService,
                 taskSseService,
+                mock(ResourceGenerationTaskMapper.class),
                 new ObjectMapper()
         );
 

@@ -1,6 +1,10 @@
 import os
+import logging
 from qiniu import Auth, put_data, etag
 from app.core.config import settings
+
+logger = logging.getLogger("services.oss")
+
 
 class QiniuOSSService:
     def __init__(self):
@@ -24,6 +28,9 @@ class QiniuOSSService:
         if info.status_code == 200:
             # 3. 构造基础 URL (直接返回，不带签名)
             base_url = self.domain if self.domain.endswith('/') else f"{self.domain}/"
-            return f"{base_url}{remote_file_name}"
+            url = f"{base_url}{remote_file_name}"
+            logger.info(f"文件上传成功: {remote_file_name} -> {url}")
+            return url
         else:
+            logger.error(f"七牛云上传失败: {info.text_body}")
             raise Exception(f"七牛云上传失败: {info.text_body}")

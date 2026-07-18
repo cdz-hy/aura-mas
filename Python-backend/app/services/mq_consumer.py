@@ -248,7 +248,7 @@ class MQConsumer:
 
         # 2. 运行 LangGraph 工作流（流式，逐步收集结果）
         # 路由决策：quiz/类型资源/动画/通用资源
-        is_type_resource = module_type in ("mindmap", "summary", "code", "podcast")
+        is_type_resource = module_type in ("mindmap", "summary", "code", "podcast", "pptx")
         is_animation = module_type == "animation"
         if module_type == "quiz":
             intent = "generate_quiz"
@@ -363,10 +363,17 @@ class MQConsumer:
             }
             if is_animation or module_type == "podcast":
                 result_data["html"] = generated_content.get("html", generated_content.get("content", ""))
+            if module_type == "pptx":
+                result_data["html"] = generated_content.get("content", "")
+                result_data["pptx_filename"] = generated_content.get("pptx_filename", "")
+                result_data["pptx_url"] = generated_content.get("pptx_url", "")
+                result_data["slide_count"] = generated_content.get("slide_count", 0)
             if is_animation:
                 result_data["animationSpec"] = generated_content.get("animationSpec", {})
                 result_data["duration"] = generated_content.get("duration")
                 result_data["metadata"] = generated_content.get("metadata", {})
+                result_data["narration"] = generated_content.get("narration")
+                result_data["videoExports"] = generated_content.get("videoExports", {})
             module_data_json = json.dumps(result_data, ensure_ascii=False)
         elif orchestrated or module_list:
             first_module = module_list[0] if module_list else {}

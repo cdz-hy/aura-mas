@@ -2,7 +2,10 @@
 用户画像工具函数
 确保 learning_behavior 字段结构完整，与前端显示匹配
 """
+import logging
 from typing import Dict, Any
+
+logger = logging.getLogger("profile_utils")
 
 
 def get_default_learning_behavior() -> Dict[str, Any]:
@@ -26,6 +29,11 @@ def get_default_learning_behavior() -> Dict[str, Any]:
         # 学习偏好
         "preferred_resource_types": [],    # 偏好的资源类型
         "preferred_quiz_types": [],        # 偏好的题目类型
+        "preferred_quiz_preference": {      # 偏好题目配置
+            "types": [],
+            "count": None,
+            "difficulty": None
+        },
         "goal_orientation": "exam",        # 目标导向: career/exam/interest/skill
         
         # 扩展字段（可选，根据用户行为自动分析）
@@ -73,10 +81,37 @@ def ensure_learning_behavior_fields(learning_behavior: Dict[str, Any]) -> Dict[s
             if not isinstance(learning_behavior[list_field], list):
                 learning_behavior[list_field] = []
 
+    # 确保 preferred_quiz_preference 字段结构完整
+    if "preferred_quiz_preference" not in learning_behavior:
+        learning_behavior["preferred_quiz_preference"] = {
+            "types": [],
+            "count": None,
+            "difficulty": None
+        }
+    else:
+        pref = learning_behavior["preferred_quiz_preference"]
+        if not isinstance(pref, dict):
+            learning_behavior["preferred_quiz_preference"] = {
+                "types": [],
+                "count": None,
+                "difficulty": None
+            }
+        else:
+            if "types" not in pref or not isinstance(pref["types"], list):
+                pref["types"] = []
+            if "count" not in pref:
+                pref["count"] = None
+            if "difficulty" not in pref:
+                pref["difficulty"] = None
+
     # === 清理已废弃的冗余字段 ===
     learning_behavior.pop("felder_silverman", None)
     learning_behavior.pop("weak_points", None)
     learning_behavior.pop("content_preferences", None)
+    learning_behavior.pop("visual_verbal", None)
+    learning_behavior.pop("active_reflective", None)
+    learning_behavior.pop("sensing_intuitive", None)
+    learning_behavior.pop("sequential_global", None)
 
     # 补充其它可能需要的字段默认值
     learning_behavior.setdefault("preferred_quiz_types", [])
@@ -118,7 +153,8 @@ def update_learning_behavior(
         current: 当前的 learning_behavior
         updates: 需要更新的字段和值
             - 学习风格维度: 增量调整（累加到当前值）
-            - 列表字段: 仅输出需要新增的项，系统自动合并到现有列表（只增不删）
+            - 列表字段: 输出需要新增的项，系统自动合并到现有列表
+            - 列表字段_remove: 输出需要删除的项，系统从现有列表中移除
         confidence: 更新的置信度 (0-1)，用于调整学习风格维度的变化幅度
 
     Returns:
@@ -126,7 +162,7 @@ def update_learning_behavior(
     """
     # 确保当前画像字段完整 (会触发首次同步)
     current = ensure_learning_behavior_fields(current)
-    
+
     # 增量调整字段：LLM输出增量值，系统累加到当前值
     INCREMENTAL_FIELDS = {
         # 学习风格维度：范围 [-1, 1]
@@ -143,8 +179,21 @@ def update_learning_behavior(
         "preferred_difficulty": (1.0, 5.0),
     }
 
+    LIST_FIELDS = ["knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types", "preferred_quiz_types"]
+
+    # 先处理删除操作（_remove 后缀的字段）
     for key, value in updates.items():
-        if value is None:
+        if key.endswith("_remove") and isinstance(value, list):
+            base_key = key[:-7]  # 去掉 _remove 后缀
+            if base_key in LIST_FIELDS:
+                existing = current.get(base_key, [])
+                if isinstance(existing, list):
+                    current[base_key] = [item for item in existing if item not in value]
+                    logger.info(f"    删除 {base_key}: {value} -> 剩余 {current[base_key]}")
+
+    # 再处理新增和其他更新
+    for key, value in updates.items():
+        if value is None or key.endswith("_remove"):
             continue
 
         # 映射字段名
@@ -159,8 +208,8 @@ def update_learning_behavior(
                 lo, hi = INCREMENTAL_FIELDS[key]
                 current[key] = round(max(lo, min(hi, new_value)), 4)
 
-        # 列表字段：只增不删，合并新项到现有列表
-        elif key in ["knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types", "preferred_quiz_types"]:
+        # 列表字段：合并新项到现有列表
+        elif key in LIST_FIELDS:
             if isinstance(value, list):
                 existing = current.get(key, [])
                 if not isinstance(existing, list):
@@ -178,13 +227,36 @@ def update_learning_behavior(
                     existing.append(value)
                 current[key] = existing
 
+        # 字典合并字段，如 preferred_quiz_preference
+        elif key == "preferred_quiz_preference":
+            if isinstance(value, dict):
+                current_pref = current.get("preferred_quiz_preference", {})
+                if not isinstance(current_pref, dict):
+                    current_pref = {}
+                
+                # 合并 types 列表
+                new_types = value.get("types", [])
+                existing_types = current_pref.get("types", [])
+                if not isinstance(existing_types, list):
+                    existing_types = []
+                merged_types = list(existing_types)
+                for t in new_types:
+                    if t not in merged_types:
+                        merged_types.append(t)
+                
+                current["preferred_quiz_preference"] = {
+                    "types": merged_types,
+                    "count": value.get("count") if value.get("count") is not None else current_pref.get("count"),
+                    "difficulty": value.get("difficulty") if value.get("difficulty") is not None else current_pref.get("difficulty")
+                }
+
         # 分类字段：直接替换（如 goal_orientation）
         else:
             current[key] = value
-            
+
     # 确保字段完整并清理冗余
     current = ensure_learning_behavior_fields(current)
-    
+
     return current
 
 

@@ -21,7 +21,7 @@ interface SessionStreamState {
   awaitingConfirmation: boolean
   skipNextModulesPush: boolean
   resourceStreamBuffers: Record<number, string>
-  streamingPlaceholders: Array<{ id: number; type: string; title: string }>
+  streamingPlaceholders: Array<{ id: number; type: string; title: string; moduleOrder?: number }>
   isResourceStreaming: boolean
 }
 
@@ -44,7 +44,7 @@ export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([])
   const activeSessionId = ref(localStorage.getItem('chat_activeSessionId') || '')
   const sessionsLoading = ref(false)
-  const messages = ref<Array<{ role: string; content: string; type?: string; breakdown?: any; resources?: GeneratedResourceRef[] }>>([])
+  const messages = ref<Array<{ id?: number; role: string; content: string; type?: string; breakdown?: any; resources?: GeneratedResourceRef[]; thinkings?: Array<{ agent: string, content: string }> }>>([])
 
   // ─── 多会话并发：按 sessionId 隔离流式状态 ───
   const sessionStreams = new Map<string, SessionStreamState>()
@@ -59,6 +59,7 @@ export const useChatStore = defineStore('chat', () => {
   const pendingTaskBreakdown = ref<any>(null)
   const pendingModules = ref<any[]>([])
   const awaitingConfirmation = ref(false)
+  const confirmationType = ref<string>('task_breakdown')  // 'task_breakdown' | 'kb_check'
   let skipNextModulesPush = false
   let isNewlyCreated = false
 
@@ -68,7 +69,7 @@ export const useChatStore = defineStore('chat', () => {
   const lastGeneratedResources = ref<GeneratedResourceRef[] | null>(null)
   const streamingResources = ref<Array<{ resource: { id: number; type: string; title: string }; content: string }>>([])
   const resourceStreamBuffers = ref<Record<number, string>>({})
-  const streamingPlaceholders = ref<Array<{ id: number; type: string; title: string }>>([])
+  const streamingPlaceholders = ref<Array<{ id: number; type: string; title: string; moduleOrder?: number }>>([])
   const isResourceStreaming = ref(false)
   const resourceStreamBuffer = computed(() => {
     const buffers = resourceStreamBuffers.value
@@ -76,9 +77,16 @@ export const useChatStore = defineStore('chat', () => {
     return keys.length > 0 ? buffers[Number(keys[keys.length - 1])] || '' : ''
   })
 
-  const selectedModuleContext = ref<{ title: string; description: string; moduleId: number; planId: number } | null>(null)
+  const selectedModuleContext = ref<{ title: string; description: string; moduleId: number; planId?: number; nodeId?: string; moduleOrder?: number } | null>(null)
 
   let currentPlanId = localStorage.getItem('chat_currentPlanId') || ''
+
+  function _removeEmptyPlaceholder() {
+    const _last = messages.value[messages.value.length - 1]
+    if (_last && _last.role === 'assistant' && !_last.type && !_last.content && (!_last.thinkings || _last.thinkings.length === 0)) {
+      messages.value.pop()
+    }
+  }
 
   // 哪些会话正在流式输出（供侧边栏显示绿点指示）
   // 手动管理而非 computed，因 sessionStreams 为原始 Map 无法被 Vue 追踪
@@ -182,8 +190,59 @@ export const useChatStore = defineStore('chat', () => {
     const sessionId = activeSessionId.value
     if (!sessionId) return false
 
-    // 先检查后端是否有该会话的流式状态
-    const state = await getStreamState(sessionId)
+    // 先检查后端是否有该会话的流式状态或确认中断
+    const { state, pendingConfirmation } = await getStreamState(sessionId)
+
+    // 如果有未完成的确认中断（刷新后恢复），先加载 DB 消息再补充确认卡片
+    if (pendingConfirmation) {
+      // 先从 DB 加载已有消息（包含 _persist_confirmation_if_needed 保存的确认消息）
+      await loadSessions(planId)
+      if (sessionId === activeSessionId.value) {
+        await selectSession(sessionId)
+      }
+
+      // 检查 DB 中是否已有确认卡片（避免重复）
+      const hasConfirmMsg = messages.value.some(
+        (m: any) => m.role === 'assistant' && m.type === 'confirm'
+      )
+
+      if (!hasConfirmMsg) {
+        // DB 中没有确认卡片（可能 _persist_confirmation_if_needed 未执行），补充显示
+        const cType = pendingConfirmation.type || 'task_breakdown'
+        confirmationType.value = cType
+        awaitingConfirmation.value = true
+        if (cType === 'kb_check') {
+          messages.value.push({
+            role: 'assistant',
+            content: pendingConfirmation.message || '知识库中暂无相关资料，是否继续生成？',
+            type: 'confirm',
+            breakdown: null,
+            confirmationType: 'kb_check',
+          })
+        } else {
+          const breakdown = pendingConfirmation.task_breakdown || null
+          pendingTaskBreakdown.value = breakdown
+          messages.value.push({
+            role: 'assistant',
+            content: pendingConfirmation.message || '学习路径已生成，请确认',
+            type: 'confirm',
+            breakdown,
+          })
+        }
+      } else {
+        // DB 中已有确认卡片，只需恢复确认状态
+        const cType = pendingConfirmation.type || 'task_breakdown'
+        confirmationType.value = cType
+        awaitingConfirmation.value = true
+        if (cType !== 'kb_check') {
+          pendingTaskBreakdown.value = pendingConfirmation.task_breakdown || null
+        }
+      }
+
+      streaming.value = false
+      return true
+    }
+
     if (!state || !state.is_streaming) return false
 
     // 后端正流式中，恢复前端状态
@@ -192,30 +251,87 @@ export const useChatStore = defineStore('chat', () => {
     hasStreamText = !!state.text
     _syncStreamingSessions()
 
+    // push 占位 assistant 消息，让三个点动画、思考过程和流式文本在同一个气泡内显示
+    const _placeholder = { role: 'assistant', content: '', thinkings: [] } as any
+    if (streamBuffer.value) {
+      _placeholder.content = streamBuffer.value
+    }
+    if (state.thinkings && state.thinkings.length > 0) {
+      _placeholder.thinkings = [...state.thinkings]
+    }
+    messages.value.push(_placeholder)
+
     // 持续轮询更新
+    _stopRecover()
     _recoverTimer.value = setInterval(async () => {
       try {
-        const s = await getStreamState(sessionId)
+        const { state: s, pendingConfirmation: pc } = await getStreamState(sessionId)
+
+        // 轮询期间也检测确认中断（流式结束后图可能暂停在 confirm 节点）
+        if (pc) {
+          _stopRecover()
+          _removeEmptyPlaceholder()
+          streaming.value = false
+
+          // 去重：检查是否已有确认卡片
+          const hasConfirmMsg = messages.value.some(
+            (m: any) => m.role === 'assistant' && m.type === 'confirm'
+          )
+          const cType = pc.type || 'task_breakdown'
+          confirmationType.value = cType
+          awaitingConfirmation.value = true
+
+          if (!hasConfirmMsg) {
+            if (cType === 'kb_check') {
+              messages.value.push({
+                role: 'assistant',
+                content: pc.message || '知识库中暂无相关资料，是否继续生成？',
+                type: 'confirm',
+                breakdown: null,
+                confirmationType: 'kb_check',
+              })
+            } else {
+              const breakdown = pc.task_breakdown || null
+              pendingTaskBreakdown.value = breakdown
+              messages.value.push({
+                role: 'assistant',
+                content: pc.message || '学习路径已生成，请确认',
+                type: 'confirm',
+                breakdown,
+              })
+            }
+          } else if (cType !== 'kb_check') {
+            pendingTaskBreakdown.value = pc.task_breakdown || null
+          }
+          return
+        }
+
         if (!s) {
           // 缓存过期或不存在
           _stopRecover()
+          _removeEmptyPlaceholder()
           streaming.value = false
           loadSessions(planId)
           return
         }
         if (s.is_streaming) {
-          // 仍在流式，更新文本
+          // 仍在流式，更新占位消息的 content 和 thinkings
           streamBuffer.value = s.text || ''
+          const _last = messages.value[messages.value.length - 1]
+          if (_last && _last.role === 'assistant' && !_last.type) {
+            _last.content = s.text || ''
+            if (s.thinkings && s.thinkings.length > 0) {
+              _last.thinkings = [...s.thinkings]
+            }
+          }
         } else {
           // 流式完成
           _stopRecover()
-          if (s.text) {
-            messages.value.push({ role: 'assistant', content: s.text })
-          }
           streamBuffer.value = ''
           streaming.value = false
           hasStreamText = false
-          // 从 DB 加载完整消息（包含后端保存的其他消息）
+          // 移除占位消息，从 DB 加载完整消息（包含 thinkings 等持久化数据）
+          _removeEmptyPlaceholder()
           await loadSessions(planId)
           if (sessionId === activeSessionId.value) {
             await selectSession(sessionId)
@@ -223,6 +339,7 @@ export const useChatStore = defineStore('chat', () => {
         }
       } catch {
         _stopRecover()
+        _removeEmptyPlaceholder()
         streaming.value = false
       }
     }, 500)  // 500ms 轮询间隔
@@ -269,19 +386,32 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function dbMessageToChatMessage(m: ChatMessage) {
+    let thinkings: Array<{ agent: string, content: string }> | undefined
+    if (m.conversationContext) {
+      try {
+        const ctx = JSON.parse(m.conversationContext)
+        if (ctx.thinkings) {
+          thinkings = ctx.thinkings
+        }
+      } catch {}
+    }
+
     if (m.intentType === 'task_breakdown') {
       try {
         const breakdown = JSON.parse(m.conversationText)
-        return { role: 'assistant' as const, content: '学习路径已生成，请确认', type: 'confirm', breakdown }
+        return { id: m.id, role: 'assistant' as const, content: '学习路径已生成，请确认', type: 'confirm', breakdown, thinkings }
       } catch {}
+    }
+    if (m.intentType === 'kb_check') {
+      return { id: m.id, role: 'assistant' as const, content: m.conversationText, type: 'confirm', breakdown: null, confirmationType: 'kb_check', thinkings }
     }
     if (m.intentType === 'resource_generated') {
       try {
         const data = JSON.parse(m.conversationText)
-        return { role: 'assistant' as const, content: data.summary || '学习资源已生成', type: 'resource_generated', resources: data.resources || [] }
+        return { id: m.id, role: 'assistant' as const, content: data.summary || '学习资源已生成', type: 'resource_generated', resources: data.resources || [], thinkings }
       } catch {}
     }
-    return { role: m.dialogueType === 'USER' ? 'user' as const : 'assistant' as const, content: m.conversationText }
+    return { id: m.id, role: m.dialogueType === 'USER' ? 'user' as const : 'assistant' as const, content: m.conversationText, thinkings }
   }
 
   async function loadHistoryByPlan(planId: string) {
@@ -392,6 +522,26 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  async function deleteMessageAction(id: number) {
+    try {
+      const { deleteMessage } = await import('@/api/chat')
+      await deleteMessage(id)
+      messages.value = messages.value.filter(m => m.id !== id)
+    } catch (e) {
+      console.error('Failed to delete message:', e)
+    }
+  }
+
+  async function deleteMessagesAction(ids: number[]) {
+    try {
+      const { deleteMessages } = await import('@/api/chat')
+      await deleteMessages(ids)
+      messages.value = messages.value.filter(m => m.id === undefined || !ids.includes(m.id))
+    } catch (e) {
+      console.error('Failed to delete messages:', e)
+    }
+  }
+
   async function sendMessage(text: string, planId: string, extraParams?: Record<string, string>) {
     if (!text) return
     // 检查当前会话是否已在流式中
@@ -406,6 +556,7 @@ export const useChatStore = defineStore('chat', () => {
 
     const capturedSessionId = activeSessionId.value
     messages.value.push({ role: 'user', content: text })
+    messages.value.push({ role: 'assistant', content: '', thinkings: [] })
     streaming.value = true
     _syncStreamingSessions()
     streamBuffer.value = ''
@@ -424,6 +575,26 @@ export const useChatStore = defineStore('chat', () => {
           onStreamText(content) {
             streamBuffer.value += content
             hasStreamText = true
+          },
+          onThinking(agent, content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type) {
+              if (!lastMsg.thinkings) lastMsg.thinkings = []
+              lastMsg.thinkings.push({ agent, content })
+            }
+          },
+          onThinkingStart(agent, content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type) {
+              if (!lastMsg.thinkings) lastMsg.thinkings = []
+              lastMsg.thinkings.push({ agent, content })
+            }
+          },
+          onThinkingChunk(content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.type && lastMsg.thinkings?.length) {
+              lastMsg.thinkings[lastMsg.thinkings.length - 1].content += content
+            }
           },
           onResourceStreamStart(placeholders) {
             streamingPlaceholders.value = placeholders
@@ -450,22 +621,50 @@ export const useChatStore = defineStore('chat', () => {
           onModules(modules) {
             pendingModules.value = [...pendingModules.value, ...modules]
           },
-          onNeedConfirmation(message, taskBreakdown) {
+          onNeedConfirmation(message, taskBreakdown, confirmType) {
             // 仅在当前活跃会话时更新显示
             if (capturedSessionId !== activeSessionId.value) return
             if (streamBuffer.value) {
-              messages.value.push({ role: 'assistant', content: streamBuffer.value })
+              const _last = messages.value[messages.value.length - 1]
+              if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                _last.content = streamBuffer.value
+              } else {
+                messages.value.push({ role: 'assistant', content: streamBuffer.value })
+              }
               streamBuffer.value = ''
             }
-            const breakdown = taskBreakdown || (pendingModules.value.length ? { modules: pendingModules.value } : null)
-            pendingTaskBreakdown.value = breakdown
-            awaitingConfirmation.value = true
-            messages.value.push({
-              role: 'assistant',
-              content: message || '学习路径已生成，请确认',
-              type: 'confirm',
-              breakdown,
-            })
+            // 移除空的占位消息（无 content、无 thinkings）
+            const _ph = messages.value[messages.value.length - 1]
+            if (_ph && _ph.role === 'assistant' && !_ph.type && !_ph.content && (!_ph.thinkings || _ph.thinkings.length === 0)) {
+              messages.value.pop()
+            }
+
+            const cType = confirmType || 'task_breakdown'
+            confirmationType.value = cType
+
+            if (cType === 'kb_check') {
+              // 知识库相关性确认
+              pendingTaskBreakdown.value = null
+              awaitingConfirmation.value = true
+              messages.value.push({
+                role: 'assistant',
+                content: message || '知识库中暂无相关资料，是否继续生成？',
+                type: 'confirm',
+                breakdown: null,
+                confirmationType: 'kb_check',
+              })
+            } else {
+              // 任务分解确认（原有逻辑）
+              const breakdown = taskBreakdown || (pendingModules.value.length ? { modules: pendingModules.value } : null)
+              pendingTaskBreakdown.value = breakdown
+              awaitingConfirmation.value = true
+              messages.value.push({
+                role: 'assistant',
+                content: message || '学习路径已生成，请确认',
+                type: 'confirm',
+                breakdown,
+              })
+            }
             pendingModules.value = []
             streaming.value = false
             clearStreamState(capturedSessionId)
@@ -494,12 +693,19 @@ export const useChatStore = defineStore('chat', () => {
             isResourceStreaming.value = false
             if (resources.length) {
               const summary = resources.map(r => r.title).join('、')
-              messages.value.push({
-                role: 'assistant',
-                content: `已生成学习资源：${summary}`,
-                type: 'resource_generated',
-                resources,
-              })
+              const _last = messages.value[messages.value.length - 1]
+              if (_last && _last.role === 'assistant' && (!_last.type || _last.type === 'resource_generated')) {
+                _last.content = `已生成学习资源：${summary}`
+                _last.type = 'resource_generated'
+                _last.resources = resources
+              } else {
+                messages.value.push({
+                  role: 'assistant',
+                  content: `已生成学习资源：${summary}`,
+                  type: 'resource_generated',
+                  resources,
+                })
+              }
             }
           },
           onResourceTypeGenerated(resource) {
@@ -524,7 +730,10 @@ export const useChatStore = defineStore('chat', () => {
                 isResourceStreaming.value = false
                 streaming.value = false
                 clearStreamState(capturedSessionId)
-                if (isActive) loadSessions(planId)
+                if (isActive) {
+                  _removeEmptyPlaceholder()
+                  loadSessions(planId)
+                }
                 return
               }
             }
@@ -562,9 +771,15 @@ export const useChatStore = defineStore('chat', () => {
             }
             if (isActive) {
               if (streamBuffer.value) {
-                messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                const _last = messages.value[messages.value.length - 1]
+                if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                  _last.content = streamBuffer.value
+                } else {
+                  messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                }
                 streamBuffer.value = ''
               }
+              _removeEmptyPlaceholder()
               streaming.value = false
               resourceStreamBuffers.value = {}
               streamingPlaceholders.value = []
@@ -590,9 +805,15 @@ export const useChatStore = defineStore('chat', () => {
             }
             if (isActive) {
               if (streamBuffer.value) {
-                messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                const _last = messages.value[messages.value.length - 1]
+                if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                  _last.content = streamBuffer.value
+                } else {
+                  messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                }
                 streamBuffer.value = ''
               }
+              _removeEmptyPlaceholder()
               messages.value.push({ role: 'assistant', content: `错误：${err}` })
               streaming.value = false
               resourceStreamBuffers.value = {}
@@ -614,25 +835,32 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function confirmBreakdown(planId: string, feedback?: string) {
-    const message = feedback || '确认，开始生成学习资源'
+    const isKbCheck = confirmationType.value === 'kb_check'
+    const message = feedback || (isKbCheck ? '继续生成' : '确认，开始生成学习资源')
     const breakdown = pendingTaskBreakdown.value
     pendingTaskBreakdown.value = null
     awaitingConfirmation.value = false
+    confirmationType.value = 'task_breakdown'
     const extra: Record<string, string> = {}
     if (feedback) {
       skipNextModulesPush = false
     } else {
       skipNextModulesPush = true
     }
-    if (breakdown) {
+    if (breakdown && !isKbCheck) {
       extra.task_breakdown = JSON.stringify(breakdown)
     }
+    // 停止恢复轮询
+    _stopRecover()
     await sendMessage(message, planId, extra)
   }
 
   async function stopGeneration(planId?: string) {
     const sessionId = activeSessionId.value
     if (!sessionId) return
+
+    // 停止恢复轮询
+    _stopRecover()
 
     // 通知后端停止处理
     if (planId) {
@@ -665,20 +893,23 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function requestSupplementaryResource(
-    planId: string,
-    moduleContext: { title: string; description: string; moduleId: number },
+    planId: string | number,
+    moduleContext: { title: string; description: string; moduleId: number; nodeId?: string },
     resourceType: string,
+    customMessage?: string
   ) {
     if (streaming.value) return
 
     const typeLabels: Record<string, string> = {
-      quiz: '测验', mindmap: '思维导图', code: '代码示例', summary: '总结', video: '教学视频', animation: '动画', podcast: '播客',
+      text: '图文', document: '文档', quiz: '测验', mindmap: '思维导图', code: '代码示例', summary: '总结', video: '教学视频', animation: '动画', podcast: '播客', pptx: 'PPT',
     }
+    if (streaming.value) return
     const typeLabel = typeLabels[resourceType] || resourceType
     const capturedSessionId = activeSessionId.value
     persistSessionState()
 
-    messages.value.push({ role: 'user', content: `请为「${moduleContext.title}」生成${typeLabel}` })
+    messages.value.push({ role: 'user', content: customMessage || `请为「${moduleContext.title}」生成${typeLabel}` })
+    messages.value.push({ role: 'assistant', content: '', thinkings: [] })
     streaming.value = true
     _syncStreamingSessions()
     streamBuffer.value = ''
@@ -697,12 +928,34 @@ export const useChatStore = defineStore('chat', () => {
           type: resourceType,
           title: moduleContext.title,
           description: moduleContext.description || '',
-          session_id: capturedSessionId,
+          session_id: capturedSessionId || '',
+          user_message: customMessage || '',
+          node_id: moduleContext.nodeId || '',
         },
         {
           onStreamText(content) {
             streamBuffer.value += content
             supHasStreamText = true
+          },
+          onThinking(agent, content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && (!lastMsg.type || lastMsg.type === 'resource_generated')) {
+              if (!lastMsg.thinkings) lastMsg.thinkings = []
+              lastMsg.thinkings.push({ agent, content })
+            }
+          },
+          onThinkingStart(agent, content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && (!lastMsg.type || lastMsg.type === 'resource_generated')) {
+              if (!lastMsg.thinkings) lastMsg.thinkings = []
+              lastMsg.thinkings.push({ agent, content })
+            }
+          },
+          onThinkingChunk(content) {
+            const lastMsg = messages.value[messages.value.length - 1]
+            if (lastMsg && lastMsg.role === 'assistant' && (!lastMsg.type || lastMsg.type === 'resource_generated') && lastMsg.thinkings?.length) {
+              lastMsg.thinkings[lastMsg.thinkings.length - 1].content += content
+            }
           },
           onResourceStreamStart(placeholders) {
             streamingPlaceholders.value = placeholders
@@ -734,12 +987,20 @@ export const useChatStore = defineStore('chat', () => {
             isResourceStreaming.value = false
             if (resources.length) {
               const summary = resources.map(r => r.title).join('、')
-              messages.value.push({
-                role: 'assistant',
-                content: `已为「${moduleContext.title}」生成${typeLabel}：${summary}`,
-                type: 'resource_generated',
-                resources,
-              })
+              const summaryText = `已为「${moduleContext.title}」生成${typeLabel}：${summary}`
+              const _last = messages.value[messages.value.length - 1]
+              if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                _last.content = summaryText
+                _last.type = 'resource_generated'
+                _last.resources = resources
+              } else {
+                messages.value.push({
+                  role: 'assistant',
+                  content: summaryText,
+                  type: 'resource_generated',
+                  resources,
+                })
+              }
             }
           },
           onResourceTypeGenerated(resource) {
@@ -763,9 +1024,15 @@ export const useChatStore = defineStore('chat', () => {
             }
             if (isActive) {
               if (streamBuffer.value) {
-                messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                const _last = messages.value[messages.value.length - 1]
+                if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                  _last.content = streamBuffer.value
+                } else {
+                  messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                }
                 streamBuffer.value = ''
               }
+              _removeEmptyPlaceholder()
               streaming.value = false
               resourceStreamBuffers.value = {}
               streamingPlaceholders.value = []
@@ -778,9 +1045,15 @@ export const useChatStore = defineStore('chat', () => {
             const isActive = capturedSessionId === activeSessionId.value
             if (isActive) {
               if (streamBuffer.value) {
-                messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                const _last = messages.value[messages.value.length - 1]
+                if (_last && _last.role === 'assistant' && !_last.type && !_last.content) {
+                  _last.content = streamBuffer.value
+                } else {
+                  messages.value.push({ role: 'assistant', content: streamBuffer.value })
+                }
                 streamBuffer.value = ''
               }
+              _removeEmptyPlaceholder()
               messages.value.push({ role: 'assistant', content: `${typeLabel}生成失败：${err}` })
               streaming.value = false
               resourceStreamBuffers.value = {}
@@ -807,6 +1080,7 @@ export const useChatStore = defineStore('chat', () => {
     streamBuffer,
     pendingTaskBreakdown,
     awaitingConfirmation,
+    confirmationType,
     lastQuizResource,
     lastGradingResult,
     lastGeneratedResources,
@@ -823,10 +1097,14 @@ export const useChatStore = defineStore('chat', () => {
     newSession,
     selectSession,
     deleteSession,
+    deleteMessage: deleteMessageAction,
+    deleteMessages: deleteMessagesAction,
     sendMessage,
     confirmBreakdown,
     stopGeneration,
     requestSupplementaryResource,
+    /** 从知识树大纲节点触发的内容生成（带 node_id） */
+    requestNodeResourceGeneration: requestSupplementaryResource,
     recoverStreaming,
     stopRecovering: _stopRecover,
   }

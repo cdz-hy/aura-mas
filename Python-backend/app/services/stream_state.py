@@ -29,8 +29,35 @@ def update_stream_text(session_id: str, text: str, source: str = "chat"):
                 "is_streaming": True,
                 "last_update": time.time(),
                 "source": source,
+                "thinkings": [],
             }
         _cache[session_id]["text"] = text
+        _cache[session_id]["last_update"] = time.time()
+
+
+def add_thinking(session_id: str, agent: str, content: str):
+    """追加一条思考过程记录（供刷新后恢复显示）"""
+    with _lock:
+        if session_id not in _cache:
+            _cache[session_id] = {
+                "text": "",
+                "is_streaming": True,
+                "last_update": time.time(),
+                "source": "chat",
+                "thinkings": [],
+            }
+        _cache[session_id]["thinkings"].append({"agent": agent, "content": content})
+        _cache[session_id]["last_update"] = time.time()
+
+
+def append_thinking_chunk(session_id: str, content: str):
+    """向最后一条思考记录追加流式文本片段（逐 token 累积）"""
+    with _lock:
+        if session_id not in _cache:
+            return
+        thinkings = _cache[session_id].get("thinkings", [])
+        if thinkings:
+            thinkings[-1]["content"] += content
         _cache[session_id]["last_update"] = time.time()
 
 
@@ -67,6 +94,7 @@ def get_stream_state(session_id: str) -> dict | None:
             "is_streaming": state["is_streaming"],
             "source": state.get("source", "chat"),
             "error": state.get("error"),
+            "thinkings": state.get("thinkings", []),
         }
 
 

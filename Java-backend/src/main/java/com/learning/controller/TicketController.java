@@ -1,5 +1,7 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.Result;
 import com.learning.security.JwtTokenProvider;
 import com.learning.service.UserService;
@@ -24,6 +26,7 @@ public class TicketController {
     private final UserService userService;
 
     @Operation(summary = "签发短期ticket(供Python SSE使用)")
+    @OperationLog(type = OperationType.TICKET_ISSUE, module = "Ticket", desc = "签发临时票据")
     @PostMapping("/issue")
     public Result<Map<String, String>> issueTicket(Authentication authentication) {
         Long userId = (Long) authentication.getPrincipal();

@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full w-full flex flex-col overflow-hidden">
+  <div class="plan-detail-page h-full w-full flex flex-col overflow-hidden">
     <div v-if="!plan" class="flex items-center justify-center h-full flex-1">
       <div class="text-center">
         <svg class="w-12 h-12 mx-auto text-navy-200 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -9,15 +9,15 @@
       </div>
     </div>
 
-    <div v-else class="flex gap-0 h-full w-full overflow-x-auto overflow-y-hidden flex-1 custom-scrollbar">
+    <div v-else class="plan-detail-workspace flex gap-0 h-full w-full overflow-x-auto overflow-y-hidden flex-1 custom-scrollbar">
     <!-- ==================== 左侧栏：模块列表（可折叠） ==================== -->
     <div
-      class="flex-shrink-0 flex flex-col card overflow-hidden transition-all duration-300 animate-fade-in-up"
-      :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-[280px]'"
+      class="plan-detail-sidebar flex-shrink-0 flex flex-col overflow-hidden transition-all duration-300 animate-fade-in-up"
+      :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-[320px]'"
     >
-      <div class="flex flex-col h-full min-w-[280px]">
+      <div class="plan-detail-sidebar__inner flex flex-col h-full min-w-[320px]">
         <!-- Plan header -->
-        <div class="px-4 py-4 border-b border-navy-100/50">
+        <div class="plan-detail-sidebar__header px-4 py-3.5">
           <div class="flex items-center gap-2">
             <input
               v-if="editingTitle"
@@ -28,6 +28,23 @@
               autofocus
             />
             <h2 v-else class="font-display text-base font-semibold text-navy-800 truncate flex-1">{{ plan.title }}</h2>
+            <button
+              v-if="!editingTitle"
+              class="p-1 rounded transition-colors"
+              :class="isTreeMode ? 'text-navy-600 bg-navy-50' : 'text-navy-300 hover:text-navy-600 hover:bg-navy-50'"
+              :title="isTreeMode ? '返回学习模式' : '进入知识树'"
+              @click="toggleTreeMode"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 3v6" />
+                <path d="M6 13h12" />
+                <path d="M6 13v5" />
+                <path d="M18 13v5" />
+                <circle cx="12" cy="9" r="2" />
+                <circle cx="6" cy="19" r="2" />
+                <circle cx="18" cy="19" r="2" />
+              </svg>
+            </button>
             <button
               v-if="!editingTitle"
               class="p-1 rounded text-navy-300 hover:text-navy-600 hover:bg-navy-50 transition-colors"
@@ -63,64 +80,39 @@
             <span class="text-xs px-2 py-0.5 rounded-full" :class="statusClass(plan.status)">
               {{ statusText(plan.status) }}
             </span>
-            <span class="text-xs text-navy-400">{{ Math.round(plan.progress || 0) }}%</span>
+            <span class="text-xs text-navy-400">{{ planProgress }}%</span>
           </div>
           <div class="mt-2 h-1.5 bg-navy-100 rounded-full overflow-hidden">
-            <div class="h-full bg-gradient-to-r from-navy-400 to-sage-500 rounded-full transition-all duration-500" :style="{ width: `${plan.progress || 0}%` }"></div>
+            <div class="h-full bg-gradient-to-r from-navy-400 to-sage-500 rounded-full transition-all duration-500" :style="{ width: `${planProgress}%` }"></div>
           </div>
         </div>
 
-        <!-- Module list -->
-        <div class="flex-1 overflow-y-auto p-3 space-y-2">
-          <div v-if="modules.length === 0" class="text-center py-8 text-navy-300 text-sm">
-            <p>暂无学习模块</p>
-            <p class="text-xs mt-1">在右侧对话中描述学习目标，AI 会自动规划</p>
-          </div>
-          <div
-            v-for="(mod, i) in modules"
-            :key="i"
-            class="rounded-lg cursor-pointer transition-all duration-200 border"
-            :class="selectedModuleIndex === i ? 'border-navy-300 bg-navy-50 shadow-sm' : 'border-transparent hover:bg-navy-50/50'"
-            @click="selectModule(i)"
-          >
-            <div class="p-3">
-              <div class="flex items-center gap-2.5">
-                <span class="w-6 h-6 rounded-full text-xs flex items-center justify-center font-bold flex-shrink-0"
-                  :class="selectedModuleIndex === i ? 'bg-navy-600 text-white' : 'bg-navy-100 text-navy-500'">
-                  {{ i + 1 }}
-                </span>
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium text-navy-800 truncate">{{ mod.title }}</p>
-                  <p class="text-xs text-navy-400 mt-0.5">{{ mod.estimatedHours || 2 }}学时</p>
-                </div>
-              </div>
-              <div class="flex flex-wrap gap-1 mt-2 ml-8">
-                <span v-for="type in mod.resourceTypes" :key="type"
-                  class="text-[10px] px-1.5 py-0.5 rounded-full"
-                  :class="badgeClass(type)">
-                  {{ typeLabels[type] || type }}
-                </span>
-              </div>
-            </div>
-
-            <!-- 模块资源列表 -->
-            <div v-if="selectedModuleIndex === i && mod.resources.length > 0" class="border-t border-navy-100/50 px-3 py-2 space-y-1.5">
-              <div
-                v-for="res in mod.resources"
-                :key="res.id"
-                class="flex items-center gap-2 p-1.5 rounded-md text-xs transition-colors cursor-pointer"
-                :class="selectedResourceId === res.id ? 'bg-navy-100' : 'hover:bg-white'"
-                @click.stop="toggleResource(res)"
-              >
-                <span class="w-2 h-2 rounded-full flex-shrink-0" :class="res.status === 2 ? 'bg-emerald-400' : res.status === 1 ? 'bg-blue-400' : res.status === 3 ? 'bg-red-400' : 'bg-navy-200'"></span>
-                <span class="text-navy-600 truncate flex-1">{{ res.moduleData?.title || typeLabels[res.moduleType] || res.moduleType }}</span>
-                <span v-if="res.status === 2" class="text-emerald-500 text-[10px]">已生成</span>
-                <span v-else-if="res.status === 1 && !stuckResources.has(res.id)" class="text-blue-500 text-[10px]">生成中</span>
-                <span v-else-if="res.status === 1 || res.status === 3" class="text-red-500 text-[10px] cursor-pointer hover:underline" @click.stop="handleRetry(res)">重试</span>
-                <span v-else class="text-navy-300 text-[10px]">待生成</span>
-              </div>
-            </div>
-          </div>
+        <!-- 知识树大纲 -->
+        <div class="plan-detail-sidebar__outline flex-1 min-h-0">
+          <PlanResourceOutline
+            :tree-modules="outlineTreeModules"
+            :selected-module-id="selectedOutlineModuleId"
+            :selected-resource-id="selectedResourceId"
+            :type-labels="typeLabels"
+            :loading="outlineLoading"
+            :header-subtitle="outlineHeaderSubtitle"
+            :meta-text="outlineMetaText"
+            :empty-title="outlineEmptyTitle"
+            :empty-hint="outlineEmptyHint"
+            :progress-map="progressMap"
+            :stuck-resource-ids="stuckResources"
+            :drag-hint="isTreeMode && knowledgeTreeStore.draggingNodeId ? '松开鼠标，将节点挂到目标模块下' : undefined"
+            :tree-mode="isTreeMode"
+            :tree-dn-d="isTreeMode"
+            @select-module="onOutlineSelectModule"
+            @select-resource="onOutlineSelectResource"
+            @retry-resource="handleRetryById"
+            @generate-content="generateFromTreeNode"
+            @drop-node="handleOutlineDropNode"
+            @mount-resource="handleOutlineMountResource"
+            @toggle-complete="onOutlineToggleComplete"
+            @delete-resource="onOutlineDeleteResource"
+          />
         </div>
 
       </div>
@@ -128,7 +120,7 @@
 
     <!-- 折叠/展开按钮 -->
     <button
-      class="flex-shrink-0 w-6 flex items-center justify-center bg-navy-50 hover:bg-navy-100 transition-colors rounded-r-lg my-2"
+      class="plan-detail-collapse flex-shrink-0 flex items-center justify-center transition-colors"
       @click="sidebarCollapsed = !sidebarCollapsed"
       :title="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
     >
@@ -137,21 +129,126 @@
       </svg>
     </button>
 
-    <!-- ==================== 中间栏：资源详情（始终在 DOM 中，width 过渡动画） ==================== -->
+    <template v-if="isTreeMode">
+      <section
+        v-if="!treeContentVisible"
+        class="plan-tree-stage flex min-w-[720px] flex-1 flex-col overflow-hidden"
+      >
+        <header class="flex flex-shrink-0 items-center justify-between gap-3 border-b border-navy-100 px-4 py-3">
+          <div class="min-w-0">
+            <h3 class="truncate font-display text-sm font-semibold text-navy-800">
+              {{ knowledgeTreeStore.tree?.title || plan.title }}
+            </h3>
+            <p class="mt-0.5 truncate text-xs text-navy-400">
+              {{ selectedTreeNode?.title || '选择节点后开始拆分' }}
+            </p>
+          </div>
+          <div class="flex flex-shrink-0 items-center gap-2">
+            <button
+              v-if="knowledgeTreeStore.activeSource"
+              class="h-8 rounded-lg bg-red-50 px-3 text-xs font-semibold text-red-600 hover:bg-red-100"
+              @click="knowledgeTreeStore.stopStream"
+            >
+              {{ knowledgeTreeStore.fpStreamingActive ? '■ 停止拆解' : '停止' }}
+            </button>
+          </div>
+        </header>
+
+        <div v-if="knowledgeTreeStore.error" class="mx-4 mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
+          {{ knowledgeTreeStore.error }}
+        </div>
+
+        <div v-if="showBootstrapPreview" class="mx-4 mt-3">
+          <TreeBootstrapPreview
+            :topics="knowledgeTreeStore.previewTopics"
+            :loading="knowledgeTreeStore.previewLoading"
+            :error="knowledgeTreeStore.previewError"
+            :growing="knowledgeTreeStore.growProgress.growing"
+            :current-branch="knowledgeTreeStore.growProgress.currentBranch"
+            :done-count="knowledgeTreeStore.growProgress.doneCount"
+            :total-count="knowledgeTreeStore.growProgress.totalCount"
+            @confirm="knowledgeTreeStore.confirmPreviewGrow"
+            @skip="knowledgeTreeStore.skipPreviewAndGrow"
+            @retry="knowledgeTreeStore.startPreview"
+          />
+        </div>
+
+        <div class="relative min-h-0 flex-1 p-3">
+          <KnowledgeTreeCanvas
+            :nodes="knowledgeTreeStore.nodes"
+            :root-node-id="rootTreeNodeId"
+            :selected-node-id="knowledgeTreeStore.currentNodeId"
+            v-model:pan-x="knowledgeTreeStore.panX"
+            v-model:pan-y="knowledgeTreeStore.panY"
+            v-model:zoom="knowledgeTreeStore.zoom"
+            @select="selectTreeNode"
+            @toggle-collapse="toggleTreeNodeCollapse"
+            @open-subdivide="openTreeSubdivide"
+            @delete-node="confirmDeleteTreeNode"
+            @node-drag-start="knowledgeTreeStore.setDraggingNodeId($event)"
+            @node-drag-end="knowledgeTreeStore.setDraggingNodeId(null)"
+          />
+          <div
+            v-if="knowledgeTreeStore.loading && !knowledgeTreeStore.activeSource"
+            class="absolute inset-3 flex items-center justify-center rounded-lg bg-white/60"
+          >
+            <svg class="h-8 w-8 animate-spin text-navy-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10" class="opacity-25" />
+              <path d="M4 12a8 8 0 0 1 8-8" class="opacity-75" stroke-linecap="round" />
+            </svg>
+          </div>
+        </div>
+        <button
+          v-if="knowledgeTreeStore.fpStreamingActive"
+          type="button"
+          class="fp-stop-button"
+          title="停止第一性原理拆解；已拆出的卡片会保留"
+          @click="knowledgeTreeStore.stopStream"
+        >
+          ■ 停止拆解
+        </button>
+      </section>
+
+      <TreeSubdividePopover
+        :node="treePopoverNode"
+        :options="treeSubdivisionOptions"
+        :caution="knowledgeTreeStore.subdivisionCaution"
+        :loading="knowledgeTreeStore.subdivisionOptionsLoading"
+        :error="knowledgeTreeStore.subdivisionOptionsError"
+        @close="closeTreeSubdivide"
+        @load-options="loadTreeSubdivideOptions"
+        @single-angle="runSingleAngleSplit"
+        @multi-angle="runMultiAngleSplit"
+        @first-principles="runFirstPrinciplesSplit"
+      />
+    </template>
+
+    <template v-if="!isTreeMode || treeContentVisible">
+    <!-- ==================== 中间栏：资源详情（学习模式 / 知识树内容预览） ==================== -->
     <div
-      class="resource-panel flex flex-col card overflow-hidden"
+      class="plan-resource-panel resource-panel flex flex-col overflow-hidden"
       :class="{
         'resource-panel--closed': !selectedResource && !showResourceStreamPreview,
         '!transition-none': isDragging,
-        'fixed inset-0 z-40 m-0 bg-white rounded-none border-none shadow-none': isFullscreen,
-        'mx-2': !isFullscreen
+        'fixed inset-0 z-[55] m-0 bg-white rounded-none border-none shadow-none': isFullscreen,
+        'plan-resource-panel--spaced': !isFullscreen
       }"
       :style="isFullscreen ? {} : panelStyle"
     >
       <template v-if="selectedResource">
         <!-- 标题栏 -->
-        <div class="px-4 py-3 border-b border-navy-100/50 flex items-center justify-between">
+        <div class="plan-resource-panel__header px-4 py-3 flex items-center justify-between">
           <div class="flex items-center gap-2 min-w-0">
+            <button
+              v-if="isTreeMode"
+              class="p-1 rounded text-navy-400 hover:text-navy-700 hover:bg-navy-50 transition-colors flex-shrink-0"
+              title="返回知识树"
+              @click="closeTreeContentPanel"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
             <span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0" :class="badgeClass(selectedResource.moduleType)">
               {{ typeLabels[selectedResource.moduleType] || selectedResource.moduleType }}
             </span>
@@ -213,6 +310,7 @@
               :initial-answers="quizSubmittedAnswers ?? undefined"
               :initial-submitted="!!quizSubmittedAnswers"
               :grading="quizSubmitting"
+              :grading-tokens="gradingStreamTokens"
               :result-score="gradingResult?.score ?? null"
               :question-results="questionResults"
               @submit="onQuizSubmit"
@@ -276,7 +374,16 @@
           <!-- 动画类型 -->
           <template v-else-if="selectedResource.moduleType === 'animation'">
             <div v-if="animationHtml" class="animation-stage" :style="isFullscreen ? { width: 'min(100%, calc((100vh - 80px) * 16 / 9))' } : {}">
+              <AnimationPlayer
+                v-if="selectedResource.moduleData?.narration?.version === 1"
+                :resource-id="selectedResource.id"
+                :html="animationHtml"
+                :narration="selectedResource.moduleData.narration"
+                :video-exports="selectedResource.moduleData.videoExports"
+                :is-dragging="isDragging"
+              />
               <iframe
+                v-else
                 class="animation-frame"
                 :class="{ 'pointer-events-none': isDragging }"
                 :srcdoc="animationHtml"
@@ -295,13 +402,67 @@
               <iframe
                 class="podcast-frame"
                 :class="{ 'pointer-events-none': isDragging }"
-                :srcdoc="selectedResource.moduleData?.content || selectedResource.moduleData?.html"
+                :srcdoc="podcastHtml"
                 sandbox="allow-scripts allow-same-origin allow-downloads"
                 title="播客节目"
               ></iframe>
             </div>
             <div v-else class="text-center py-8 text-navy-300 text-sm">
               <p>播客内容待生成</p>
+            </div>
+          </template>
+
+          <!-- PPT 类型 -->
+          <template v-else-if="selectedResource.moduleType === 'pptx'">
+            <!-- 切换按钮（两种预览都有时显示） -->
+            <div
+              v-if="selectedResource.moduleData?.pptx_url && selectedResource.moduleData?.html"
+              class="flex items-center justify-end gap-1 mb-2"
+            >
+              <button
+                class="px-2.5 py-1 text-xs rounded-l-md border transition-colors"
+                :class="pptxViewMode === 'office' ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-navy-500 border-navy-200 hover:bg-navy-50'"
+                @click="pptxViewMode = 'office'"
+              >Office 预览</button>
+              <button
+                class="px-2.5 py-1 text-xs rounded-r-md border border-l-0 transition-colors"
+                :class="pptxViewMode === 'html' ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-navy-500 border-navy-200 hover:bg-navy-50'"
+                @click="pptxViewMode = 'html'"
+              >卡片预览</button>
+            </div>
+            <!-- Office Online Viewer 预览 -->
+            <PptxViewer
+              v-if="pptxViewMode === 'office' && selectedResource.moduleData?.pptx_url"
+              :pptx-url="selectedResource.moduleData.pptx_url"
+              :slide-count="selectedResource.moduleData.slide_count"
+              :download-url="selectedResource.moduleData.pptx_filename ? pptxDownloadUrl(selectedResource.moduleData.pptx_filename) : ''"
+            />
+            <!-- HTML 卡片预览 -->
+            <div v-else-if="selectedResource.moduleData?.html" class="pptx-wrapper">
+              <div class="pptx-toolbar">
+                <span class="pptx-slide-count">共 {{ selectedResource.moduleData.slide_count || 0 }} 页</span>
+                <a
+                  v-if="selectedResource.moduleData.pptx_filename"
+                  class="pptx-download-btn"
+                  :href="pptxDownloadUrl(selectedResource.moduleData.pptx_filename)"
+                  download
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                  下载 PPT
+                </a>
+              </div>
+              <div class="pptx-stage">
+                <iframe
+                  class="pptx-frame"
+                  :class="{ 'pointer-events-none': isDragging }"
+                  :srcdoc="selectedResource.moduleData.html"
+                  sandbox="allow-scripts allow-same-origin"
+                  title="PPT 预览"
+                ></iframe>
+              </div>
+            </div>
+            <div v-else class="text-center py-8 text-navy-300 text-sm">
+              <p>PPT 内容待生成</p>
             </div>
           </template>
 
@@ -370,7 +531,10 @@
                 {{ typeLabels[placeholder.type] || placeholder.type }}
               </span>
             </div>
-            <div v-if="chatStore.resourceStreamBuffers[placeholder.id]" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(chatStore.resourceStreamBuffers[placeholder.id])"></div>
+            <template v-if="placeholder.type === 'quiz'">
+              <QuizStreamPreview :raw-json="chatStore.resourceStreamBuffers[placeholder.id]" />
+            </template>
+            <div v-else-if="chatStore.resourceStreamBuffers[placeholder.id]" class="text-sm text-navy-700 leading-relaxed markdown-body" v-html="renderMd(chatStore.resourceStreamBuffers[placeholder.id])"></div>
             <div v-else class="text-xs text-navy-400 animate-pulse">等待生成...</div>
           </div>
           <span class="inline-block w-0.5 h-4 bg-navy-400 ml-0.5 animate-pulse align-text-bottom"></span>
@@ -380,7 +544,7 @@
 
     <!-- 拖拽分隔线（始终在 DOM 中，width 过渡动画） -->
     <div
-      class="resource-divider flex-shrink-0 flex items-center justify-center cursor-col-resize group"
+      class="plan-resource-divider resource-divider flex-shrink-0 flex items-center justify-center cursor-col-resize group"
       :class="{ 'resource-divider--closed': !selectedResource && !showResourceStreamPreview, 'w-2': isDragging, 'w-1.5': !isDragging }"
       @mousedown="onDividerMouseDown"
     >
@@ -388,16 +552,20 @@
     </div>
 
     <!-- ==================== 右侧栏：对话界面 ==================== -->
-    <PlanChatPanel
-      ref="planChatPanelRef"
-      :plan-id="planIdStr"
-      :resource-id="selectedResource?.id ?? null"
-      v-model:mode="chatPanelMode"
-      @confirm-breakdown="confirmBreakdown()"
-      @submit-modification="submitModification"
-      @generate-resource="generateResource"
-      @open-resource="openResourceById"
-    />
+    <aside class="plan-chat-shell">
+      <PlanChatPanel
+        ref="planChatPanelRef"
+        class="plan-chat-panel"
+        :plan-id="planIdStr"
+        :resource-id="selectedResource?.id ?? null"
+        v-model:mode="chatPanelMode"
+        @confirm-breakdown="confirmBreakdown()"
+        @submit-modification="submitModification"
+        @generate-resource="generateResource"
+        @open-resource="openResourceById"
+      />
+    </aside>
+    </template>
   </div>
 
   <!-- 引用悬浮预览卡片 -->
@@ -476,54 +644,123 @@
         </button>
       </div>
       <!-- Note list for append -->
-      <div v-if="showNoteList" class="selection-note-list">
-        <div
-          v-for="note in availableNotes"
-          :key="note.id"
-          class="selection-note-item"
-          @click="appendToExistingNote(note)"
-        >
-          <p class="text-sm font-medium text-navy-700 truncate">{{ note.noteName || '无标题笔记' }}</p>
-          <p class="text-xs text-navy-400 truncate">{{ (note.content || '').substring(0, 50) }}</p>
+      <div v-if="showNoteList" class="selection-note-list" :class="{ 'selection-note-list--up': noteListOpenUp }">
+        <div class="px-2 pt-2 pb-1">
+          <input
+            v-model="noteListKeyword"
+            type="search"
+            class="w-full text-xs px-2 py-1.5 rounded-md border border-navy-100 outline-none focus:border-navy-300 text-navy-700 placeholder:text-navy-300"
+            placeholder="搜索笔记标题…"
+            @click.stop
+            @mousedown.stop
+          />
         </div>
-        <div v-if="availableNotes.length === 0" class="px-3 py-2 text-xs text-navy-300 text-center">
-          暂无笔记
+        <div v-if="noteListLoading" class="px-3 py-3 text-xs text-navy-400 text-center">
+          加载笔记中…
         </div>
+        <template v-else>
+          <div
+            v-for="note in filteredAvailableNotes"
+            :key="note.id"
+            class="selection-note-item"
+            @click="appendToExistingNote(note)"
+          >
+            <p class="text-sm font-medium text-navy-700 truncate">{{ note.noteName || '无标题笔记' }}</p>
+            <p class="text-xs text-navy-400 truncate">{{ noteListPreview(note, 48) }}</p>
+          </div>
+          <div v-if="filteredAvailableNotes.length === 0" class="px-3 py-2 text-xs text-navy-300 text-center">
+            {{ noteListKeyword.trim() ? '无匹配笔记' : '暂无已保存的笔记（侧栏草稿需先点保存）' }}
+          </div>
+        </template>
       </div>
     </div>
   </Teleport>
+
+  <!-- 删除资源确认弹窗 -->
+  <ConfirmDialog
+    :visible="showDeleteResourceConfirm"
+    title="删除学习资源"
+    :message="`确定要删除资源「${deletingResource?.moduleData?.title || deletingResource?.moduleType || ''}」吗？该资源相关的对话、测验记录与学习进度将一并删除，此操作不可恢复。`"
+    confirm-text="确认删除"
+    cancel-text="取消"
+    type="danger"
+    @confirm="handleDeleteResourceConfirm"
+    @cancel="handleDeleteResourceCancel"
+  />
 </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, onUnmounted, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
-import { getPlan, updatePlan } from '@/api/plan'
-import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi } from '@/api/resource'
-import { parseMarkdown, extractCitations } from '@/utils/markdown'
-import { normalizeAnimationHtml } from '@/utils/animationHtml'
-import { createNote, getNotes, updateNote, linkNoteToResource } from '@/api/note'
+import { useRoute, useRouter } from 'vue-router'
+import { getPlan, updatePlan, generatePlanIcon } from '@/api/plan'
+import { getPlanResources, getResource, getLatestTask, retryTask as retryTaskApi, deleteResource as deleteResourceApi, markResourceComplete, unmarkResourceComplete, getProgressByPlan, updateResourceContent, bulkCreateResources } from '@/api/resource'
+import { parseMarkdown, extractCitations, normalizeMermaidCode } from '@/utils/markdown'
+import { normalizeAnimationHtml, prepareAnimationHtmlForPlayer } from '@/utils/animationHtml'
+import { rewriteEmbeddedAudioUrls } from '@/utils/animationPlayback'
+import { getNotes } from '@/api/note'
 import { getQuizRecords, submitQuizSSE } from '@/api/quiz'
 import { issueTicket } from '@/api/auth'
 import { PYTHON_AI_BASE } from '@/api/request'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import { useHeartbeat } from '@/composables/useHeartbeat'
+import { tracker } from '@/utils/tracker'
+import { showToast } from '@/composables/useToast'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import QuizPlayer from '@/components/resource/QuizPlayer.vue'
+import QuizStreamPreview from '@/components/resource/QuizStreamPreview.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 import VideoPlayer from '@/components/resource/VideoPlayer.vue'
+import PptxViewer from '@/components/resource/PptxViewer.vue'
+import AnimationPlayer from '@/components/resource/AnimationPlayer.vue'
 import PlanChatPanel from '@/components/chat/PlanChatPanel.vue'
+import KnowledgeTreeCanvas from '@/components/tree/KnowledgeTreeCanvas.vue'
+import PlanResourceOutline from '@/components/plan/PlanResourceOutline.vue'
+import {
+  buildOutlineTreeFromTreeItems,
+  countOutlineTreeModules,
+  countOutlineTreeResources,
+  shouldShowModuleContextPromptForOutlineModule,
+  type PlanOutlineTreeModule,
+} from '@/components/plan/usePlanResourceOutline'
+import TreeSubdividePopover from '@/components/tree/TreeSubdividePopover.vue'
+import TreeBootstrapPreview from '@/components/tree/TreeBootstrapPreview.vue'
+import { buildTreePlanOutline } from '@/components/tree/useTreePlanOutline'
+import { useKnowledgeTreeStore } from '@/stores/knowledgeTree'
+import { resolveNoteCaptureSource, useNoteCaptureStore } from '@/stores/noteCapture'
+import { noteListPreview } from '@/components/note/notePresentation'
+import { updateKnowledgeNode } from '@/api/knowledgeTree'
+import type { KnowledgeNode } from '@/types/knowledgeTree'
 import type { LearningPlan, LearningResource } from '@/types/plan'
 import type { Note } from '@/types/note'
 import type { GeneratedResourceRef } from '@/utils/sse'
 import type { QuizData, QuizQuestion } from '@/types/quiz'
+import type { TreeSubdivisionOption } from '@/types/knowledgeTree'
 import type { MindElixirData } from 'mind-elixir'
 
 const route = useRoute()
+const router = useRouter()
 const planId = computed(() => Number(route.params.id))
 const planIdStr = computed(() => String(planId.value))
+const isTreeMode = computed(() => route.query.view === 'tree')
+const noteCaptureStore = useNoteCaptureStore()
 const chatStore = useChatStore()
 const authStore = useAuthStore()
+const knowledgeTreeStore = useKnowledgeTreeStore()
+const treePopoverNodeId = ref<string | null>(null)
+const treeSubdivisionOptions = ref<TreeSubdivisionOption[]>([])
+const bootstrapPreviewDismissed = ref(false)
+
+const showBootstrapPreview = computed(() => {
+  if (bootstrapPreviewDismissed.value) return false
+  if (!knowledgeTreeStore.tree || !isTreeMode.value) return false
+  // 仅在主动预览/生成过程中显示，L1 节点已从学习资源同步时不再弹出
+  if (knowledgeTreeStore.growProgress.growing) return true
+  if (knowledgeTreeStore.previewTopics.length > 0) return true
+  if (knowledgeTreeStore.previewLoading) return true
+  return false
+})
 const chatPanelMode = ref<'assistant' | 'tutor'>(
   (localStorage.getItem('chatPanelMode') as 'assistant' | 'tutor') || 'assistant'
 )
@@ -547,6 +784,22 @@ const selectionPopup = ref({
 })
 const showNoteList = ref(false)
 const availableNotes = ref<Note[]>([])
+const noteListKeyword = ref('')
+const noteListLoading = ref(false)
+const noteListOpenUp = ref(false)
+const filteredAvailableNotes = computed(() => {
+  const q = noteListKeyword.value.trim().toLowerCase()
+  if (!q) return availableNotes.value
+  return availableNotes.value.filter((n) => {
+    const name = (n.noteName || '').toLowerCase()
+    try {
+      const preview = noteListPreview(n, 80).toLowerCase()
+      return name.includes(q) || preview.includes(q)
+    } catch {
+      return name.includes(q)
+    }
+  })
+})
 const highlightedEls: HTMLElement[] = []
 
 function clearHighlight() {
@@ -742,6 +995,39 @@ function formatNoteContent(text: string): string {
   return text
 }
 
+function buildLearningCaptureSource() {
+  const routeLike = {
+    name: route.name,
+    fullPath: route.fullPath,
+    params: route.params as Record<string, unknown>,
+    query: route.query as Record<string, unknown>,
+  }
+
+  if (isTreeMode.value) {
+    const node = knowledgeTreeStore.nodes.find(n => n.id === knowledgeTreeStore.currentNodeId)
+    return resolveNoteCaptureSource(routeLike, {
+      sourceType: 'knowledge-node',
+      sourceId: knowledgeTreeStore.currentNodeId || undefined,
+      title: node?.title || knowledgeTreeStore.tree?.title || plan.value?.title || '知识树',
+    })
+  }
+
+  const res = selectedResource.value
+  if (res?.id) {
+    return resolveNoteCaptureSource(routeLike, {
+      sourceType: 'resource',
+      sourceId: res.id,
+      title: res.moduleData?.title || selectionPopup.value.resourceTitle || '学习资源',
+    })
+  }
+
+  return resolveNoteCaptureSource(routeLike, {
+    sourceType: 'plan',
+    sourceId: planId.value,
+    title: plan.value?.title || '学习计划',
+  })
+}
+
 function buildPositionInfo(): string {
   const p = selectionPopup.value
   // 去掉图片 markdown，只保留纯文本用于定位
@@ -754,75 +1040,86 @@ function buildPositionInfo(): string {
   return `selection:${snippet}`
 }
 
-async function addToNewNote() {
+/** 新建笔记 → 侧栏创建带默认标题的摘录笔记（原文立刻写入正文 fence） */
+function addToNewNote() {
   const text = selectionPopup.value.text
   clearHighlight()
   selectionPopup.value.show = false
   showNoteList.value = false
+  noteListKeyword.value = ''
   if (!text) return
 
-  try {
-    const p = selectionPopup.value
-    const noteName = `摘录 - ${p.resourceTitle}`
-    const content = formatNoteContent(text)
-    const res = await createNote({ noteName, content })
-    const noteId = (res as any)?.data?.id
-    if (noteId && p.resourceId) {
-      await linkNoteToResource(noteId, {
-        resourceId: p.resourceId,
-        selectedText: text.substring(0, 5000),
-        positionInfo: buildPositionInfo(),
-        planId: p.planId,
-        moduleName: p.moduleName,
-        resourceTitle: p.resourceTitle,
-      }).catch(() => {})
-    }
-  } catch (e) {
-    console.error('Failed to create note from selection:', e)
+  const p = selectionPopup.value
+  const source = buildLearningCaptureSource()
+  noteCaptureStore.requestCapture({
+    mode: 'excerpt',
+    ...(source ? { source } : {}),
+    excerpt: text,
+    noteName: p.resourceTitle ? `摘录 - ${p.resourceTitle}` : '摘录笔记',
+  })
+}
+
+function extractNoteRecords(data: unknown): Note[] {
+  if (Array.isArray(data)) return data as Note[]
+  if (data && typeof data === 'object') {
+    const rec = (data as { records?: unknown }).records
+    if (Array.isArray(rec)) return rec as Note[]
   }
+  return []
 }
 
 async function loadAvailableNotes() {
+  noteListLoading.value = true
   try {
-    const res = await getNotes({ page: 1, size: 20 })
-    availableNotes.value = res.data?.records || []
+    const res = await getNotes({ page: 1, size: 50 })
+    availableNotes.value = extractNoteRecords(res.data)
   } catch {
     availableNotes.value = []
+    showToast('笔记列表加载失败', 'error')
+  } finally {
+    noteListLoading.value = false
   }
 }
 
 function toggleNoteList() {
   if (!showNoteList.value) {
-    loadAvailableNotes()
+    noteListKeyword.value = ''
+    // Open upward when popup is in the lower half of the viewport
+    noteListOpenUp.value = selectionPopup.value.y > window.innerHeight * 0.55
+    void loadAvailableNotes()
   }
   showNoteList.value = !showNoteList.value
 }
 
-async function appendToExistingNote(note: Note) {
+// Sidebar / list page created or deleted notes while picker is open
+watch(
+  () => noteCaptureStore.notesListEpoch,
+  () => {
+    if (!showNoteList.value) return
+    const removedId = noteCaptureStore.lastRemovedNoteId
+    if (removedId != null && removedId > 0) {
+      availableNotes.value = availableNotes.value.filter(n => n.id !== removedId)
+    }
+    void loadAvailableNotes()
+  },
+)
+
+/** 追加到已有笔记 → 侧栏追加原文 fence（手动保存） */
+function appendToExistingNote(note: Note) {
   const text = selectionPopup.value.text
   clearHighlight()
   selectionPopup.value.show = false
   showNoteList.value = false
+  noteListKeyword.value = ''
   if (!text) return
 
-  try {
-    const p = selectionPopup.value
-    const existing = note.content || ''
-    const newContent = existing + (existing ? '\n\n' : '') + formatNoteContent(text)
-    await updateNote(note.id, { noteName: note.noteName, content: newContent })
-    if (p.resourceId) {
-      await linkNoteToResource(note.id, {
-        resourceId: p.resourceId,
-        selectedText: text.substring(0, 5000),
-        positionInfo: buildPositionInfo(),
-        planId: p.planId,
-        moduleName: p.moduleName,
-        resourceTitle: p.resourceTitle,
-      }).catch(() => {})
-    }
-  } catch (e) {
-    console.error('Failed to append to note:', e)
-  }
+  const source = buildLearningCaptureSource()
+  noteCaptureStore.requestCapture({
+    mode: 'excerpt',
+    ...(source ? { source } : {}),
+    excerpt: text,
+    openNoteId: note.id,
+  })
 }
 
 function onDocumentMouseDown(e: MouseEvent) {
@@ -947,6 +1244,7 @@ onUnmounted(() => {
 const plan = ref<LearningPlan | null>(null)
 const resources = ref<LearningResource[]>([])
 const stuckResources = ref(new Set<number>())
+const progressMap = ref<Record<number, number>>({}) // resourceId -> status (0/1/2)
 const selectedModuleIndex = ref(-1)
 const selectedResourceId = ref<number | null>(null)
 const selectedResource = ref<LearningResource | null>(null)
@@ -955,8 +1253,10 @@ const quizData = ref<QuizData | null>(null)
 const mindmapData = ref<MindElixirData | null>(null)
 const gradingResult = ref<Record<string, any> | null>(null)
 const quizSubmittedAnswers = ref<Record<number, any> | null>(null)
+const gradingStreamTokens = ref<Record<number, string>>({})
 const showExplanations = ref(false)
 const showCitations = ref(true)
+const pptxViewMode = ref<'office' | 'html'>('office')
 
 // 逐题批改结果（按 index 索引，供 QuizPlayer 使用）
 const questionResults = computed(() => {
@@ -967,7 +1267,25 @@ const questionResults = computed(() => {
   return map
 })
 const quizSubmitting = ref(false)
-const sidebarCollapsed = ref(false)
+const sidebarCollapsed = ref(localStorage.getItem('aura-sidebar-collapsed') === 'true')
+watch(sidebarCollapsed, (val) => {
+  localStorage.setItem('aura-sidebar-collapsed', String(val))
+})
+
+function clearSelectedResource() {
+  if (selectedResourceId.value !== null) {
+    heartbeat.stop()
+  }
+  selectedResourceId.value = null
+  selectedResource.value = null
+  quizData.value = null
+  mindmapData.value = null
+  gradingResult.value = null
+  quizSubmittedAnswers.value = null
+  showExplanations.value = false
+  isFullscreen.value = false
+  chatStore.selectedModuleContext = null
+}
 
 // ==================== 数据加载 ====================
 async function loadPlan() {
@@ -1002,8 +1320,51 @@ async function loadResources() {
       } catch {}
     }))
     stuckResources.value = stuck
+
+    // 加载资源完成进度
+    await loadProgress()
   } catch (e) {
     console.error('[PlanDetail] 加载资源失败:', e)
+  }
+}
+
+async function loadProgress() {
+  const id = planId.value
+  if (!id) return
+  try {
+    const res = await getProgressByPlan(id)
+    const map: Record<number, number> = {}
+    for (const p of (res.data || [])) {
+      map[p.resourceId] = p.status
+    }
+    progressMap.value = map
+  } catch (e) {
+    console.error('[PlanDetail] 加载进度失败:', e)
+  }
+}
+
+async function toggleResourceComplete(res: LearningResource, e: Event) {
+  e.stopPropagation()
+  const planIdVal = planId.value
+  if (!planIdVal) return
+  const currentStatus = progressMap.value[res.id]
+  try {
+    if (currentStatus === 2) {
+      await unmarkResourceComplete(planIdVal, res.id)
+      progressMap.value = { ...progressMap.value, [res.id]: 1 }
+    } else {
+      await markResourceComplete(planIdVal, res.id)
+      progressMap.value = { ...progressMap.value, [res.id]: 2 }
+
+      // 追踪资源完成事件
+      tracker.trackResourceComplete({
+        resourceId: res.id,
+        resourceType: res.moduleType || 'text',
+        planId: planIdVal
+      })
+    }
+  } catch (err) {
+    console.error('[PlanDetail] 更新完成状态失败:', err)
   }
 }
 
@@ -1016,15 +1377,26 @@ function handleKeyDown(e: KeyboardEvent) {
 onMounted(async () => {
   loadPlan()
   await loadResources()
+
+  // 追踪页面浏览
+  tracker.trackPageView({
+    page: 'plan_detail',
+    planId: planId.value
+  })
+
   window.addEventListener('keydown', handleKeyDown)
   document.addEventListener('mousedown', onDocumentMouseDown)
   // 支持 ?resource=xxx 跳转自动打开对应资源
   const queryResource = route.query.resource
-  if (queryResource) {
+  if (queryResource && !isTreeMode.value) {
     const resId = Number(queryResource)
     if (resId > 0) {
       openResourceById(resId)
     }
+  }
+  // 刷新后恢复：检查后端是否仍在生成中
+  if (chatStore.activeSessionId) {
+    await chatStore.recoverStreaming(String(planId.value))
   }
 })
 
@@ -1032,6 +1404,7 @@ watch(selectedResource, (newRes) => {
   if (!newRes) {
     isFullscreen.value = false
   }
+  pptxViewMode.value = 'office'
 })
 
 watch(planId, () => {
@@ -1040,21 +1413,29 @@ watch(planId, () => {
     loadPlan()
     loadResources()
     selectedModuleIndex.value = -1
-    selectedResourceId.value = null
-    selectedResource.value = null
-    quizData.value = null
-    mindmapData.value = null
-    gradingResult.value = null
-    quizSubmittedAnswers.value = null
+    clearSelectedResource()
+    if (isTreeMode.value) {
+      ensureTreeLoaded(true)
+    }
   }
 })
 
 // 监听 ?resource= 查询参数变化（同 plan 内跳转不同资源）
 watch(() => route.query.resource, (resId) => {
-  if (resId && resources.value.length > 0) {
+  if (resId && resources.value.length > 0 && !isTreeMode.value) {
     openResourceById(Number(resId))
   }
 })
+
+watch(isTreeMode, async value => {
+  if (value) {
+    bootstrapPreviewDismissed.value = false
+  } else {
+    closeTreeSubdivide()
+  }
+  // 两个模式都需要加载知识树（大纲侧栏统一展示树节点）
+  await ensureTreeLoaded()
+}, { immediate: true })
 
 // 标题编辑
 const editingTitle = ref(false)
@@ -1062,20 +1443,80 @@ const editTitle = ref('')
 
 function saveTitle() {
   if (!editTitle.value.trim() || !plan.value) return
-  plan.value.title = editTitle.value.trim()
+  const newTitle = editTitle.value.trim()
+  plan.value.title = newTitle
   editingTitle.value = false
-  updatePlan(planId.value, { title: plan.value.title }).catch(e =>
+  updatePlan(planId.value, { title: newTitle }).catch(e =>
     console.error('[PlanDetail] 保存标题失败:', e)
   )
+  // 异步生成计划图标
+  regeneratePlanIcon()
 }
 
+async function regeneratePlanIcon() {
+  if (!plan.value) return
+  try {
+    const resourceTitles = resources.value.map(r => {
+      try {
+        const md = typeof r.moduleData === 'string' ? JSON.parse(r.moduleData) : r.moduleData
+        return md?.title || (r as any).title || ''
+      } catch { return (r as any).title || '' }
+    }).filter(Boolean)
+
+    // Python后端会直接更新Java后端，无需前端再更新
+    const result = await generatePlanIcon(planId.value, plan.value.title, resourceTitles)
+    if (result.svg && plan.value) {
+      // 本地更新planConfig用于立即显示
+      const config = plan.value.planConfig ? (typeof plan.value.planConfig === 'string' ? JSON.parse(plan.value.planConfig) : plan.value.planConfig) : {}
+      config.iconSvg = result.svg
+      config.iconDescription = result.description
+      plan.value.planConfig = config
+
+      // 发送自定义广播事件让其他界面（如列表页）自动同步更新图标
+      window.dispatchEvent(new CustomEvent('plan-icon-updated', {
+        detail: { planId: planId.value, planConfig: config }
+      }))
+    }
+  } catch (e) {
+    console.warn('[PlanDetail] 生成图标失败:', e)
+  }
+}
+
+// 从planConfig中提取图标SVG
+const planIconSvg = computed(() => {
+  if (!plan.value?.planConfig) return null
+  try {
+    const config = typeof plan.value.planConfig === 'string'
+      ? JSON.parse(plan.value.planConfig)
+      : plan.value.planConfig
+    return config?.iconSvg || null
+  } catch {
+    return null
+  }
+})
+
 function statusClass(status: number) {
-  return status === 2 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+  const map: Record<number, string> = {
+    0: 'bg-gray-100 text-gray-500',                        // 待规划
+    1: 'bg-amber-50 text-amber-700 border border-amber-200',  // 生成中
+    2: 'bg-sky-50 text-sky-700 border border-sky-200',        // 待确认
+    3: 'bg-orange-50 text-orange-700 border border-orange-200', // 学习中
+    4: 'bg-emerald-50 text-emerald-700 border border-emerald-200', // 已完成
+  }
+  return map[status] ?? 'bg-gray-100 text-gray-500'
 }
 
 function statusText(status: number) {
-  return status === 2 ? '已完成' : '进行中'
+  const map: Record<number, string> = {
+    0: '待规划', 1: '生成中', 2: '待确认', 3: '学习中', 4: '已完成',
+  }
+  return map[status] ?? '未知'
 }
+
+function pptxDownloadUrl(filename: string) {
+  return `${PYTHON_AI_BASE}/api/ai/resource/pptx/download/${filename}`
+}
+
 
 function badgeClass(type: string) {
   const map: Record<string, string> = {
@@ -1091,6 +1532,7 @@ function badgeClass(type: string) {
     diagram: 'bg-teal-100 text-teal-700',
     animation: 'bg-orange-100 text-orange-700',
     podcast: 'bg-emerald-100 text-emerald-700',
+    pptx: 'bg-violet-100 text-violet-700',
   }
   return map[type] || 'bg-navy-100 text-navy-700'
 }
@@ -1157,6 +1599,39 @@ function moduleDataFromGeneratedResource(resource: GeneratedResourceRef): Record
   return normalizeResourceModuleData(moduleType, baseData)
 }
 
+type GeneratedResourcePlacement = {
+  parentId: number | null
+  moduleOrder: number
+  nodeId?: string
+}
+
+function generatedResourcePlacement(): GeneratedResourcePlacement {
+  const ctx = chatStore.selectedModuleContext
+  const parent = ctx ? resources.value.find(resource => resource.id === ctx.moduleId) : null
+  const fallbackOrder = resources.value.length > 0
+    ? Math.max(...resources.value.map(resource => resource.moduleOrder)) + 1
+    : 1
+
+  return {
+    parentId: parent?.id ?? null,
+    moduleOrder: parent?.moduleOrder ?? fallbackOrder,
+    nodeId: ctx?.nodeId
+      || (parent?.moduleData?.nodeId as string | undefined)
+      || (parent?.moduleData?.node_id as string | undefined),
+  }
+}
+
+function withGeneratedResourceNodeData(
+  moduleData: Record<string, any>,
+  placement: GeneratedResourcePlacement = generatedResourcePlacement(),
+) {
+  return {
+    ...moduleData,
+    nodeId: moduleData.nodeId || placement.nodeId || undefined,
+    node_id: moduleData.node_id || placement.nodeId || undefined,
+  }
+}
+
 function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResource {
   const existing = resource.id ? resources.value.find(r => r.id === resource.id) : null
   const moduleType = resource.type || existing?.moduleType || resource.generated_content?.module_type || 'document'
@@ -1167,19 +1642,22 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
     existing.moduleData = { ...existing.moduleData, ...moduleData }
     existing.status = resource.status ?? 2
     existing.updatedAt = new Date().toISOString()
+    const placement = generatedResourcePlacement()
+    existing.parentId = existing.parentId ?? placement.parentId
+    existing.moduleOrder = existing.moduleOrder || placement.moduleOrder
+    existing.moduleData = withGeneratedResourceNodeData(existing.moduleData, placement)
     return existing
   }
 
-  const moduleOrder = resources.value.length > 0
-    ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1
+  const placement = generatedResourcePlacement()
 
   const newResource: LearningResource = {
     id: resource.id || -Date.now(),
     planId: planId.value,
-    parentId: null,
-    moduleOrder,
+    parentId: placement.parentId,
+    moduleOrder: placement.moduleOrder,
     moduleType,
-    moduleData,
+    moduleData: withGeneratedResourceNodeData(moduleData, placement),
     status: resource.status ?? 2,
     storagePath: null,
     generatedByAgent: moduleType === 'animation' ? 'animation_skill_generator' : 'resource_type_generator',
@@ -1192,7 +1670,7 @@ function upsertGeneratedResource(resource: GeneratedResourceRef): LearningResour
 }
 
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客',
+  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客', pptx: 'PPT',
 }
 
 // ==================== 计算属性 ====================
@@ -1218,6 +1696,342 @@ const modules = computed(() => {
   })
   return Array.from(moduleMap.values()).sort((a, b) => a.order - b.order)
 })
+
+// 基于 progressMap 计算计划进度
+const planProgress = computed(() => {
+  const validResourceIds = new Set(resources.value.filter(r => r.status >= 2).map(r => r.id))
+  const total = validResourceIds.size
+  const completed = Object.entries(progressMap.value).filter(
+    ([id, status]) => status === 2 && validResourceIds.has(Number(id))
+  ).length
+  return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
+})
+
+
+const rootTreeNodeId = computed(() => {
+  const root = knowledgeTreeStore.nodes.find(node => !node.parentId)
+    || knowledgeTreeStore.nodes.find(node => node.depth === 0)
+    || knowledgeTreeStore.nodes[0]
+  return root?.id || null
+})
+
+const treePlanOutline = computed(() =>
+  buildTreePlanOutline(knowledgeTreeStore.nodes, resources.value, rootTreeNodeId.value)
+)
+
+const outlineTreeModules = computed(() => {
+  return buildOutlineTreeFromTreeItems(treePlanOutline.value, resources.value)
+})
+
+const selectedOutlineModuleId = computed(() => {
+  const nodeId = knowledgeTreeStore.currentNodeId
+  return nodeId ? `node:${nodeId}` : null
+})
+
+const outlineLoading = computed(() =>
+  knowledgeTreeStore.loading && outlineTreeModules.value.length === 0
+)
+
+const outlineHeaderSubtitle = '由知识树管理 · 在此生成学习内容'
+
+const outlineEmptyTitle = '暂无知识树节点'
+
+const outlineEmptyHint = '在画布中拆分节点后会出现在这里'
+
+const outlineMetaText = computed(() => {
+  const mods = outlineTreeModules.value
+  if (mods.length === 0) return ''
+  const moduleCount = countOutlineTreeModules(mods)
+  const resourceCount = countOutlineTreeResources(mods)
+  return `${moduleCount} 节点 · ${resourceCount} 资源`
+})
+
+const selectedTreeNode = computed(() =>
+  knowledgeTreeStore.nodes.find(node => node.id === knowledgeTreeStore.currentNodeId) || null
+)
+
+/** 知识树模式下是否展示内容面板（仅用户主动选中资源时隐藏树画布） */
+const treeContentVisible = computed(() =>
+  isTreeMode.value && !!selectedResource.value
+)
+
+const treePopoverNode = computed(() =>
+  knowledgeTreeStore.nodes.find(node => node.id === treePopoverNodeId.value) || null
+)
+
+async function ensureTreeLoaded(force = false) {
+  if (!Number.isFinite(planId.value)) return
+  if (!force && knowledgeTreeStore.tree?.planId === planId.value && knowledgeTreeStore.nodes.length > 0) return
+  if (force) {
+    await loadResources()
+  }
+  await knowledgeTreeStore.loadByPlan(planId.value)
+}
+
+async function enterTreeMode() {
+  heartbeat.stop()
+  clearSelectedResource()
+  await router.replace({ query: { ...route.query, view: 'tree', resource: undefined } })
+  await ensureTreeLoaded(true)
+}
+
+async function toggleTreeMode() {
+  if (isTreeMode.value) {
+    await exitTreeMode()
+    return
+  }
+  await enterTreeMode()
+}
+
+async function exitTreeMode() {
+  closeTreeSubdivide()
+  const nextQuery = { ...route.query }
+  delete nextQuery.view
+  await router.replace({ query: nextQuery })
+}
+
+async function selectTreeNode(nodeId: string) {
+  await knowledgeTreeStore.selectNode(nodeId)
+}
+
+async function toggleTreeNodeCollapse(nodeId: string) {
+  await knowledgeTreeStore.toggleCollapsed(nodeId)
+}
+
+async function confirmDeleteTreeNode(nodeId: string) {
+  const node = knowledgeTreeStore.nodes.find(n => n.id === nodeId)
+  if (!node || !node.parentId) return // 根节点不可删除
+
+  const hasChildren = knowledgeTreeStore.nodes.some(n => n.parentId === nodeId)
+  const title = node.title || '未命名节点'
+  const msg = hasChildren
+    ? `确定删除「${title}」及其所有子节点？此操作不可恢复。`
+    : `确定删除「${title}」？此操作不可恢复。`
+
+  if (!window.confirm(msg)) return
+
+  await knowledgeTreeStore.deleteNode(nodeId)
+}
+
+/** 查找资源对应的节点ID */
+function findNodeIdForResource(res: LearningResource): string | null {
+  const data = res.moduleData || {}
+
+  // 1. 优先从资源的 nodeId 字段获取
+  const directNodeId = (res as any).nodeId || data.nodeId || data.node_id
+  if (directNodeId && knowledgeTreeStore.nodes.some(n => n.id === directNodeId)) {
+    return directNodeId
+  }
+
+  // 2. 通过节点的 resourceId 字段反查
+  const nodeByResourceId = knowledgeTreeStore.nodes.find(n => n.resourceId === res.id)
+  if (nodeByResourceId) return nodeByResourceId.id
+
+  // 3. 通过标题匹配
+  const title = data.module_title || data.moduleTitle || data.title
+  if (title) {
+    const normalizedTitle = String(title).replace(/\s+/g, '').trim().toLowerCase()
+    const nodeByTitle = knowledgeTreeStore.nodes.find(n =>
+      n.title && n.title.replace(/\s+/g, '').trim().toLowerCase() === normalizedTitle
+    )
+    if (nodeByTitle) return nodeByTitle.id
+  }
+
+  // 4. 通过 moduleOrder 匹配（同 moduleOrder 的其他资源已关联的节点）
+  if (res.moduleOrder != null && res.moduleOrder > 0) {
+    const siblings = resources.value.filter(r =>
+      r.id !== res.id && r.moduleOrder === res.moduleOrder
+    )
+    for (const sibling of siblings) {
+      const siblingNodeId = findNodeIdForResource(sibling)
+      if (siblingNodeId) return siblingNodeId
+    }
+  }
+
+  return null
+}
+
+async function openOutlineResource(resourceId: number) {
+  const resource = resources.value.find(item => item.id === resourceId)
+  const nodeId = resource?.moduleData?.nodeId as string | undefined
+
+  if (isTreeMode.value) {
+    // 树模式下：只选中节点，不打开资源面板
+    if (nodeId) {
+      await knowledgeTreeStore.selectNode(nodeId)
+    }
+    return
+  }
+
+  await openResourceById(resourceId)
+  if (nodeId) {
+    await knowledgeTreeStore.selectNode(nodeId)
+  }
+}
+
+function onOutlineSelectModule(mod: PlanOutlineTreeModule) {
+  const nodeId = mod.nodeId
+  if (!nodeId) return
+
+  const showModuleContext = shouldShowModuleContextPromptForOutlineModule(mod)
+
+  if (knowledgeTreeStore.currentNodeId === nodeId) {
+    knowledgeTreeStore.currentNodeId = null
+    clearSelectedResource()
+    return
+  }
+  void selectTreeNode(nodeId).then(() => {
+    if (isTreeMode.value) return
+    const node = knowledgeTreeStore.nodes.find(n => n.id === nodeId)
+    const resourceId = node?.resourceId
+      || resources.value.find(r => {
+        const data = r.moduleData || {}
+        return data.nodeId === nodeId || data.node_id === nodeId
+      })?.id
+    if (resourceId) {
+      void openResourceById(resourceId, undefined, { showModuleContext })
+    } else {
+      clearSelectedResource()
+    }
+  })
+}
+
+function onOutlineSelectResource(resourceId: number) {
+  void openOutlineResource(resourceId)
+}
+
+async function handleRetryById(resourceId: number) {
+  const res = resources.value.find(item => item.id === resourceId)
+  if (res) await handleRetry(res)
+}
+
+function closeTreeContentPanel() {
+  clearSelectedResource()
+}
+
+/** 为知识树节点创建或复用占位资源，供内容生成管线使用 */
+async function ensureNodePlaceholderResource(node: KnowledgeNode, resourceType: string = 'text'): Promise<number> {
+  if (node.resourceId && resourceType === 'text') return node.resourceId
+
+  const linked = resources.value.find(item => {
+    const data = item.moduleData || {}
+    return data.nodeId === node.id || data.node_id === node.id
+  })
+  if (linked?.id && resourceType === 'text') {
+    if (!node.resourceId) {
+      await updateKnowledgeNode(node.id, { resourceId: linked.id })
+      const idx = knowledgeTreeStore.nodes.findIndex(n => n.id === node.id)
+      if (idx >= 0) knowledgeTreeStore.nodes[idx] = { ...knowledgeTreeStore.nodes[idx], resourceId: linked.id }
+    }
+    return linked.id
+  }
+
+  const maxOrder = resources.value.length > 0
+    ? Math.max(...resources.value.map(r => r.moduleOrder))
+    : 0
+  const res = await bulkCreateResources([{
+    planId: planId.value,
+    moduleOrder: maxOrder + 1,
+    moduleType: resourceType,
+    moduleData: JSON.stringify({
+      title: node.title,
+      module_title: node.title,
+      description: node.summary || '',
+      nodeId: node.id,
+    }),
+    status: 1,
+  }])
+  const created = res.data?.[0]
+  if (!created?.id) throw new Error('创建占位资源失败')
+
+  await updateKnowledgeNode(node.id, { resourceId: created.id })
+  const nodeIdx = knowledgeTreeStore.nodes.findIndex(n => n.id === node.id)
+  if (nodeIdx >= 0) {
+    knowledgeTreeStore.nodes[nodeIdx] = { ...knowledgeTreeStore.nodes[nodeIdx], resourceId: created.id }
+  }
+  parseModuleData([created])
+  resources.value.push(created)
+  return created.id
+}
+
+async function generateFromTreeNode(payload: { nodeId: string; type: string }) {
+  const node = knowledgeTreeStore.nodes.find(item => item.id === payload.nodeId)
+  if (!node) return
+
+  try {
+    await knowledgeTreeStore.selectNode(payload.nodeId)
+    const resourceId = await ensureNodePlaceholderResource(node, payload.type)
+    const ctx = {
+      title: node.title,
+      description: node.summary || '',
+      moduleId: resourceId,
+      nodeId: node.id,
+      planId: planId.value,
+    }
+    chatStore.selectedModuleContext = ctx
+    await chatStore.requestNodeResourceGeneration(String(planId.value), ctx, payload.type)
+    if (!isTreeMode.value) {
+      await openResourceById(resourceId, payload.type)
+    }
+  } catch (e) {
+    knowledgeTreeStore.error = e instanceof Error ? e.message : '生成内容失败'
+  }
+}
+
+async function handleOutlineDropNode(payload: { nodeId: string; targetNodeId: string }) {
+  const ok = await knowledgeTreeStore.reparentNode(payload.nodeId, payload.targetNodeId)
+  if (ok) {
+    await knowledgeTreeStore.selectNode(payload.targetNodeId)
+  }
+  knowledgeTreeStore.setDraggingNodeId(null)
+}
+
+async function handleOutlineMountResource(payload: { resourceId: number; targetNodeId: string }) {
+  const resource = resources.value.find(item => item.id === payload.resourceId)
+  if (!resource) return
+  try {
+    const moduleData = {
+      ...(resource.moduleData || {}),
+      nodeId: payload.targetNodeId,
+    }
+    await updateResourceContent(payload.resourceId, moduleData, resource.status ?? 2)
+    await loadResources()
+    await knowledgeTreeStore.selectNode(payload.targetNodeId)
+  } catch (e) {
+    knowledgeTreeStore.error = e instanceof Error ? e.message : '关联资源失败'
+  }
+}
+
+async function openTreeSubdivide(nodeId: string) {
+  const selected = await knowledgeTreeStore.selectNode(nodeId)
+  if (!selected) return
+  treeSubdivisionOptions.value = []
+  treePopoverNodeId.value = nodeId
+}
+
+function closeTreeSubdivide() {
+  treePopoverNodeId.value = null
+  treeSubdivisionOptions.value = []
+}
+
+async function loadTreeSubdivideOptions() {
+  treeSubdivisionOptions.value = await knowledgeTreeStore.loadSubdivisionOptionsCurrent()
+}
+
+async function runSingleAngleSplit(angle: string) {
+  closeTreeSubdivide()
+  await knowledgeTreeStore.subdivideCurrent(angle)
+}
+
+async function runMultiAngleSplit(options: TreeSubdivisionOption[]) {
+  closeTreeSubdivide()
+  await knowledgeTreeStore.multiAngleSubdivideCurrent(options)
+}
+
+async function runFirstPrinciplesSplit() {
+  closeTreeSubdivide()
+  await knowledgeTreeStore.firstPrinciplesCurrent()
+}
 
 function renderMd(text: string) { return parseMarkdown(text) }
 
@@ -1309,9 +2123,7 @@ async function renderMermaidInResource() {
 
         try {
           const rawCode = decodeURIComponent(codeBase64)
-          const normalizedCode = rawCode
-            .replace(/[    　]/g, ' ')
-            .replace(/[​‌‍﻿]/g, '')
+          const normalizedCode = normalizeMermaidCode(rawCode)
 
           const id = 'mermaid-' + Math.random().toString(36).substr(2, 9)
           const { svg } = await mermaid.render(id, normalizedCode)
@@ -1349,12 +2161,11 @@ async function renderMermaidInResource() {
           _initMermaidInteraction(el, uid, true)
         } catch (err: any) {
           if (el.getAttribute('data-mermaid-code') === codeBase64) {
-            console.error('Mermaid rendering error:', err)
+            console.warn('Mermaid rendering failed, showing raw code:', err.message)
+            // 清理 mermaid.render 失败后插入到 body 的错误 SVG 残留
+            document.querySelectorAll('div[id^="dmermaid-"], svg[id^="mermaid-"]').forEach(n => n.remove())
             el.innerHTML = `
-              <div class="flex flex-col p-4 bg-red-50 rounded-xl border border-red-100">
-                <span class="text-sm font-semibold text-red-600 mb-2">图表渲染失败</span>
-                <pre class="text-xs text-red-500 overflow-x-auto p-2 bg-white rounded border border-red-50/50">${err.message || String(err)}</pre>
-              </div>
+              <pre class="text-xs text-navy-500 bg-navy-50 rounded-xl p-4 border border-navy-100/50 overflow-x-auto leading-relaxed">${normalizedCode}</pre>
             `
             el.setAttribute('data-rendered', 'true')
             el.removeAttribute('data-rendering')
@@ -1562,7 +2373,26 @@ function _initMermaidInteraction(wrapper: Element, uid: string, center = false) 
 }
 
 watch(() => selectedResource.value?.moduleData?.content, () => {
+  // 流式输出进行中不渲染 mermaid：每个 chunk 都会通过 v-html 替换掉已渲染的 SVG，
+  // 再触发 watch 调用 mermaid.render，造成图表反复重渲闪烁。
+  // 仅在当前资源不在流式中时渲染。
+  const rid = selectedResourceId.value
+  if (chatStore.isResourceStreaming && rid != null && chatStore.resourceStreamBuffers[rid] != null) {
+    return
+  }
   renderMermaidInResource()
+})
+
+// 流式结束后统一渲染一次（此时内容为最终态，SVG 不再被 v-html 清除）
+watch(() => chatStore.isResourceStreaming, (streaming) => {
+  if (!streaming) {
+    nextTick(() => renderMermaidInResource())
+  }
+})
+
+// 切换选中资源时立即渲染
+watch(selectedResourceId, () => {
+  nextTick(() => renderMermaidInResource())
 })
 
 onMounted(() => {
@@ -1699,7 +2529,18 @@ function handleCitationClick(e: MouseEvent) {
 const animationHtml = computed(() => {
   const md = selectedResource.value?.moduleData
   if (!md) return ''
-  return normalizeAnimationHtml(md.html || md.content || '')
+  const raw = md.html || md.content || ''
+  if (selectedResource.value?.moduleType === 'animation' && md.narration?.version === 1) {
+    return prepareAnimationHtmlForPlayer(raw)
+  }
+  return normalizeAnimationHtml(raw)
+})
+
+const podcastHtml = computed(() => {
+  const md = selectedResource.value?.moduleData
+  if (!md) return ''
+  const raw = md.content || md.html || ''
+  return rewriteEmbeddedAudioUrls(raw, PYTHON_AI_BASE)
 })
 
 // ==================== 资源详情 ====================
@@ -1722,6 +2563,59 @@ function selectModule(index: number) {
   const mod = modules.value[index]
   if (mod?.resources.length > 0) {
     toggleResource(mod.resources[0])
+  }
+}
+
+function onOutlineToggleComplete(resourceId: number) {
+  const res = resources.value.find(r => r.id === resourceId)
+  if (res) toggleResourceComplete(res, new Event('click'))
+}
+
+function onOutlineDeleteResource(resourceId: number) {
+  const res = resources.value.find(r => r.id === resourceId)
+  if (res) confirmDeleteResource(res)
+}
+
+// 删除资源
+const showDeleteResourceConfirm = ref(false)
+const deletingResource = ref<LearningResource | null>(null)
+
+function confirmDeleteResource(res: LearningResource) {
+  deletingResource.value = res
+  showDeleteResourceConfirm.value = true
+}
+
+function handleDeleteResourceCancel() {
+  showDeleteResourceConfirm.value = false
+  deletingResource.value = null
+}
+
+async function handleDeleteResourceConfirm() {
+  const res = deletingResource.value
+  if (!res) return
+  try {
+    await deleteResourceApi(res.id)
+    // 从本地列表移除
+    resources.value = resources.value.filter(r => r.id !== res.id)
+    // 若删除的是当前选中资源，清空选中态
+    if (selectedResourceId.value === res.id) {
+      heartbeat.stop()
+      selectedResourceId.value = null
+      selectedResource.value = null
+      quizData.value = null
+      mindmapData.value = null
+      gradingResult.value = null
+      quizSubmittedAnswers.value = null
+      showExplanations.value = false
+      isFullscreen.value = false
+    }
+    showToast('资源已删除', 'success', { title: '删除成功' })
+  } catch (e) {
+    console.error('删除资源失败:', e)
+    showToast('删除失败，请稍后重试', 'error', { title: '删除失败' })
+  } finally {
+    showDeleteResourceConfirm.value = false
+    deletingResource.value = null
   }
 }
 
@@ -1749,7 +2643,11 @@ async function handleRetry(res: LearningResource) {
   }
 }
 
-function toggleResource(res: LearningResource) {
+type ToggleResourceOptions = {
+  showModuleContext?: boolean
+}
+
+function toggleResource(res: LearningResource, options: ToggleResourceOptions = {}) {
   // 点击已选中的资源 → 取消选中
   if (selectedResourceId.value === res.id) {
     heartbeat.stop()
@@ -1761,6 +2659,8 @@ function toggleResource(res: LearningResource) {
     quizSubmittedAnswers.value = null
     showExplanations.value = false
     chatStore.selectedModuleContext = null
+    // 取消左侧大纲高亮
+    knowledgeTreeStore.currentNodeId = null
     return
   }
 
@@ -1772,8 +2672,26 @@ function toggleResource(res: LearningResource) {
   selectedResourceId.value = res.id
   selectedResource.value = res
 
-  // Start heartbeat for this resource
-  heartbeat.start(planId.value, res.id)
+  // 联动左侧大纲：找到资源对应的节点并高亮
+  const nodeId = findNodeIdForResource(res)
+  if (nodeId) {
+    knowledgeTreeStore.currentNodeId = nodeId
+  }
+
+    // Start heartbeat for this resource (skip temp/placeholder ids)
+    if (typeof res.id === 'number' && res.id > 0) {
+      heartbeat.start(planId.value, res.id)
+    } else {
+      heartbeat.stop()
+    }
+
+  // 追踪资源查看事件
+  tracker.trackResourceView({
+    resourceId: res.id,
+    resourceType: res.moduleType || 'text',
+    planId: planId.value
+  })
+
   gradingResult.value = null
   quizSubmittedAnswers.value = null
   showExplanations.value = false
@@ -1814,6 +2732,11 @@ function toggleResource(res: LearningResource) {
   }
 
   // 设置模块上下文并提示用户可以生成补充资源
+  if (options.showModuleContext === false) {
+    chatStore.selectedModuleContext = null
+    return
+  }
+
   const moduleTitle = res.moduleData?.module_title || res.moduleData?.title || `模块 ${res.moduleOrder}`
   const moduleDesc = res.moduleData?.description || res.moduleData?.module_description || ''
   chatStore.selectedModuleContext = {
@@ -1821,6 +2744,8 @@ function toggleResource(res: LearningResource) {
     description: moduleDesc,
     moduleId: res.id,
     planId: res.planId || planId.value,
+    nodeId: (res.moduleData?.nodeId || res.moduleData?.node_id) as string | undefined,
+    moduleOrder: res.moduleOrder,
   }
   // 仅在非 quiz 资源时提示（quiz 本身已是补充资源）
   if (res.moduleType !== 'quiz') {
@@ -1829,11 +2754,15 @@ function toggleResource(res: LearningResource) {
 }
 
 /** 通过资源 ID 打开资源（先从本地列表查找，未命中则请求后端） */
-async function openResourceById(resourceId: number, resourceType?: string) {
+async function openResourceById(
+  resourceId: number,
+  resourceType?: string,
+  options: ToggleResourceOptions = {},
+) {
   // 先从本地已加载的资源中查找
   const local = resources.value.find(r => r.id === resourceId)
   if (local) {
-    toggleResource(local)
+    toggleResource(local, options)
     return
   }
   // 本地未命中，从后端获取
@@ -1846,10 +2775,89 @@ async function openResourceById(resourceId: number, resourceType?: string) {
       if (!resources.value.some(r => r.id === res.data.id)) {
         resources.value.push(res.data)
       }
-      toggleResource(res.data)
+      toggleResource(res.data, options)
     }
   } catch (e) {
     console.error('Failed to open resource by ID:', e)
+  }
+}
+
+function parsePartialQuizJSON(str: string): QuizData | null {
+  if (!str.trim()) return null
+
+  const quizTitleMatch = str.match(/"quiz_title"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/) ||
+                         str.match(/"title"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+  const title = quizTitleMatch ? quizTitleMatch[1] : '练习题'
+  
+  const descMatch = str.match(/"description"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+  const description = descMatch ? descMatch[1] : ''
+
+  const questionsIndex = str.indexOf('"questions"')
+  if (questionsIndex === -1) {
+    return { title, description, questions: [], totalPoints: 0, estimatedMinutes: 0 }
+  }
+
+  const questionsStr = str.substring(questionsIndex)
+  const parts = questionsStr.split('{')
+  const questions: any[] = []
+
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i]
+
+    // Extract question text
+    const qMatch = part.match(/"question(?:_text)?"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+    const questionText = qMatch ? qMatch[1] : ''
+
+    // Extract question type
+    const tMatch = part.match(/"question_type"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/) ||
+                   part.match(/"type"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+    const type = tMatch ? tMatch[1] : 'single_choice'
+
+    // Extract difficulty
+    const dMatch = part.match(/"difficulty"\s*:\s*(\d+)/)
+    const difficulty = dMatch ? parseInt(dMatch[1]) : 3
+
+    // Extract options
+    const options: string[] = []
+    const optMatch = part.match(/"options"\s*:\s*\[([^\]]*)(?:\]|$)/)
+    if (optMatch) {
+      const optStr = optMatch[1]
+      const optRegex = /"([^"\\]*(?:\\.[^"\\]*)*)"/g
+      let m
+      while ((m = optRegex.exec(optStr)) !== null) {
+        options.push(m[1])
+      }
+    }
+
+    // Extract correct answer
+    const caMatch = part.match(/"correct_answer"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/) ||
+                    part.match(/"correctAnswer"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+    const correctAnswer = caMatch ? caMatch[1] : ''
+
+    // Extract explanation
+    const expMatch = part.match(/"explanation"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)(?:"|$)/)
+    const explanation = expMatch ? expMatch[1] : ''
+
+    if (questionText || options.length > 0) {
+      questions.push({
+        index: i - 1,
+        type,
+        question: questionText,
+        options,
+        correctAnswer,
+        explanation,
+        difficulty,
+        points: 1,
+      })
+    }
+  }
+
+  return {
+    title,
+    description,
+    questions,
+    totalPoints: questions.length,
+    estimatedMinutes: questions.length * 2
   }
 }
 
@@ -1859,17 +2867,45 @@ function parseQuizData(res: LearningResource): QuizData | null {
 
   // questions 可能在顶层、md.content 对象里、或 md.content JSON 字符串里
   let rawQuestions = md.questions || []
+  let title = md.title || md.quiz_title || '练习题'
+  let description = md.description || ''
+
   if (rawQuestions.length === 0 && md.content) {
     try {
       const c = typeof md.content === 'string' ? JSON.parse(md.content) : md.content
       rawQuestions = c?.questions || []
-    } catch {}
+      if (c?.quiz_title || c?.title) {
+        title = c.quiz_title || c.title
+      }
+      if (c?.description) {
+        description = c.description
+      }
+    } catch {
+      // JSON.parse failed. If it's a string, try partial parsing.
+      if (typeof md.content === 'string') {
+        const partialData = parsePartialQuizJSON(md.content)
+        if (partialData && partialData.questions.length > 0) {
+          partialData.id = res.id // Add the ID so watch works correctly
+          return partialData
+        }
+      }
+    }
   }
 
   // 如果仍未找到结构化 questions，将 content 文本解析为简答题
   if (rawQuestions.length === 0) {
     const text = typeof md.content === 'string' ? md.content : (md.description || '')
     if (!text.trim()) return null
+    // 如果 text 看起来是一堆以 { 开始的 JSON 文本（说明可能还在流式输出中），不要直接退化为 short_answer
+    if (text.trim().startsWith('{') || text.trim().includes('"questions"')) {
+      // 尝试部分解析，万一有内容了
+      const partialData = parsePartialQuizJSON(text)
+      if (partialData && partialData.questions.length > 0) {
+        partialData.id = res.id
+        return partialData
+      }
+      return null // 还在生成中，返回 null 不渲染 code block
+    }
     rawQuestions = [{
       type: 'short_answer',
       question: text.trim(),
@@ -1892,8 +2928,9 @@ function parseQuizData(res: LearningResource): QuizData | null {
   }))
 
   return {
-    title: md.title || md.quiz_title || '练习题',
-    description: md.description || '',
+    id: res.id,
+    title: title,
+    description: description,
     questions,
     totalPoints: md.totalPoints || md.total_points || questions.length,
     estimatedMinutes: md.estimatedMinutes || questions.length * 2,
@@ -1944,6 +2981,7 @@ function onQuizSubmit(userAnswers: Record<number, any>) {
   if (!selectedResource.value || quizSubmitting.value) return
   quizSubmitting.value = true
   gradingResult.value = null
+  gradingStreamTokens.value = {}
   quizSubmittedAnswers.value = userAnswers
   showExplanations.value = false
 
@@ -1962,6 +3000,12 @@ function onQuizSubmit(userAnswers: Record<number, any>) {
         onQuestionResult(index, result) {
           console.debug(`[Quiz] Q${index + 1}:`, result.is_correct ? 'correct' : 'incorrect')
         },
+        onToken(index, token) {
+          if (!gradingStreamTokens.value[index]) {
+            gradingStreamTokens.value[index] = ''
+          }
+          gradingStreamTokens.value[index] += token
+        },
         onQuizResult(result) {
           gradingResult.value = {
             score: result.score,
@@ -1969,6 +3013,16 @@ function onQuizSubmit(userAnswers: Record<number, any>) {
             correct: result.correct,
             details: result.details,
           }
+
+          // 追踪测验提交事件
+          tracker.trackQuizSubmit({
+            resourceId: selectedResource.value!.id,
+            planId: planId.value,
+            score: result.score,
+            totalQuestions: result.total,
+            correctAnswers: result.correct
+          })
+
           // 同步更新本地资源的 moduleData.latestResult，避免重新打开时再请求
           const res = selectedResource.value
           if (res && res.moduleData) {
@@ -2128,17 +3182,31 @@ function generateResource(type: string) {
 watch(() => chatStore.lastQuizResource, (data) => {
   if (!data) return
 
-  const maxOrder = resources.value.length > 0 ? Math.max(...resources.value.map(r => r.moduleOrder)) : 0
+  // 如果当前选中的就是 quiz 资源，直接合并数据，防止流式输出/生成完重复添加
+  if (selectedResource.value && selectedResource.value.moduleType === 'quiz') {
+    const existing = resources.value.find(r => r.id === selectedResource.value!.id)
+    if (existing) {
+      existing.moduleData = {
+        ...existing.moduleData,
+        questions: data.questions,
+      }
+      quizData.value = parseQuizData(existing)
+      chatStore.lastQuizResource = null
+      return
+    }
+  }
+
+  const placement = generatedResourcePlacement()
   const newResource: LearningResource = {
     id: Date.now(),
     planId: planId.value,
-    parentId: null,
-    moduleOrder: maxOrder + 1,
+    parentId: placement.parentId,
+    moduleOrder: placement.moduleOrder,
     moduleType: 'quiz',
-    moduleData: {
+    moduleData: withGeneratedResourceNodeData({
       title: '练习题',
       questions: data.questions,
-    },
+    }, placement),
     status: 2,
     storagePath: null,
     generatedByAgent: 'quiz_generator',
@@ -2177,6 +3245,15 @@ watch(() => chatStore.lastGeneratedResources, async (resList) => {
       if (fullRes) {
         // 解析 moduleData（API 返回 JSON 字符串，需转为对象）
         parseModuleData([fullRes])
+
+        // 防御性：确保 moduleData 中有 nodeId，以便侧栏正确挂载到树节点
+        if (fullRes.moduleData && !fullRes.moduleData.nodeId && !fullRes.moduleData.node_id) {
+          const ctxNodeId = chatStore.selectedModuleContext?.nodeId
+          if (ctxNodeId) {
+            fullRes.moduleData.nodeId = ctxNodeId
+            fullRes.moduleData.node_id = ctxNodeId
+          }
+        }
 
         // 清理由于提前接收到内联内容而创建的临时资源
         const tempIndex = resources.value.findIndex(res => res.id < 0 && res.moduleType === fullRes.moduleType)
@@ -2220,6 +3297,7 @@ watch(() => chatStore.lastGeneratedResources, async (resList) => {
       toggleResource(firstUpdatedRes)
     }
   }
+  await ensureTreeLoaded(true)
   chatStore.lastGeneratedResources = null
 })
 
@@ -2229,14 +3307,17 @@ watch(() => chatStore.streamingResources.length, () => {
   if (!items.length) return
   for (const { resource, content } of items) {
     if (resources.value.some(existing => existing.id === resource.id)) continue
+    const placement = generatedResourcePlacement()
     const newRes: LearningResource = {
       id: resource.id,
       planId: planId.value,
-      parentId: null,
-      moduleOrder: resources.value.length > 0
-        ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1,
+      parentId: placement.parentId,
+      moduleOrder: placement.moduleOrder,
       moduleType: resource.type || 'document',
-      moduleData: { title: resource.title, content },
+      moduleData: withGeneratedResourceNodeData({
+        title: resource.title,
+        content,
+      }, placement),
       status: 2,
       storagePath: null,
       generatedByAgent: 'content_orchestrator',
@@ -2257,14 +3338,14 @@ watch(() => chatStore.streamingPlaceholders, (placeholders) => {
   for (const p of placeholders) {
     // 跳过已存在的资源
     if (resources.value.some(r => r.id === p.id)) continue
+    const placement = generatedResourcePlacement()
     const placeholderRes: LearningResource = {
       id: p.id,
       planId: planId.value,
-      parentId: null,
-      moduleOrder: resources.value.length > 0
-        ? Math.max(...resources.value.map(r => r.moduleOrder)) + 1 : 1,
+      parentId: placement.parentId,
+      moduleOrder: p.moduleOrder ?? placement.moduleOrder,
       moduleType: p.type || 'document',
-      moduleData: { title: p.title, content: '' },
+      moduleData: withGeneratedResourceNodeData({ title: p.title, content: '' }, placement),
       status: 1,
       storagePath: null,
       generatedByAgent: 'content_orchestrator',
@@ -2274,8 +3355,8 @@ watch(() => chatStore.streamingPlaceholders, (placeholders) => {
     }
     resources.value.push(placeholderRes)
   }
-  // 自动选中第一个占位资源以在中间面板显示流式内容
-  if (placeholders.length > 0 && !selectedResource.value) {
+  // 自动选中第一个占位资源以在中间面板显示流式内容（始终覆盖，确保流式预览可见）
+  if (placeholders.length > 0) {
     const firstPlaceholder = resources.value.find(r => r.id === placeholders[0].id)
     if (firstPlaceholder) {
       selectedResourceId.value = firstPlaceholder.id
@@ -2294,12 +3375,163 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
     const existing = resources.value.find(r => r.id === resId)
     if (existing) {
       existing.moduleData = { ...existing.moduleData, content }
+      // 如果当前选中该资源，并且它是测验，实时解析更新 quizData
+      if (selectedResourceId.value === resId && existing.moduleType === 'quiz') {
+        quizData.value = parseQuizData(existing)
+      }
     }
   }
 }, { deep: true })
 </script>
 
 <style scoped>
+.plan-detail-page {
+  background:
+    radial-gradient(circle at top left, rgba(239, 244, 255, 0.72), transparent 30%),
+    linear-gradient(180deg, #fbfcff 0%, #f7f9fd 100%);
+}
+
+.plan-detail-workspace {
+  gap: 10px;
+  padding: 20px 20px 26px;
+  align-items: stretch;
+}
+
+.plan-detail-sidebar {
+  border: 1px solid rgba(185, 201, 232, 0.72);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 28px rgba(42, 67, 113, 0.06);
+}
+
+.plan-detail-sidebar__inner {
+  overflow: hidden;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 251, 255, 0.96) 100%);
+}
+
+.plan-detail-sidebar__header {
+  min-height: 116px;
+  border-bottom: 1px solid rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-detail-sidebar__outline {
+  background: rgba(248, 251, 255, 0.78);
+}
+
+.plan-detail-collapse {
+  width: 24px;
+  align-self: stretch;
+  margin: 14px -3px;
+  border: 1px solid rgba(185, 201, 232, 0.62);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 8px 18px rgba(42, 67, 113, 0.05);
+}
+
+.plan-detail-collapse:hover {
+  background: #eef3fb;
+}
+
+.plan-tree-stage,
+.plan-resource-panel,
+.plan-chat-shell :deep(.plan-chat-panel) {
+  border: 1px solid rgba(185, 201, 232, 0.72);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 28px rgba(42, 67, 113, 0.06);
+}
+
+.plan-tree-stage {
+  margin: 0;
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.plan-tree-stage > header {
+  min-height: 78px;
+  border-bottom-color: rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-resource-panel {
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.98);
+  transition: width 0.3s ease, min-width 0.3s ease, margin 0.3s ease;
+}
+
+.plan-resource-panel--spaced {
+  margin: 0;
+}
+
+.plan-resource-panel__header {
+  min-height: 64px;
+  border-bottom: 1px solid rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-resource-divider {
+  width: 12px;
+  margin: 14px -1px;
+  border-radius: 999px;
+  transition: width 0.25s ease, margin 0.25s ease, opacity 0.25s ease;
+}
+
+.plan-resource-divider.resource-divider--closed {
+  width: 0;
+  margin: 14px 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.plan-chat-shell {
+  display: flex;
+  min-width: 340px;
+  flex: 1 1 0;
+  transition: flex-basis 0.3s ease;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel) {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  animation-delay: 0.1s;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel.card) {
+  box-shadow: 0 10px 28px rgba(42, 67, 113, 0.06);
+}
+
+.plan-chat-shell :deep(.plan-chat-panel > div:first-child) {
+  min-height: 72px;
+  border-bottom-color: rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-chat-shell :deep(.plan-chat-panel > .flex-1.overflow-y-auto) {
+  padding: 18px 24px;
+  background: #fff;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel > div:last-child) {
+  border-top-color: rgba(188, 203, 232, 0.58);
+  background: #fff;
+  padding: 16px 24px;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel .input-field) {
+  height: 48px;
+  border-radius: 9px;
+  border-color: rgba(154, 176, 218, 0.78);
+  color: #5a7099;
+}
+
+.plan-chat-shell :deep(.plan-chat-panel .btn-primary) {
+  min-width: 88px;
+  height: 48px;
+  border-radius: 9px;
+}
+
 .resource-content--animation {
   padding: 0;
   overflow: hidden;
@@ -2311,9 +3543,7 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
 
 .animation-stage {
   width: min(100%, calc((100vh - 250px) * 16 / 9));
-  aspect-ratio: 16 / 9;
   margin: 0 auto;
-  overflow: hidden;
   background: #050505;
 }
 
@@ -2349,6 +3579,70 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
   display: block;
 }
 
+.pptx-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.pptx-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: #f8f7ff;
+  border-bottom: 1px solid #ede9fe;
+  flex-shrink: 0;
+}
+
+.pptx-slide-count {
+  font-size: 13px;
+  color: #7c3aed;
+  font-weight: 600;
+  background: rgba(124, 58, 237, 0.08);
+  padding: 4px 12px;
+  border-radius: 16px;
+}
+
+.pptx-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 18px;
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);
+}
+
+.pptx-download-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(124, 58, 237, 0.35);
+}
+
+.pptx-stage {
+  flex: 1;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  border: none;
+  border-radius: 0;
+}
+
+.pptx-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.15s ease-out;
@@ -2356,6 +3650,29 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.fp-stop-button {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  z-index: 1200;
+  transform: translateX(-50%);
+  padding: 10px 20px;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 999px;
+  background: rgba(254, 242, 242, 0.96);
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 12px 36px rgba(26, 40, 71, 0.12);
+  backdrop-filter: blur(12px);
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.fp-stop-button:hover {
+  background: rgba(254, 226, 226, 0.98);
+  border-color: rgba(248, 113, 113, 0.65);
 }
 </style>
 
@@ -2365,6 +3682,10 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
   position: fixed;
   z-index: 1200;
   animation: selectionPopupFade 0.15s ease;
+  /* Anchor for upward-opening note list */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
 }
 
 .selection-popup-inner {
@@ -2403,9 +3724,18 @@ watch(() => chatStore.resourceStreamBuffers, (buffers) => {
   border: 1px solid rgba(26, 40, 71, 0.1);
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  max-height: 200px;
+  max-height: 240px;
+  min-width: 220px;
   overflow-y: auto;
   padding: 4px;
+}
+
+.selection-note-list--up {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  margin-top: 0;
 }
 
 .selection-note-item {

@@ -16,4 +16,5 @@ export interface ChatMessage {
   dialogueTime: string
   intentType?: string
   planId?: number
+  conversationContext?: string
 }

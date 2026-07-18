@@ -23,6 +23,8 @@ NODE_RESOURCE_TYPE_GENERATOR = "resource_type_generator"
 NODE_ANIMATION_SKILL_GENERATOR = "animation_skill_generator"
 NODE_PROFILE_MAINTAINER = "profile_maintainer"
 NODE_HUMAN_CONFIRM = "human_confirm"
+NODE_WAIT_USER_REPLY = "wait_user_reply"
+NODE_KB_CONFIRM = "kb_confirm"
 
 # 意图类型
 INTENT_GENERATE_RESOURCE = "generate_resource"
@@ -31,6 +33,10 @@ INTENT_GENERATE_QUIZ = "generate_quiz"
 INTENT_GRADE_QUIZ = "grade_quiz"
 INTENT_AMBIGUOUS = "ambiguous"
 INTENT_FOLLOW_UP = "follow_up"
+INTENT_GENERATE_ANIMATION = "generate_animation"
+INTENT_GENERATE_TYPE_RESOURCE = "generate_type_resource"
+INTENT_CLARIFY = "clarify"
+INTENT_CANCEL = "cancel"  # 用户取消/退出生成流程
 def reduce_current_step(left: str, right: str) -> str:
     """合并并行节点的状态步骤描述，避免并发冲突"""
     if not left:
@@ -64,6 +70,8 @@ class AgentState(TypedDict, total=False):
     task_id: Optional[int]
     session_id: str
     user_message: str  # 当前用户输入
+    current_module_id: Optional[int]  # 前端传入的当前正在学习的模块ID
+    current_module_title: Optional[str]  # 前端传入的模块标题
 
     # ==================== 对话上下文 ====================
     chat_history: List[Dict[str, str]]  # [{"role": "user"/"assistant", "content": "..."}]
@@ -74,6 +82,7 @@ class AgentState(TypedDict, total=False):
     next_node: str  # 下一个要执行的节点
     needs_human_confirm: bool  # 是否需要用户确认
     human_feedback: Optional[str]  # 用户反馈内容
+    resource_type: Optional[str]  # 生成类型资源时的具体类型(podcast, mindmap等)
 
     # ==================== 用户画像 ====================
     user_profile: Dict[str, Any]  # 用户画像数据
@@ -84,6 +93,12 @@ class AgentState(TypedDict, total=False):
     _checkpoint_learning_goal: str  # 上一轮 checkpointer 中的学习目标（供 controller 意图驱动判定）
     task_breakdown: Optional[Dict[str, Any]]  # 任务分解结果
     task_breakdown_confirmed: bool  # 用户是否已确认分解
+
+    # ==================== 知识库相关性检查 ====================
+    kb_relevant: bool  # 主控判断知识库是否有相关资料
+    kb_confirmed: bool  # 用户是否确认继续生成（知识库无关时）
+    web_search_fallback: bool  # 是否启用网络搜索兜底（知识库无相关内容时）
+    kb_check_message: str  # 主控生成的知识库确认提示信息（面向用户）
 
     # ==================== RAG 检索 ====================
     search_queries: List[str]  # 优化后的检索词列表
@@ -134,6 +149,9 @@ class AgentState(TypedDict, total=False):
     agent_anomaly: bool  # 智能体自主检测到内容偏离/异常，需中断回主控
     anomaly_reason: str  # 异常原因描述
     anomaly_clarify: bool  # 主控已处理异常，简答智能体进入追问澄清模式
+
+    # ==================== 追问上下文（checkpoint 恢复后供 controller 读取） ====================
+    _pending_question: str  # 上一轮智能体提出的追问内容（供 controller 恢复上下文）
 
     # ==================== 循环控制 ====================
     iteration_count: int  # 当前迭代次数（防止无限循环）

@@ -126,6 +126,17 @@ public class LearningPlanService {
     }
 
     @Transactional
+    public void updatePlanConfig(Long planId, Object newConfig) {
+        LearningPlan plan = planMapper.selectById(planId);
+        if (plan == null) {
+            throw new BusinessException(ErrorCode.PLAN_NOT_FOUND);
+        }
+        plan.setPlanConfig(toJson(newConfig));
+        plan.setUpdatedAt(LocalDateTime.now());
+        planMapper.updateById(plan);
+    }
+
+    @Transactional
     public void deletePlan(Long planId, Long userId) {
         LearningPlan plan = getPlanById(planId, userId);
 
@@ -165,7 +176,7 @@ public class LearningPlanService {
         plan.setLearningGoal(toJson(learningGoal));
         plan.setPlanConfig(toJson(planConfig));
         plan.setUserId(userId);
-        plan.setStatus(status != null ? status : 4);
+        plan.setStatus(status != null ? status : 0);
         plan.setProgress(0.0f);
         plan.setCreatedAt(LocalDateTime.now());
         plan.setUpdatedAt(LocalDateTime.now());

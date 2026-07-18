@@ -3,8 +3,9 @@
 """
 import logging
 import concurrent.futures
+import io
 import requests
-from typing import Dict, List
+from typing import Dict, List, Optional
 from app.core.config import settings
 
 # 全局共享的 requests.Session，配置连接池复用，解决高并发端口耗尽问题
@@ -64,6 +65,50 @@ def validate_image_url(url: str, timeout: int = 5) -> bool:
         return is_real_image or is_image_type
     except Exception:
         return False
+
+
+def download_image(url: str, timeout: int = 10, max_size_mb: int = 5) -> Optional[io.BytesIO]:
+    """下载图片到内存 BytesIO，返回 BytesIO 对象或 None（失败/超限时）"""
+    if not url or not url.startswith("http"):
+        return None
+    try:
+        resp = _search_session.get(
+            url, timeout=timeout, allow_redirects=True, stream=True,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                     'Accept': 'image/*,*/*'}
+        )
+        if resp.status_code >= 400:
+            resp.close()
+            return None
+
+        content_type = resp.headers.get('Content-Type', '').lower()
+        is_image = any(t in content_type for t in [
+            'image/', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp',
+            'application/octet-stream'
+        ])
+        if not is_image:
+            resp.close()
+            return None
+
+        # 流式读取，限制最大文件大小
+        max_bytes = max_size_mb * 1024 * 1024
+        buf = io.BytesIO()
+        downloaded = 0
+        for chunk in resp.iter_content(chunk_size=8192):
+            downloaded += len(chunk)
+            if downloaded > max_bytes:
+                resp.close()
+                return None
+            buf.write(chunk)
+        resp.close()
+
+        if buf.tell() < 100:
+            return None
+
+        buf.seek(0)
+        return buf
+    except Exception:
+        return None
 
 
 def batch_validate_images(images: List[Dict[str, str]], max_workers: int = 8) -> List[Dict[str, str]]:

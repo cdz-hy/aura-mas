@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -60,6 +61,13 @@ public class KnowledgeBaseService {
             if (collectionName != null) kb.setCollectionName(collectionName);
             knowledgeBaseMapper.updateById(kb);
         }
+    }
+
+    public List<KnowledgeBase> getIndexedDocuments() {
+        LambdaQueryWrapper<KnowledgeBase> wrapper = new LambdaQueryWrapper<KnowledgeBase>()
+                .eq(KnowledgeBase::getParseStatus, 2)
+                .orderByDesc(KnowledgeBase::getUploadTime);
+        return knowledgeBaseMapper.selectList(wrapper);
     }
 
     @Transactional

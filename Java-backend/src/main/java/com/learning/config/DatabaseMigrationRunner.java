@@ -16,8 +16,16 @@ public class DatabaseMigrationRunner implements ApplicationRunner {
             SELECT COUNT(*)
             FROM information_schema.statistics
             WHERE table_schema = DATABASE()
-              AND table_name = 'user_profile'
+              AND table_name = ?
               AND index_name = ?
+            """;
+
+    static final String COLUMN_COUNT_SQL = """
+            SELECT COUNT(*)
+            FROM information_schema.columns
+            WHERE table_schema = DATABASE()
+              AND table_name = ?
+              AND column_name = ?
             """;
 
     private final JdbcTemplate jdbcTemplate;
@@ -25,23 +33,113 @@ public class DatabaseMigrationRunner implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         fixUserProfileCurrentIndex();
+        ensureNoteColumns();
+        ensureSystemLogColumns();
+        ensureLogManagementMenu();
     }
 
     void fixUserProfileCurrentIndex() {
-        if (!indexExists("uk_user_current")) {
+        if (!indexExists("user_profile", "uk_user_current")) {
             return;
         }
 
         log.info("Migrating user_profile.uk_user_current from UNIQUE index to normal index");
         jdbcTemplate.execute("ALTER TABLE `user_profile` DROP INDEX `uk_user_current`");
 
-        if (!indexExists("idx_user_current")) {
+        if (!indexExists("user_profile", "idx_user_current")) {
             jdbcTemplate.execute("ALTER TABLE `user_profile` ADD INDEX `idx_user_current` (`user_id`, `is_current`)");
         }
     }
 
-    private boolean indexExists(String indexName) {
-        Integer count = jdbcTemplate.queryForObject(INDEX_COUNT_SQL, Integer.class, indexName);
+    void ensureSystemLogColumns() {
+        if (!columnExists("system_log", "operation_desc")) {
+            jdbcTemplate.execute("ALTER TABLE `system_log` ADD COLUMN `operation_desc` VARCHAR(200) DEFAULT NULL COMMENT '操作描述' AFTER `operation_type`");
+        }
+        if (!columnExists("system_log", "module")) {
+            jdbcTemplate.execute("ALTER TABLE `system_log` ADD COLUMN `module` VARCHAR(50) DEFAULT NULL COMMENT '所属模块' AFTER `operation_desc`");
+        }
+        if (!columnExists("system_log", "status")) {
+            jdbcTemplate.execute("ALTER TABLE `system_log` ADD COLUMN `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1=成功 0=失败' AFTER `user_ip`");
+        }
+        if (!columnExists("system_log", "error_msg")) {
+            jdbcTemplate.execute("ALTER TABLE `system_log` ADD COLUMN `error_msg` VARCHAR(500) DEFAULT NULL COMMENT '失败原因' AFTER `status`");
+        }
+        if (!indexExists("system_log", "idx_created_at")) {
+            jdbcTemplate.execute("ALTER TABLE `system_log` ADD INDEX `idx_created_at` (`created_at`)");
+        }
+    }
+
+    void ensureLogManagementMenu() {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM menu WHERE code = 'log-management'", Integer.class);
+        if (count != null && count == 0) {
+            log.info("Inserting log-management menu entry");
+            jdbcTemplate.execute("""
+                    INSERT INTO menu (code, name, path, icon, type, sort_order)
+                    VALUES ('log-management', '系统日志', '/admin/logs', 'log', 'menu', 105)
+                    """);
+            jdbcTemplate.execute("""
+                    INSERT IGNORE INTO role_menu (role, menu_id)
+                    SELECT 'admin', id FROM menu WHERE code = 'log-management'
+                    """);
+        }
+    }
+
+    void ensureNoteColumns() {
+        if (!columnExists("note", "tags")) {
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `tags` JSON DEFAULT NULL COMMENT '标签数组' AFTER `content`");
+        }
+        if (!columnExists("note", "is_pinned")) {
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `is_pinned` TINYINT DEFAULT 0 COMMENT '是否置顶' AFTER `tags`");
+        }
+        // Capture workbench metadata (nullable for legacy notes)
+        if (!columnExists("note", "note_type")) {
+            log.info("Adding note.note_type for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `note_type` VARCHAR(32) DEFAULT NULL COMMENT '摘录/速记/提问: excerpt|quick|question' AFTER `is_pinned`");
+        }
+        if (!columnExists("note", "organize_status")) {
+            log.info("Adding note.organize_status for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `organize_status` VARCHAR(32) DEFAULT NULL COMMENT '整理状态: pending|organizing|organized|error' AFTER `note_type`");
+        }
+        if (!columnExists("note", "source_type")) {
+            log.info("Adding note.source_type for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `source_type` VARCHAR(64) DEFAULT NULL COMMENT '来源类型: resource|plan|knowledge_tree|tutor' AFTER `organize_status`");
+        }
+        if (!columnExists("note", "source_id")) {
+            log.info("Adding note.source_id for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `source_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '来源实体ID' AFTER `source_type`");
+        }
+        if (!columnExists("note", "source_title")) {
+            log.info("Adding note.source_title for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `source_title` VARCHAR(255) DEFAULT NULL COMMENT '来源标题' AFTER `source_id`");
+        }
+        if (!columnExists("note", "source_route")) {
+            log.info("Adding note.source_route for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `source_route` VARCHAR(512) DEFAULT NULL COMMENT '来源前端路由' AFTER `source_title`");
+        }
+        if (!columnExists("note", "excerpt")) {
+            log.info("Adding note.excerpt for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `excerpt` TEXT DEFAULT NULL COMMENT '摘录原文（可为空）' AFTER `source_route`");
+        }
+        if (!indexExists("note", "idx_organize_status")) {
+            log.info("Adding note.idx_organize_status for capture workbench");
+            jdbcTemplate.execute("ALTER TABLE `note` ADD INDEX `idx_organize_status` (`organize_status`)");
+        }
+        if (!columnExists("note", "is_deleted")) {
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `is_deleted` TINYINT DEFAULT 0 AFTER `updated_at`");
+        }
+        if (!columnExists("note", "deleted_at")) {
+            jdbcTemplate.execute("ALTER TABLE `note` ADD COLUMN `deleted_at` DATETIME DEFAULT NULL AFTER `is_deleted`");
+        }
+    }
+
+    private boolean indexExists(String tableName, String indexName) {
+        Integer count = jdbcTemplate.queryForObject(INDEX_COUNT_SQL, Integer.class, tableName, indexName);
+        return count != null && count > 0;
+    }
+
+    private boolean columnExists(String tableName, String columnName) {
+        Integer count = jdbcTemplate.queryForObject(COLUMN_COUNT_SQL, Integer.class, tableName, columnName);
         return count != null && count > 0;
     }
 }

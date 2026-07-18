@@ -102,11 +102,9 @@
 
         <!-- Input area -->
         <div class="px-6 py-4 border-t border-navy-100/50 bg-white">
-          <form @submit.prevent="sendMessage" class="flex gap-3">
-            <input
+          <form @submit.prevent="sendMessage" class="flex gap-3 items-end">
+            <AutoGrowTextarea
               v-model="inputText"
-              type="text"
-              class="input-field flex-1"
               :placeholder="store.streaming ? 'AI正在回复中...' : '描述你想学习的内容...'"
               :disabled="store.streaming"
             />
@@ -167,6 +165,7 @@ import { parseMarkdown } from '@/utils/markdown'
 import { usePlanCreateStore } from '@/stores/planCreate'
 import ProfileRadar from '@/components/profile/ProfileRadar.vue'
 import ChatSessionSidebar from '@/components/chat/ChatSessionSidebar.vue'
+import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
 
 const store = usePlanCreateStore()
 const messagesContainer = ref<HTMLElement>()

@@ -203,8 +203,107 @@ public class UserService {
         userProfileMapper.insert(profile);
     }
 
+    /**
+     * 直接替换 learningBehavior（前端手动编辑用，不做 merge）
+     */
+    @Transactional
+    public void replaceLearningBehavior(Long userId, String newBehaviorJson) {
+        UserProfile existing = getCurrentProfile(userId);
+        if (existing == null) return;
+
+        existing.setIsCurrent(0);
+        userProfileMapper.updateById(existing);
+
+        UserProfile latest = userProfileMapper.selectOne(
+                new LambdaQueryWrapper<UserProfile>()
+                        .eq(UserProfile::getUserId, userId)
+                        .orderByDesc(UserProfile::getVersion)
+                        .last("LIMIT 1"));
+        int maxVersion = (latest != null && latest.getVersion() != null) ? latest.getVersion() : 0;
+
+        UserProfile newProfile = new UserProfile();
+        newProfile.setId(null);
+        newProfile.setUserId(userId);
+        newProfile.setVersion(maxVersion + 1);
+        newProfile.setIsCurrent(1);
+        newProfile.setAge(existing.getAge());
+        newProfile.setGender(existing.getGender());
+        newProfile.setDomain(existing.getDomain());
+        newProfile.setLearningBehavior(newBehaviorJson);
+        newProfile.setUpdateReason("用户手动编辑");
+        newProfile.setCreatedAt(LocalDateTime.now());
+        userProfileMapper.insert(newProfile);
+    }
+
     private static final Set<String> LIST_FIELDS = new HashSet<>(
             java.util.Arrays.asList("knowledge_base", "weak_areas", "interest_tags", "preferred_resource_types", "preferred_quiz_types"));
+
+    /**
+     * 增量更新用户学习画像（数值字段累加）
+     * @param userId 用户 ID
+     * @param updates 增量更新数据，如 { "active_vs_reflective": 0.1 }
+     * @param updateReason 更新原因
+     */
+    @Transactional
+    public void updateProfileIncremental(Long userId, Map<String, Object> updates, String updateReason) {
+        UserProfile existing = getCurrentProfile(userId);
+        if (existing == null) {
+            return;
+        }
+
+        String oldBehaviorJson = existing.getLearningBehavior();
+        if (oldBehaviorJson == null || oldBehaviorJson.isEmpty()) {
+            oldBehaviorJson = "{}";
+        }
+
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode behaviorNode = mapper.readValue(oldBehaviorJson, ObjectNode.class);
+
+            // 增量更新数值字段
+            for (Map.Entry<String, Object> entry : updates.entrySet()) {
+                String key = entry.getKey();
+                Object value = entry.getValue();
+
+                if (value instanceof Number) {
+                    double delta = ((Number) value).doubleValue();
+                    double oldValue = behaviorNode.has(key) ? behaviorNode.get(key).asDouble(0) : 0;
+                    double newValue = oldValue + delta;
+
+                    // 限制范围 [-1, 1]
+                    newValue = Math.max(-1, Math.min(1, newValue));
+                    behaviorNode.put(key, Math.round(newValue * 100) / 100.0);
+                }
+            }
+
+            // 创建新版本
+            existing.setIsCurrent(0);
+            userProfileMapper.updateById(existing);
+
+            UserProfile latest = userProfileMapper.selectOne(
+                    new LambdaQueryWrapper<UserProfile>()
+                            .eq(UserProfile::getUserId, userId)
+                            .orderByDesc(UserProfile::getVersion)
+                            .last("LIMIT 1"));
+            int maxVersion = (latest != null && latest.getVersion() != null) ? latest.getVersion() : 0;
+
+            UserProfile newProfile = new UserProfile();
+            newProfile.setId(null);
+            newProfile.setUserId(userId);
+            newProfile.setVersion(maxVersion + 1);
+            newProfile.setIsCurrent(1);
+            newProfile.setAge(existing.getAge());
+            newProfile.setGender(existing.getGender());
+            newProfile.setDomain(existing.getDomain());
+            newProfile.setLearningBehavior(mapper.writeValueAsString(behaviorNode));
+            newProfile.setUpdateReason(updateReason);
+            newProfile.setCreatedAt(LocalDateTime.now());
+            userProfileMapper.insert(newProfile);
+
+        } catch (Exception e) {
+            // JSON 解析失败时忽略更新
+        }
+    }
 
     /**
      * 合并 learningBehavior JSON：列表字段只增不删，标量字段新值覆盖旧值

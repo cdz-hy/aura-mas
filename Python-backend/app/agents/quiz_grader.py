@@ -7,6 +7,9 @@ from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_quiz_grader_llm
 from app.prompts import QUIZ_GRADER_PROMPT
 from app.utils.token_recorder import record_from_mimo
+from app.utils import stream_registry
+from app.services.db.java_client import JavaBackendClient as _JC
+import json
 
 logger = logging.getLogger("agents.quiz_grader")
 
@@ -21,6 +24,44 @@ def quiz_grader_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"{'='*60}")
     logger.info(f"  [题目判定智能体] 开始处理")
     logger.info(f"  待批改题目数: {len(quiz_questions) if quiz_questions else 0}")
+
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "题目判定智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在批改你的答案...")
+
+    # 创建占位资源用于流式显示批改解析
+    _create_ph = state.get("create_placeholder_callback")
+    placeholder_id = None
+    if _create_ph:
+        try:
+            ph_map = _create_ph([{"module_type": "quiz", "title": "批改解析", "description": "正在批改并生成解析..."}])
+            if ph_map:
+                placeholder_id = list(ph_map.values())[0].get("id")
+                logger.info(f"  [题目判定智能体] 创建占位成功: {placeholder_id}")
+        except Exception as e:
+            logger.error(f"  [题目判定智能体] 创建占位失败: {e}")
 
     if not quiz_questions:
         logger.warning(f"  [题目判定智能体] 无待批改题目")
@@ -59,7 +100,17 @@ def quiz_grader_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         logger.info(f"  [题目判定智能体] 正在调用 LLM 进行批改...")
-        result = llm.chat_json(messages, max_tokens=2048)
+
+
+        def on_chunk(chunk: str):
+            if _sse_cb and placeholder_id:
+                try:
+                    _sse_cb(f'data: {json.dumps({"type": "resource_stream_text", "resource_id": placeholder_id, "content": chunk}, ensure_ascii=False)}\n\n')
+                except Exception:
+                    pass
+
+        result = llm.chat_json_stream(messages, max_tokens=2048, on_chunk=on_chunk)
+
         record_from_mimo(llm, state.get("user_id", 0), "quiz_grading", state.get("task_id"))
         score = result.get("score", 0)
         is_correct = result.get("is_correct", False)
@@ -74,6 +125,17 @@ def quiz_grader_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"    遗漏要点: {', '.join(missed)}")
         logger.info(f"    反馈: {feedback[:150]}")
         logger.info(f"{'='*60}")
+
+        # 批改完成，更新占位资源为已完成
+        if placeholder_id:
+            try:
+                _JC().update_resource_content(
+                    placeholder_id,
+                    json.dumps({"title": "批改解析", "feedback": feedback, "score": score}, ensure_ascii=False),
+                    status=2,
+                )
+            except Exception as e:
+                logger.warning(f"  [题目判定智能体] 更新占位状态失败: {e}")
 
         return {
             "quiz_result": {

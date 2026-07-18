@@ -98,6 +98,8 @@ RESOURCE_TYPE_GENERATOR_PROMPTS = {
 - text 即为播报文稿，应当详细具体，多用生动的例子说明抽象概念
 - 严禁使用 emoji 表情符号
 - 所有文本使用中文""",
+
+    "pptx": "PPT 生成由专用智能体处理，此 prompt 仅为占位符。实际 prompt 在 pptx_generator.py 中定义。",
 }
 
 RESOURCE_TYPE_GENERATOR_DEFAULT_PROMPT = """你是一个专业的学习内容生成专家。根据学习内容，生成指定类型的学习资源。

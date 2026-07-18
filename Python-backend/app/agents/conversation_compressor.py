@@ -91,7 +91,7 @@ def compress_dialogues(
     ]
 
     try:
-        result = llm.chat_json(messages, max_tokens=1024)
+        result = llm.chat_json(messages)
         from app.utils.token_recorder import record_from_mimo
         record_from_mimo(llm, user_id, "conversation_compression")
         summary = result.get("summary", "")

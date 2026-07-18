@@ -54,6 +54,26 @@
           </svg>
           {{ dueCount > 0 ? `复习闪卡 (${dueCount})` : '闪卡' }}
         </button>
+        <button
+          v-if="viewMode === 'preview' && isAnnotated && !exportingPdf"
+          class="px-3 py-1.5 rounded-lg text-sm text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition-colors"
+          @click="exportNotePdf"
+        >
+          <svg class="w-4 h-4 inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+          </svg>
+          导出 PDF
+        </button>
+        <button
+          v-if="exportingPdf"
+          class="px-3 py-1.5 rounded-lg text-sm text-emerald-600 bg-emerald-50 cursor-wait"
+          disabled
+        >
+          <svg class="w-4 h-4 inline mr-1 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12a9 9 0 11-6.219-8.56" />
+          </svg>
+          导出中...
+        </button>
         <!-- View mode switch: edit / split / preview -->
         <div v-if="!showFormatPreview" class="flex items-center bg-navy-50 rounded-lg p-0.5">
           <button
@@ -94,7 +114,7 @@
             ? 'bg-indigo-50 text-indigo-600 cursor-wait'
             : 'text-indigo-600 hover:bg-indigo-50 border border-indigo-200'"
           :disabled="formatting"
-          @click="handleFormat"
+          @click="showInstructionDialog = true"
         >
           <svg v-if="formatting" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 12a9 9 0 11-6.219-8.56" />
@@ -114,8 +134,8 @@
       </div>
     </div>
 
-    <!-- Source tags -->
-    <div v-if="noteResources.length > 0" class="flex flex-wrap gap-2 mb-4">
+    <!-- Legacy resource-rel chips only (per-excerpt sources live inside the document card) -->
+    <div v-if="noteResources.length > 0" class="flex flex-wrap gap-2 mb-3">
       <button
         v-for="res in noteResources"
         :key="res.id"
@@ -128,6 +148,35 @@
         <span v-if="res.moduleName" class="text-navy-400">{{ res.moduleName }} ·</span>
         {{ res.resourceTitle || `资源 #${res.resourceId}` }}
       </button>
+    </div>
+
+    <!-- Instruction dialog -->
+    <div v-if="showInstructionDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+        <div class="px-6 pt-6 pb-4">
+          <h3 class="text-lg font-semibold text-navy-800 mb-2">整理笔记</h3>
+          <p class="text-sm text-navy-400 mb-4">可以输入你的整理要求，也可以直接跳过使用默认整理。</p>
+          <textarea
+            v-model="formatInstruction"
+            class="w-full h-28 px-3 py-2 rounded-lg border border-navy-200 text-sm text-navy-700 placeholder-navy-300 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 transition"
+            placeholder="例如：重点整理TCP三次握手部分，用表格对比UDP和TCP的区别..."
+          />
+        </div>
+        <div class="flex items-center justify-end gap-2 px-6 py-4 bg-navy-50/50 border-t border-navy-100/50">
+          <button
+            class="px-4 py-2 text-sm text-navy-500 hover:text-navy-700 transition-colors"
+            @click="showInstructionDialog = false"
+          >
+            取消
+          </button>
+          <button
+            class="px-4 py-2 text-sm text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors"
+            @click="showInstructionDialog = false; handleFormat()"
+          >
+            开始整理
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Format comparison preview (streaming or done) -->
@@ -163,7 +212,7 @@
       </div>
     </div>
 
-    <!-- Editor / Preview area -->
+    <!-- Classic Markdown editor: 编辑 / 分屏 / 预览 — 原文与笔记穿插在同一 content 里 -->
     <div v-else class="card overflow-hidden flex flex-col" style="height: calc(100vh - 220px)">
       <!-- Toolbar (edit & split modes) -->
       <div v-if="viewMode !== 'preview'" class="flex items-center gap-0.5 px-4 py-2 border-b border-navy-100/50 bg-navy-50/30 shrink-0 flex-wrap">
@@ -177,6 +226,7 @@
         <button v-for="btn in toolbarButtons" :key="btn.label" class="toolbar-btn" :title="btn.label" @click="insertMarkdown(btn.prefix, btn.suffix, btn.placeholder)">
           <span class="text-xs font-medium">{{ btn.display }}</span>
         </button>
+        <span class="ml-auto text-[10px] text-navy-300 hidden sm:inline">原文与笔记可穿插书写 · 分屏右侧即时预览</span>
       </div>
 
       <!-- Edit mode -->
@@ -185,8 +235,9 @@
           ref="textareaRef"
           v-model="content"
           class="w-full h-full p-8 text-navy-700 leading-relaxed resize-none outline-none font-body text-base"
-          placeholder="开始书写你的笔记...&#10;&#10;支持 Markdown 语法：&#10;# 标题&#10;**粗体** *斜体*&#10;- 列表&#10;> 引用&#10;`代码`"
+          placeholder="开始书写你的笔记…&#10;&#10;从学习正文划选「新建笔记 / 追加到笔记」会插入原文块，你可在原文前后穿插写理解。&#10;支持 Markdown：# 标题 **粗体** - 列表 > 引用"
           @input="onInput"
+          @mouseup="onTextareaMouseUp"
           @keydown.ctrl.s.prevent="saveNote"
           @keydown.meta.s.prevent="saveNote"
           @keydown.ctrl.z.prevent="undo"
@@ -196,14 +247,15 @@
         ></textarea>
       </div>
 
-      <!-- Split mode -->
+      <!-- Split mode: 左编辑 · 右预览 -->
       <div v-else-if="viewMode === 'split'" class="flex-1 min-h-0 flex">
         <textarea
           ref="textareaRef"
           v-model="content"
           class="flex-1 p-6 text-navy-700 leading-relaxed resize-none outline-none font-body text-base border-r border-navy-100/50"
-          placeholder="开始书写你的笔记..."
+          placeholder="左侧编辑，右侧预览…"
           @input="onInput"
+          @mouseup="onTextareaMouseUp"
           @keydown.ctrl.s.prevent="saveNote"
           @keydown.meta.s.prevent="saveNote"
           @keydown.ctrl.z.prevent="undo"
@@ -212,39 +264,59 @@
           @keydown.meta.y.prevent="redo"
         ></textarea>
         <div class="flex-1 overflow-y-auto p-6" @mouseup="onPreviewMouseUp">
-          <div class="markdown-body" v-html="renderedContent" @click="onPreviewClick"></div>
+          <div class="markdown-body note-interleaved-preview" v-html="renderedContent" @click="onPreviewClick"></div>
         </div>
       </div>
 
       <!-- Preview mode -->
       <div v-else class="flex-1 min-h-0 overflow-y-auto" @mouseup="onPreviewMouseUp">
-        <!-- Annotated two-column layout -->
-        <div v-if="isAnnotated" class="annotated-layout">
+        <div v-if="isAnnotated" ref="annotatedLayoutRef" class="annotated-layout">
           <aside class="annotation-sidebar">
             <p class="text-xs font-medium text-navy-400 mb-3 px-1">批注 ({{ annotations.length }})</p>
             <div
               v-for="ann in annotations"
               :key="ann.id"
               :data-ann-id="ann.id"
-              :class="['annotation-card', `ann-type-${ann.type}`, { 'ann-active': activeAnnotation === ann.id }]"
+              :class="['annotation-card', `ann-type-${ann.type}`, { 'ann-active': activeAnnotation === ann.id, 'ann-editing': editingAnnotationId === ann.id }]"
               @mouseenter="activeAnnotation = ann.id"
               @mouseleave="activeAnnotation = null"
               @click="scrollToContent(ann.id)"
             >
-              <span class="ann-type-badge">{{ ann.type }}</span>
-              <p class="ann-text">{{ ann.text }}</p>
+              <div class="ann-card-header">
+                <span
+                  class="ann-type-badge ann-type-clickable"
+                  :title="editingAnnotationId === ann.id ? '点击切换类型' : ''"
+                  @click.stop="editingAnnotationId === ann.id && cycleAnnotationType(ann)"
+                >{{ ann.type }}</span>
+                <div class="ann-card-actions">
+                  <button class="ann-action-btn" title="编辑" @click.stop="startInlineEdit(ann)">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  </button>
+                  <button class="ann-action-btn ann-action-delete" title="删除" @click.stop="deleteAnnotation(ann.id)">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </div>
+              </div>
+              <p
+                class="ann-text"
+                :contenteditable="editingAnnotationId === ann.id"
+                :ref="el => { if (el && editingAnnotationId === ann.id) editingTextRef = el as HTMLElement }"
+                @keydown.enter.prevent="editingAnnotationId === ann.id && saveInlineEdit(ann, $event)"
+                @keydown.escape.prevent="editingAnnotationId === ann.id && cancelInlineEdit(ann)"
+                @blur="editingAnnotationId === ann.id && saveInlineEdit(ann, $event)"
+                @click.stop
+              >{{ ann.text }}</p>
             </div>
           </aside>
           <div
             ref="annotatedContentRef"
-            class="annotation-content markdown-body"
+            class="annotation-content markdown-body note-interleaved-preview"
             v-html="annotatedHtml"
             @click="onAnnotatedContentClick"
           ></div>
         </div>
-        <!-- Regular single-column preview -->
         <div v-else class="p-8">
-          <div class="markdown-body max-w-3xl mx-auto" v-html="renderedContent" @click="onPreviewClick"></div>
+          <div class="markdown-body note-interleaved-preview max-w-3xl mx-auto" v-html="renderedContent" @click="onPreviewClick"></div>
         </div>
       </div>
     </div>
@@ -285,19 +357,91 @@
       </div>
     </transition>
 
-    <!-- Selection popup -->
+    <!-- Selection popup (preview mode) -->
     <Teleport to="body">
       <div
         v-if="selectionPopup.show"
         class="selection-popup"
         :style="{ left: selectionPopup.x + 'px', top: selectionPopup.y + 'px' }"
       >
+        <div class="popup-drag-handle" @mousedown.prevent="startDrag($event, 'selection')">
+          <span class="popup-drag-dots">···</span>
+        </div>
+        <div class="selection-popup-ann-types">
+          <button
+            v-for="t in ANNOTATION_TYPES"
+            :key="t.type"
+            class="selection-popup-ann-btn"
+            :style="{ '--ann-color': t.color }"
+            @click="startAnnotationFromPreview(t.type)"
+          >
+            {{ t.emoji }} {{ t.type }}
+          </button>
+        </div>
+        <div class="selection-popup-divider"></div>
+        <button class="selection-popup-btn" @click="addSelectionToNotes">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
+            <line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" />
+          </svg>
+          新建笔记
+        </button>
         <button class="selection-popup-btn" @click="generateFromSelection">
           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
           </svg>
-          用选中内容生成闪卡
+          生成闪卡
         </button>
+      </div>
+    </Teleport>
+
+    <!-- Annotation popup (edit/split mode - user manual annotation) -->
+    <Teleport to="body">
+      <div
+        v-if="showAnnotationPopup"
+        class="annotation-popup"
+        :style="{ left: annotationPopupPos.x + 'px', top: annotationPopupPos.y + 'px' }"
+      >
+        <!-- Step 1: pick type -->
+        <div v-if="annotationStep === 'type'" class="annotation-popup-types">
+          <p class="annotation-popup-title" @mousedown.prevent="startDrag($event, 'annotation')">
+            <span class="popup-drag-dots">···</span>
+            添加批注
+          </p>
+          <div class="annotation-type-grid">
+            <button
+              v-for="t in ANNOTATION_TYPES"
+              :key="t.type"
+              class="annotation-type-btn"
+              :style="{ borderColor: t.color, '--ann-color': t.color }"
+              @click="selectAnnotationType(t.type)"
+            >
+              <span>{{ t.emoji }}</span>
+              <span>{{ t.type }}</span>
+            </button>
+          </div>
+        </div>
+        <!-- Step 2: input text -->
+        <div v-else class="annotation-popup-input">
+          <p class="annotation-popup-title" @mousedown.prevent="startDrag($event, 'annotation')">
+            <span class="popup-drag-dots">···</span>
+            <span class="ann-type-dot" :style="{ background: ANNOTATION_TYPES.find(t => t.type === annotationType)?.color }"></span>
+            {{ editingAnnotationId ? '编辑' : '' }}{{ annotationType }}
+          </p>
+          <input
+            ref="annotationInputRef"
+            v-model="annotationText"
+            class="annotation-text-input"
+            placeholder="输入批注内容..."
+            maxlength="40"
+            @keydown.enter.prevent="confirmAnnotation"
+            @keydown.escape.prevent="closeAnnotationPopup"
+          />
+          <div class="annotation-popup-actions">
+            <button class="annotation-btn-cancel" @click="closeAnnotationPopup">取消</button>
+            <button class="annotation-btn-confirm" :disabled="!annotationText.trim()" @click="confirmAnnotation">确定</button>
+          </div>
+        </div>
       </div>
     </Teleport>
 
@@ -353,14 +497,26 @@ import { getNoteById, createNote, updateNote, getNoteResources } from '@/api/not
 import { getFlashcardsByNote, generateFlashcardsSSE } from '@/api/flashcard'
 import { issueTicket } from '@/api/auth'
 import { formatNoteSSE } from '@/api/noteAgent'
+import { PYTHON_AI_BASE } from '@/api/request'
 import type { NoteAnnotation } from '@/api/noteAgent'
 import type { Note, NoteResourceRel } from '@/types/note'
 import type { Flashcard } from '@/types/flashcard'
+import { useNoteCaptureStore } from '@/stores/noteCapture'
+import {
+  buildFormatPayload,
+  joinExcerptsFromContent,
+  migrateLegacyToInterleaved,
+  normalizeInterleavedOrder,
+  parseNoteBlocks,
+  preserveInterleavedStructure,
+  stripFormatArtifacts,
+} from '@/components/note/noteBlocks'
 import FlashcardPlayer from '@/components/flashcard/FlashcardPlayer.vue'
 import MindmapPlayer from '@/components/resource/MindmapPlayer.vue'
 
 const route = useRoute()
 const router = useRouter()
+const noteCaptureStore = useNoteCaptureStore()
 
 const note = ref<Note | null>(null)
 const noteName = ref('')
@@ -369,6 +525,76 @@ const viewMode = ref<'edit' | 'split' | 'preview'>(route.query.mode === 'preview
 const saving = ref(false)
 const saved = ref(false)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+
+/**
+ * Turn <<<excerpt>>> fences into HTML cards for 分屏/预览.
+ * Protect <<A:…>> annotations so marked does not treat them as HTML
+ * (otherwise they collapse into visible <<>> / >>> junk).
+ */
+function renderInterleavedMarkdown(raw: string): string {
+  // 0) Drop pure bracket / ellipsis junk lines before markdown
+  let input = raw
+    .replace(/<<\s*>>/g, '')
+    .replace(/<<<\s*>>>/g, '')
+    .replace(/^[ \t]*[<>]{1,}[ \t]*$/gm, '')
+    .replace(/^[ \t]*(\.{2,}|…+)[ \t]*$/gm, '')
+    .replace(/^[ \t]*[<>]{1,}\s*(\.{2,}|…+)?[ \t]*$/gm, '')
+
+  // 1) Protect annotation markers (must not pass through marked as HTML)
+  const annPlaceholders = new Map<string, string>()
+  let annI = 0
+  input = input.replace(/<<A:(\d+)\|([^|]+)\|([\s\S]*?)>>/g, (_full, id: string, type: string, text: string) => {
+    const key = `%%ANN_${annI++}%%`
+    // Keep a stable token for processAnnotatedHtml to attach data-aids
+    annPlaceholders.set(key, `<<A:${id}|${type}|${String(text).trim()}>>`)
+    return key
+  })
+
+  // 2) Protect excerpt fences → placeholders, markdown the rest, restore as cards
+  const map = new Map<string, string>()
+  let i = 0
+  const protected_ = input.replace(
+    /<<<excerpt\s+([^>]*?)>>>\r?\n?([\s\S]*?)\r?\n?<<<\s*\/excerpt\s*>>>/g,
+    (_full, attrStr: string, body: string) => {
+      const key = `%%EXCERPT_${i++}%%`
+      const titleMatch = /sourceTitle="((?:\\.|[^"\\])*)"/.exec(attrStr)
+      const routeMatch = /sourceRoute="((?:\\.|[^"\\])*)"/.exec(attrStr)
+      const title = titleMatch ? titleMatch[1].replace(/\\"/g, '"') : ''
+      const route = routeMatch ? routeMatch[1].replace(/\\"/g, '"') : ''
+      const safeBody = body
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>')
+      const titleHtml = title
+        ? (route
+            ? `<a class="note-excerpt-source" href="${route.replace(/"/g, '')}">${title.replace(/</g, '&lt;')}</a>`
+            : `<span class="note-excerpt-source">${title.replace(/</g, '&lt;')}</span>`)
+        : ''
+      map.set(
+        key,
+        `<div class="note-excerpt-card"><div class="note-excerpt-label">原文 ${titleHtml}</div><div class="note-excerpt-body">${safeBody}</div></div>`,
+      )
+      return `\n\n${key}\n\n`
+    },
+  )
+  let html = classifyCallouts(marked.parse(protected_) as string)
+  for (const [key, card] of map) {
+    html = html.replace(new RegExp(`<p>\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*</p>`, 'g'), card)
+    html = html.replace(key, card)
+  }
+  // Restore annotation markers as HTML-escaped text so processAnnotatedHtml can find them
+  for (const [key, marker] of annPlaceholders) {
+    const escaped = marker
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+    html = html.replace(new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), escaped)
+  }
+  // Final pass: any leftover bare <<>> from AI
+  html = html.replace(/&lt;&lt;\s*&gt;&gt;/g, '').replace(/<<\s*>>/g, '')
+  return html
+}
 
 // Tags
 const noteTags = ref<string[]>([])
@@ -473,15 +699,65 @@ const noteResources = ref<NoteResourceRel[]>([])
 // Selection popup state
 const selectionPopup = ref({ show: false, x: 0, y: 0, text: '' })
 
+// User annotation popup state
+const showAnnotationPopup = ref(false)
+const annotationPopupPos = ref({ x: 0, y: 0 })
+const annotationSelEnd = ref(0)
+const annotationStep = ref<'type' | 'text'>('type')
+const annotationType = ref('')
+const annotationText = ref('')
+const annotationInputRef = ref<HTMLInputElement | null>(null)
+const editingAnnotationId = ref<string | null>(null)
+const editingTextRef = ref<HTMLElement | null>(null)
+const exportingPdf = ref(false)
+
+// Drag state for popups
+const isDragging = ref(false)
+const dragOffset = ref({ x: 0, y: 0 })
+const dragTarget = ref<'selection' | 'annotation' | null>(null)
+
+function startDrag(e: MouseEvent, target: 'selection' | 'annotation') {
+  // Only left mouse button
+  if (e.button !== 0) return
+  e.preventDefault()
+  isDragging.value = true
+  dragTarget.value = target
+  const pos = target === 'selection' ? selectionPopup.value : annotationPopupPos.value
+  dragOffset.value = { x: e.clientX - pos.x, y: e.clientY - pos.y }
+}
+
+function onDrag(e: MouseEvent) {
+  if (!isDragging.value || !dragTarget.value) return
+  const x = Math.max(0, Math.min(window.innerWidth - 100, e.clientX - dragOffset.value.x))
+  const y = Math.max(0, Math.min(window.innerHeight - 50, e.clientY - dragOffset.value.y))
+  if (dragTarget.value === 'selection') {
+    selectionPopup.value.x = x
+    selectionPopup.value.y = y
+  } else {
+    annotationPopupPos.value.x = x
+    annotationPopupPos.value.y = y
+  }
+}
+
+function stopDrag() {
+  isDragging.value = false
+  dragTarget.value = null
+}
+
 // Note formatting state
 const formatting = ref(false)
 const formatStatus = ref('')
 const showFormatFlashcardPrompt = ref(false)
+const showInstructionDialog = ref(false)
+const formatInstruction = ref('')
 
 // Format comparison preview state
 const showFormatPreview = ref(false)
 const originalBeforeFormat = ref('')
+/** Display content (for interleaved notes: already merged with 原文 fences). */
 const formattedResult = ref('')
+/** Raw AI stream before client re-merge (note markers or plain markdown). */
+const formatStreamRaw = ref('')
 const formatStreamAbort = ref<(() => void) | null>(null)
 const streamingContentRef = ref<HTMLElement | null>(null)
 const acceptedDuringStream = ref(false)
@@ -490,6 +766,7 @@ const acceptedDuringStream = ref(false)
 const annotations = ref<NoteAnnotation[]>([])
 const activeAnnotation = ref<string | null>(null)
 const annotatedContentRef = ref<HTMLElement | null>(null)
+const annotatedLayoutRef = ref<HTMLElement | null>(null)
 const isAnnotated = computed(() => annotations.value.length > 0)
 const annotationTypeColor: Record<string, string> = {
   '易混淆': '#8b5cf6',
@@ -501,29 +778,51 @@ const annotationTypeColor: Record<string, string> = {
 
 function parseAnnotations(raw: string): { cleanContent: string; annotations: NoteAnnotation[] } {
   const anns: NoteAnnotation[] = []
-  const re = /<<A:(\d+)\|([^|]+)\|([^>]+)>>/g
+  // Non-greedy body so nested > in rare text does not break the match
+  const re = /<<A:(\d+)\|([^|]+)\|([\s\S]*?)>>/g
   let match: RegExpExecArray | null
   while ((match = re.exec(raw)) !== null) {
     anns.push({ id: match[1], type: match[2] as NoteAnnotation['type'], text: match[3].trim() })
   }
-  const cleanContent = raw.replace(re, '').trim()
+  const cleanContent = raw
+    .replace(re, '')
+    .replace(/<<\s*>>/g, '')
+    .replace(/^[ \t]*[<>]{2,}[ \t]*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
   return { cleanContent, annotations: anns }
 }
 
 function processAnnotatedHtml(html: string): string {
   const div = document.createElement('div')
   div.innerHTML = html
-  const refRe = /&lt;&lt;A:(\d+)\|[^|]+\|[^&]+&gt;&gt;/g
-  for (const p of div.querySelectorAll('p, li, blockquote, td, h1, h2, h3, h4, h5, h6')) {
-    if (!refRe.test(p.innerHTML)) continue
-    refRe.lastIndex = 0
+  // Escaped form after renderInterleavedMarkdown protection
+  const refRe = /&lt;&lt;A:(\d+)\|[^|]+\|[\s\S]*?&gt;&gt;/g
+  for (const p of div.querySelectorAll('p, li, blockquote, td, h1, h2, h3, h4, h5, h6, div')) {
+    if (!p.innerHTML.includes('&lt;&lt;A:') && !p.innerHTML.includes('<<A:')) continue
     const ids: string[] = []
-    p.innerHTML = p.innerHTML.replace(refRe, (_, id) => { ids.push(id); return '' })
+    p.innerHTML = p.innerHTML
+      .replace(refRe, (_, id) => {
+        ids.push(id)
+        return ''
+      })
+      // raw form fallback
+      .replace(/<<A:(\d+)\|[^|]+\|[\s\S]*?>>/g, (_, id) => {
+        ids.push(id)
+        return ''
+      })
+      // leftover empty brackets from mangled markers
+      .replace(/&lt;&lt;\s*&gt;&gt;/g, '')
+      .replace(/<<\s*>>/g, '')
     if (ids.length > 0) {
-      p.setAttribute('data-aids', ids.join(','))
+      p.setAttribute('data-aids', [...new Set(ids)].join(','))
       p.classList.add('annotated-paragraph')
     }
   }
+  // Global cleanup of empty bracket artifacts in any node text
+  div.innerHTML = div.innerHTML
+    .replace(/&lt;&lt;\s*&gt;&gt;/g, '')
+    .replace(/<<\s*>>/g, '')
   return div.innerHTML
 }
 
@@ -542,6 +841,211 @@ function scrollToAnnotation(id: string) {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     activeAnnotation.value = id
     setTimeout(() => { activeAnnotation.value = null }, 2000)
+  }
+}
+
+// === User manual annotation ===
+
+const ANNOTATION_TYPES = [
+  { type: '易混淆', color: '#8b5cf6', emoji: ' ' },
+  { type: '易错点', color: '#ef4444', emoji: '⚠️' },
+  { type: '提醒', color: '#3b82f6', emoji: ' ' },
+  { type: '注意', color: '#f59e0b', emoji: ' ' },
+  { type: '技巧', color: '#10b981', emoji: ' ' },
+]
+
+function getNextAnnotationId(): number {
+  const re = /<<A:(\d+)\|/g
+  let maxId = 0
+  let match: RegExpExecArray | null
+  while ((match = re.exec(content.value)) !== null) {
+    maxId = Math.max(maxId, Number(match[1]))
+  }
+  return maxId + 1
+}
+
+function calcPopupPos(rect: DOMRect): { x: number; y: number } {
+  // Fixed right side of page, vertically centered with selection
+  const popupWidth = 320
+  const x = Math.min(window.innerWidth - popupWidth - 16, window.innerWidth / 2 + 80)
+  const y = rect.top + rect.height / 2
+  return { x, y }
+}
+
+function openAnnotationPopup(rect: DOMRect, insertPos: number) {
+  annotationPopupPos.value = calcPopupPos(rect)
+  annotationSelEnd.value = insertPos
+  annotationStep.value = 'type'
+  annotationType.value = ''
+  annotationText.value = ''
+  showAnnotationPopup.value = true
+}
+
+function onTextareaMouseUp(e: MouseEvent) {
+  const ta = textareaRef.value
+  if (!ta) return
+  const start = ta.selectionStart
+  const end = ta.selectionEnd
+  if (start === end) {
+    showAnnotationPopup.value = false
+    return
+  }
+  const selected = content.value.substring(start, end).trim()
+  if (!selected) {
+    showAnnotationPopup.value = false
+    return
+  }
+  // Get selection rect for positioning
+  const sel = window.getSelection()
+  if (sel && sel.rangeCount > 0) {
+    const range = sel.getRangeAt(0)
+    const rect = range.getBoundingClientRect()
+    openAnnotationPopup(rect, end)
+  }
+}
+
+function selectAnnotationType(type: string) {
+  annotationType.value = type
+  annotationStep.value = 'text'
+  nextTick(() => annotationInputRef.value?.focus())
+}
+
+function confirmAnnotation() {
+  if (!annotationType.value || !annotationText.value.trim()) return
+  const id = getNextAnnotationId()
+  const marker = `<<A:${id}|${annotationType.value}|${annotationText.value.trim()}>>`
+  const before = content.value.substring(0, annotationSelEnd.value)
+  const after = content.value.substring(annotationSelEnd.value)
+  saveSnapshot()
+  content.value = before + marker + after
+  closeAnnotationPopup()
+  onInput()
+}
+
+function closeAnnotationPopup() {
+  showAnnotationPopup.value = false
+  annotationStep.value = 'type'
+  annotationType.value = ''
+  annotationText.value = ''
+  editingAnnotationId.value = null
+}
+
+function deleteAnnotation(id: string) {
+  const re = new RegExp(`<<A:${id}\\|[^|]+\\|[\\s\\S]*?>>`)
+  if (!re.test(content.value)) return
+  saveSnapshot()
+  content.value = content.value.replace(re, '')
+  const { annotations: anns } = parseAnnotations(content.value)
+  annotations.value = anns
+  onInput()
+}
+
+function startInlineEdit(ann: NoteAnnotation) {
+  editingAnnotationId.value = ann.id
+  nextTick(() => {
+    const el = editingTextRef.value
+    if (!el) return
+    el.focus()
+    // Select all text
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  })
+}
+
+function saveInlineEdit(ann: NoteAnnotation, event?: Event) {
+  if (editingAnnotationId.value !== ann.id) return
+  const el = editingTextRef.value
+  const newText = (el?.textContent ?? '').trim()
+  if (!newText || newText === ann.text) {
+    editingAnnotationId.value = null
+    return
+  }
+  const oldRe = new RegExp(`<<A:${ann.id}\\|([^|]+)\\|([\\s\\S]*?)>>`)
+  const match = oldRe.exec(content.value)
+  if (!match) { editingAnnotationId.value = null; return }
+  const newMarker = `<<A:${ann.id}|${match[1]}|${newText}>>`
+  saveSnapshot()
+  content.value = content.value.replace(oldRe, newMarker)
+  const { annotations: anns } = parseAnnotations(content.value)
+  annotations.value = anns
+  editingAnnotationId.value = null
+  onInput()
+}
+
+function cancelInlineEdit(ann: NoteAnnotation) {
+  // Restore original text in DOM before leaving edit mode
+  const el = editingTextRef.value
+  if (el) el.textContent = ann.text
+  editingAnnotationId.value = null
+}
+
+function cycleAnnotationType(ann: NoteAnnotation) {
+  const types = ANNOTATION_TYPES.map(t => t.type)
+  const idx = types.indexOf(ann.type)
+  const nextType = types[(idx + 1) % types.length]
+  const oldRe = new RegExp(`<<A:${ann.id}\\|([^|]+)\\|([\\s\\S]*?)>>`)
+  const match = oldRe.exec(content.value)
+  if (!match) return
+  const newMarker = `<<A:${ann.id}|${nextType}|${match[2]}>>`
+  saveSnapshot()
+  content.value = content.value.replace(oldRe, newMarker)
+  const { annotations: anns } = parseAnnotations(content.value)
+  annotations.value = anns
+  onInput()
+}
+
+// === 导出 PDF ===
+async function exportNotePdf() {
+  if (!annotatedLayoutRef.value) return
+  exportingPdf.value = true
+
+  try {
+    // 完全复用 PlanDetailView 的模式：克隆真实渲染的 DOM → 隐藏占位符 → html2pdf
+    const clone = annotatedLayoutRef.value.cloneNode(true) as HTMLElement
+
+    // 移除交互元素
+    clone.querySelectorAll('.ann-card-actions').forEach(el => el.remove())
+    clone.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'))
+
+    // 隐藏占位符（与 PlanDetailView 完全一致）
+    const placeholder = document.createElement('div')
+    placeholder.style.cssText = 'position:absolute;left:-9999px;top:-9999px;'
+    document.body.appendChild(placeholder)
+    placeholder.appendChild(clone)
+
+    // 处理图片 CORS
+    const images = clone.querySelectorAll('img')
+    const convertPromises = Array.from(images).map(async (img) => {
+      const src = img.getAttribute('src')
+      if (!src || src.startsWith('data:')) return
+      try {
+        const resp = await fetch(`${PYTHON_AI_BASE}/api/ai/proxy-image?url=${encodeURIComponent(src)}`)
+        const data = await resp.json()
+        if (data.data_url) img.setAttribute('src', data.data_url)
+      } catch { /* 保留原图 */ }
+    })
+    await Promise.all(convertPromises)
+
+    // 导出（与 PlanDetailView 完全一致的配置）
+    const html2pdf = (await import('html2pdf.js')).default
+    const opt = {
+      margin: 10,
+      filename: `${noteName.value || '笔记'}.pdf`,
+      image: { type: 'jpeg' as const, quality: 0.98 },
+      html2canvas: { scale: 2 },
+      jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const },
+      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] as string[] },
+    }
+    await html2pdf().set(opt).from(clone).save()
+
+    document.body.removeChild(placeholder)
+  } catch (err) {
+    console.error('Failed to export PDF:', err)
+  } finally {
+    exportingPdf.value = false
   }
 }
 
@@ -576,27 +1080,30 @@ const renderedContent = computed(() => {
   const raw = content.value || ''
   const stripped = raw
     .replace(/```mindmap\s*\n[\s\S]*?```/g, '')
-    .replace(/<<A:\d+\|[^|]+\|[^>]+>>/g, '')
+    .replace(/<<A:\d+\|[^|]+\|[\s\S]*?>>/g, '')
+    .replace(/<<\s*>>/g, '')
+    .replace(/^[ \t]*[<>]{2,}[ \t]*$/gm, '')
     .trim()
-  return classifyCallouts(marked(stripped) as string)
+  return renderInterleavedMarkdown(stripped)
 })
 
 const annotatedHtml = computed(() => {
   if (!isAnnotated.value) return ''
   const raw = content.value || ''
   const stripped = raw.replace(/```mindmap\s*\n[\s\S]*?```/g, '').trim()
-  const html = classifyCallouts(marked(stripped) as string)
+  const html = renderInterleavedMarkdown(stripped)
   return processAnnotatedHtml(html)
 })
 
-// Comparison preview rendered content
+// Comparison preview: render 原文 cards so左右差异落在「补充」上，而不是裸 fence 文本
 const renderedOriginalContent = computed(() => {
-  return classifyCallouts(marked.parse(originalBeforeFormat.value || '') as string)
+  const { cleanContent } = parseAnnotations(originalBeforeFormat.value || '')
+  return processAnnotatedHtml(renderInterleavedMarkdown(cleanContent))
 })
 
 const renderedFormattedContent = computed(() => {
   const { cleanContent } = parseAnnotations(formattedResult.value)
-  return classifyCallouts(marked.parse(cleanContent) as string)
+  return processAnnotatedHtml(renderInterleavedMarkdown(cleanContent))
 })
 
 const mindmapData = computed(() => {
@@ -681,10 +1188,41 @@ async function saveNote() {
     const name = noteName.value.trim() || '无标题笔记'
     const body = content.value.trim() || ' '
     const tags = noteTags.value.length > 0 ? noteTags.value : undefined
+
+    const blocks = parseNoteBlocks(body)
+    const excerpts = blocks.filter(b => b.type === 'excerpt')
+    const primary = excerpts[excerpts.length - 1]
+    const captureMeta = {
+      ...(note.value?.noteType ? { noteType: note.value.noteType } : excerpts.length ? { noteType: 'excerpt' as const } : {}),
+      ...(note.value?.organizeStatus ? { organizeStatus: note.value.organizeStatus } : {}),
+      ...(primary && primary.type === 'excerpt' && primary.sourceType
+        ? { sourceType: primary.sourceType as Note['sourceType'] }
+        : note.value?.sourceType
+          ? { sourceType: note.value.sourceType }
+          : {}),
+      ...(primary && primary.type === 'excerpt' && typeof primary.sourceId === 'number'
+        ? { sourceId: primary.sourceId }
+        : note.value?.sourceId != null
+          ? { sourceId: note.value.sourceId }
+          : {}),
+      ...(primary && primary.type === 'excerpt' && primary.sourceTitle
+        ? { sourceTitle: primary.sourceTitle }
+        : note.value?.sourceTitle
+          ? { sourceTitle: note.value.sourceTitle }
+          : {}),
+      ...(primary && primary.type === 'excerpt' && primary.sourceRoute
+        ? { sourceRoute: primary.sourceRoute }
+        : note.value?.sourceRoute
+          ? { sourceRoute: note.value.sourceRoute }
+          : {}),
+      excerpt: joinExcerptsFromContent(body) || undefined,
+    }
+
     if (note.value?.id) {
-      await updateNote(note.value.id, { noteName: name, content: body, tags })
+      await updateNote(note.value.id, { noteName: name, content: body, tags, ...captureMeta })
+      note.value = { ...note.value, content: body, ...captureMeta }
     } else {
-      const res = await createNote({ noteName: name, content: body, tags })
+      const res = await createNote({ noteName: name, content: body, tags, ...captureMeta })
       const id = (res as any)?.data?.id
       if (id) {
         router.replace(`/notes/${id}`)
@@ -720,13 +1258,17 @@ async function loadNote() {
     if (found) {
       note.value = found
       noteName.value = found.noteName
-      content.value = found.content
+      // Migrate legacy split excerpt/content into one interleaved markdown document
+      // 清洗残留符号，并纠正为 原文→笔记 交替顺序
+      content.value = normalizeInterleavedOrder(
+        stripFormatArtifacts(
+          migrateLegacyToInterleaved(found.content, found.excerpt),
+        ),
+      )
       noteTags.value = parseTags(found.tags)
       loadNoteResources(found.id)
-      // Parse annotations from saved content (if it was previously formatted)
-      const { annotations: anns } = parseAnnotations(found.content || '')
+      const { annotations: anns } = parseAnnotations(content.value)
       annotations.value = anns
-      // Reset undo/redo history for newly loaded note
       undoStack.length = 0
       redoStack.length = 0
     } else {
@@ -859,6 +1401,7 @@ async function handleFormat() {
   annotations.value = []
   originalBeforeFormat.value = content.value
   formattedResult.value = ''
+  formatStreamRaw.value = ''
   acceptedDuringStream.value = false
   showFormatPreview.value = true
 
@@ -868,64 +1411,107 @@ async function handleFormat() {
 
     formatStatus.value = '正在整理笔记...'
 
-    const { abort } = formatNoteSSE(ticket, originalBeforeFormat.value, {
-      onProgress(message) {
-        formatStatus.value = message
+    const instruction = formatInstruction.value.trim()
+    // 有原文块：按段附带只读原文上下文，只让 AI 写 note；客户端再拼回 fence
+    const { contentForAi, hasInterleaved } = buildFormatPayload(originalBeforeFormat.value)
+
+    const mergeAiOutput = (aiText: string) =>
+      hasInterleaved
+        ? preserveInterleavedStructure(originalBeforeFormat.value, aiText)
+        : (aiText.trim() || originalBeforeFormat.value)
+
+    const { abort } = formatNoteSSE(
+      ticket,
+      contentForAi,
+      {
+        onProgress(message) {
+          formatStatus.value = message
+        },
+        onChunk(chunk) {
+          formatStreamRaw.value += chunk
+          // 对比预览始终展示「拼回原文后」的最终形态，避免左右看起来像同一坨 fence
+          formattedResult.value = mergeAiOutput(formatStreamRaw.value)
+          if (acceptedDuringStream.value) {
+            content.value = formattedResult.value
+          }
+          nextTick(() => {
+            const el = streamingContentRef.value
+            if (el) el.scrollTop = el.scrollHeight
+          })
+        },
+        onDone(formatted) {
+          formatStreamRaw.value = formatted
+          formattedResult.value = mergeAiOutput(formatted)
+          formatting.value = false
+          formatStatus.value = ''
+          formatStreamAbort.value = null
+          if (acceptedDuringStream.value) {
+            const { annotations: anns } = parseAnnotations(formattedResult.value)
+            content.value = formattedResult.value
+            annotations.value = anns
+            saveNote()
+            showFormatFlashcardPrompt.value = true
+          }
+        },
+        onError(error) {
+          content.value = originalBeforeFormat.value
+          annotations.value = []
+          formatting.value = false
+          formatStatus.value = ''
+          showFormatPreview.value = false
+          formattedResult.value = ''
+          formatStreamRaw.value = ''
+          originalBeforeFormat.value = ''
+          formatStreamAbort.value = null
+          console.error('Note format error:', error)
+        },
       },
-      onChunk(chunk) {
-        formattedResult.value += chunk
-        // If already accepted, keep updating content.value in editor
-        if (acceptedDuringStream.value) {
-          content.value = formattedResult.value
-        }
-        // Auto-scroll the streaming panel to bottom
-        nextTick(() => {
-          const el = streamingContentRef.value
-          if (el) el.scrollTop = el.scrollHeight
-        })
+      instruction,
+      {
+        excerpt: joinExcerptsFromContent(originalBeforeFormat.value),
+        sourceTitle: note.value?.sourceTitle,
+        noteType: note.value?.noteType,
       },
-      onDone(formatted) {
-        formattedResult.value = formatted
-        formatting.value = false
-        formatStatus.value = ''
-        formatStreamAbort.value = null
-        // If accepted mid-stream, save the final complete result now
-        if (acceptedDuringStream.value) {
-          const { annotations: anns } = parseAnnotations(formatted)
-          content.value = formatted
-          annotations.value = anns
-          saveNote()
-          showFormatFlashcardPrompt.value = true
-        }
-      },
-      onError(error) {
-        formatting.value = false
-        formatStatus.value = ''
-        formatStreamAbort.value = null
-        console.error('Note format error:', error)
-      },
-    })
+    )
     formatStreamAbort.value = abort
   } catch (e) {
+    content.value = originalBeforeFormat.value
+    annotations.value = []
     formatting.value = false
     formatStatus.value = ''
+    showFormatPreview.value = false
+    formattedResult.value = ''
+    formatStreamRaw.value = ''
+    originalBeforeFormat.value = ''
     formatStreamAbort.value = null
     console.error('Failed to start note formatting:', e)
   }
 }
 
 function acceptFormat() {
-  if (!formattedResult.value.trim()) return
+  if (!formattedResult.value.trim() && !formatStreamRaw.value.trim()) return
   acceptedDuringStream.value = true
-  const { annotations: anns } = parseAnnotations(formattedResult.value)
-  content.value = formattedResult.value
+  // 始终从 raw AI 输出再 merge，避免对已拼回结果二次误解析
+  const source = formatStreamRaw.value.trim() || formattedResult.value
+  const merged = normalizeInterleavedOrder(
+    stripFormatArtifacts(
+      preserveInterleavedStructure(
+        originalBeforeFormat.value || content.value,
+        source,
+      ),
+    ),
+  )
+  formattedResult.value = merged
+  const { annotations: anns } = parseAnnotations(merged)
+  content.value = merged
   annotations.value = anns
+  formatInstruction.value = ''
   showFormatPreview.value = false
-  // If stream already finished, save now; otherwise onDone will save
   if (!formatting.value) {
     saveNote()
     showFormatFlashcardPrompt.value = true
     formattedResult.value = ''
+    formatStreamRaw.value = ''
     originalBeforeFormat.value = ''
   }
 }
@@ -940,6 +1526,7 @@ function rejectFormat() {
   formatting.value = false
   showFormatPreview.value = false
   formattedResult.value = ''
+  formatStreamRaw.value = ''
   originalBeforeFormat.value = ''
 }
 
@@ -974,29 +1561,159 @@ function onAnnotatedContentClick(e: MouseEvent) {
 
 // === Selection popup ===
 
+/** 从渲染容器中计算选区的文本偏移量
+ *  使用 Range.toString() 测量，与 selection.toString() 文本序列化方式完全一致 */
+function getRenderedOffset(range: Range, container: HTMLElement): number {
+  try {
+    const beforeRange = document.createRange()
+    beforeRange.setStart(container, 0)
+    beforeRange.setEnd(range.startContainer, range.startOffset)
+    return beforeRange.toString().length
+  } catch {
+    // fallback: 如果 setStart(container, 0) 失败（container 不是 Node），返回 0
+    return 0
+  }
+}
+
+/** 将渲染文本中的偏移量映射回原始 markdown 中的位置
+ *  构建 rawMap 数组：rawMap[renderedIdx] = rawPos，每个渲染字符对应原始位置
+ *  正确处理 markdown 语法（#标题、**粗体**、*斜体*、>引用、- 列表、`代码`、[链接](url) 等） */
+function mapRenderedToRaw(raw: string, renderedOffset: number, renderedLength: number): number {
+  const rawMap: number[] = []
+  let rawPos = 0
+
+  while (rawPos < raw.length) {
+    // 跳过批注标记 <<A:id|type|text>>
+    const markerMatch = raw.substring(rawPos).match(/^<<A:\d+\|[^|]+\|[^>]+>>/)
+    if (markerMatch) { rawPos += markerMatch[0].length; continue }
+
+    // HTML 实体（如 &amp; → &）：占一个渲染字符
+    const entityMatch = raw.substring(rawPos).match(/^&(amp|lt|gt|quot|apos|#\d+|#x[\da-fA-F]+);/)
+    if (entityMatch) { rawMap.push(rawPos); rawPos += entityMatch[0].length; continue }
+
+    // 行首块级语法（不产生渲染字符，只推进 rawPos）
+    const atLineStart = rawPos === 0 || raw[rawPos - 1] === '\n'
+    if (atLineStart) {
+      const rest = raw.substring(rawPos)
+      const headingMatch = rest.match(/^#{1,6} /)
+      if (headingMatch) { rawPos += headingMatch[0].length; continue }
+      const quoteMatch = rest.match(/^>(?:>|\s)*>? /)
+      if (quoteMatch && quoteMatch[0].length > 0) { rawPos += quoteMatch[0].length; continue }
+      const ulMatch = rest.match(/^[-*+] /)
+      if (ulMatch) { rawPos += ulMatch[0].length; continue }
+      const olMatch = rest.match(/^\d+\. /)
+      if (olMatch) { rawPos += olMatch[0].length; continue }
+    }
+
+    // 围栏代码块：```...```（跳过围栏，内容逐字符映射）
+    if (raw.substring(rawPos, rawPos + 3) === '```') {
+      rawPos += 3
+      const closeIdx = raw.indexOf('```', rawPos)
+      if (closeIdx !== -1) {
+        while (rawPos < closeIdx) { rawMap.push(rawPos); rawPos++ }
+        rawPos += 3
+      }
+      continue
+    }
+
+    // 行内代码：`code`（跳过反引号，内容逐字符映射）
+    if (raw[rawPos] === '`') {
+      const closeBacktick = raw.indexOf('`', rawPos + 1)
+      if (closeBacktick !== -1) {
+        rawPos++ // 跳过开引号
+        while (rawPos < closeBacktick) { rawMap.push(rawPos); rawPos++ }
+        rawPos++ // 跳过闭引号
+        continue
+      }
+    }
+
+    // 粗体：**（优先匹配，跳过）
+    if (raw[rawPos] === '*' && rawPos + 1 < raw.length && raw[rawPos + 1] === '*') { rawPos += 2; continue }
+    // 斜体：*（仅当后面不是 * 时匹配，避免与 ** 冲突）
+    if (raw[rawPos] === '*' && (rawPos + 1 >= raw.length || raw[rawPos + 1] !== '*')) { rawPos++; continue }
+    // 粗体下划线：__
+    if (raw[rawPos] === '_' && rawPos + 1 < raw.length && raw[rawPos + 1] === '_') { rawPos += 2; continue }
+    // 斜体下划线：_
+    if (raw[rawPos] === '_') { rawPos++; continue }
+    // 删除线：~~
+    if (raw[rawPos] === '~' && rawPos + 1 < raw.length && raw[rawPos + 1] === '~') { rawPos += 2; continue }
+
+    // 链接/图片：[text](url) → 跳过 [ ] ( url )，内容逐字符映射
+    if (raw[rawPos] === '!' && raw[rawPos + 1] === '[') { rawPos += 2; continue }
+    if (raw[rawPos] === '[') { rawPos++; continue }
+    if (raw[rawPos] === ']') {
+      rawPos++
+      const urlMatch = raw.substring(rawPos).match(/^\([^)]*\)/)
+      if (urlMatch) rawPos += urlMatch[0].length
+      continue
+    }
+
+    // 普通字符（含 \n）：产生一个渲染字符
+    rawMap.push(rawPos)
+    rawPos++
+  }
+
+  // 从 rawMap 中提取选区对应的原始位置
+  const startIdx = renderedOffset
+  const endIdx = renderedOffset + renderedLength - 1
+  if (startIdx < 0 || endIdx >= rawMap.length || startIdx > endIdx) return -1
+  return rawMap[endIdx] + 1 // 返回选区结束位置（不含），即标记插入点
+}
+
 function onPreviewMouseUp(e: MouseEvent) {
   const selection = window.getSelection()
   const text = selection?.toString().trim() || ''
 
-  if (text.length < 10) {
+  if (text.length < 2) {
     selectionPopup.value.show = false
     return
   }
 
-  // Position popup near the end of selection
   const range = selection?.getRangeAt(0)
   if (!range) return
   const rect = range.getBoundingClientRect()
+
+  // 通过位置映射将渲染文本偏移量转换为原始 markdown 位置
+  const raw = content.value
+  const container = (e.currentTarget as HTMLElement).querySelector('.markdown-body') || e.currentTarget
+  const renderedOffset = getRenderedOffset(range, container as HTMLElement)
+  const cleanSelected = text.replace(/<<A:\d+\|[^|]+\|[^>]+>>/g, '').trim()
+  const rawEndPos = mapRenderedToRaw(raw, renderedOffset, cleanSelected.length)
+
+  const popupPos = calcPopupPos(rect)
   selectionPopup.value = {
     show: true,
-    x: rect.right + 8,
-    y: rect.top - 10,
+    x: popupPos.x,
+    y: popupPos.y,
     text,
+  }
+
+  // Prepare annotation state (for preview mode annotation insertion)
+  if (rawEndPos !== -1) {
+    annotationSelEnd.value = rawEndPos
   }
 }
 
-function hideSelectionPopup() {
+function startAnnotationFromPreview(type: string) {
+  annotationType.value = type
+  annotationStep.value = 'text'
+  // Open annotation popup at same position as selection popup
+  annotationPopupPos.value = { x: selectionPopup.value.x, y: selectionPopup.value.y }
   selectionPopup.value.show = false
+  showAnnotationPopup.value = true
+  nextTick(() => annotationInputRef.value?.focus())
+}
+
+/** Note detail is a utility editor — capture excerpt only, never auto-attach a learning source. */
+function addSelectionToNotes() {
+  const text = selectionPopup.value.text
+  selectionPopup.value.show = false
+  if (!text) return
+  noteCaptureStore.requestCapture({
+    mode: 'excerpt',
+    excerpt: text,
+    noteName: note.value?.noteName ? `摘录 - ${note.value.noteName}` : '摘录笔记',
+  })
 }
 
 async function generateFromSelection() {
@@ -1047,16 +1764,24 @@ function onDocumentMouseDown(e: MouseEvent) {
   if (popup && !popup.contains(e.target as Node)) {
     selectionPopup.value.show = false
   }
+  const annPopup = document.querySelector('.annotation-popup')
+  if (annPopup && !annPopup.contains(e.target as Node)) {
+    showAnnotationPopup.value = false
+  }
 }
 
 onMounted(() => {
   loadNote()
   loadDueCount()
   document.addEventListener('mousedown', onDocumentMouseDown)
+  document.addEventListener('mousemove', onDrag)
+  document.addEventListener('mouseup', stopDrag)
 })
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', onDocumentMouseDown)
+  document.removeEventListener('mousemove', onDrag)
+  document.removeEventListener('mouseup', stopDrag)
 })
 
 watch(() => route.params.id, (newId) => {
@@ -1129,20 +1854,208 @@ watch(activeAnnotation, (id) => {
   position: fixed;
   z-index: 1100;
   animation: fadeIn 0.15s ease;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  padding: 0 6px 6px;
+  min-width: 320px;
+}
+
+.popup-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  cursor: grab;
+  user-select: none;
+}
+
+.popup-drag-handle:active {
+  cursor: grabbing;
+}
+
+.popup-drag-dots {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #cbd5e1;
+  line-height: 1;
+}
+
+.annotation-popup-title .popup-drag-dots {
+  margin-right: 4px;
+  cursor: grab;
+}
+
+.annotation-popup-title .popup-drag-dots:active {
+  cursor: grabbing;
+}
+
+.selection-popup-ann-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px;
+}
+
+.selection-popup-ann-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ann-color);
+  background: white;
+  border: 1.5px solid var(--ann-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.selection-popup-ann-btn:hover {
+  background: #f9fafb;
+}
+
+.selection-popup-divider {
+  height: 1px;
+  background: #e5e7eb;
+  margin: 4px 0;
+}
+
+/* === Annotation popup === */
+
+.annotation-popup {
+  position: fixed;
+  z-index: 1100;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  animation: fadeIn 0.15s ease;
+  min-width: 320px;
+}
+
+.annotation-popup-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  padding: 10px 14px 6px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.annotation-type-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 14px 12px;
+}
+
+.annotation-type-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ann-color);
+  background: white;
+  border: 1.5px solid var(--ann-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.annotation-type-btn:hover {
+  background: #f9fafb;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.annotation-popup-input {
+  padding: 0 0 4px;
+}
+
+.ann-type-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.annotation-text-input {
+  display: block;
+  width: calc(100% - 28px);
+  margin: 8px 14px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.annotation-text-input:focus {
+  border-color: #6366f1;
+}
+
+.annotation-popup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 14px 10px;
+}
+
+.annotation-btn-cancel {
+  padding: 5px 14px;
+  font-size: 12px;
+  color: #6b7280;
+  background: none;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.annotation-btn-cancel:hover {
+  background: #f3f4f6;
+}
+
+.annotation-btn-confirm {
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: white;
+  background: #6366f1;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.annotation-btn-confirm:hover {
+  background: #4f46e5;
+}
+
+.annotation-btn-confirm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .selection-popup-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
-  font-size: 13px;
+  padding: 5px 10px;
+  font-size: 12px;
   font-weight: 500;
   color: #92400e;
   background: #fffbeb;
   border: 1px solid #fde68a;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-radius: 6px;
   transition: all 0.15s;
   cursor: pointer;
   white-space: nowrap;
@@ -1150,7 +2063,6 @@ watch(activeAnnotation, (id) => {
 
 .selection-popup-btn:hover {
   background: #fef3c7;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 }
 
 @keyframes fadeIn {
@@ -1248,7 +2160,6 @@ watch(activeAnnotation, (id) => {
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 4px;
-  margin-bottom: 4px;
 }
 
 .ann-text {
@@ -1256,6 +2167,68 @@ watch(activeAnnotation, (id) => {
   line-height: 1.5;
   color: #374151;
   margin: 0;
+}
+
+.ann-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.ann-card-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.annotation-card:hover .ann-card-actions,
+.ann-editing .ann-card-actions {
+  opacity: 1;
+}
+
+.ann-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.ann-action-btn:hover {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.ann-action-delete:hover {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+.ann-text[contenteditable="true"] {
+  outline: none;
+  border-radius: 3px;
+  background: rgba(99, 102, 241, 0.04);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.2);
+  padding: 1px 4px;
+  margin: -1px -4px;
+}
+
+.ann-type-clickable {
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.ann-editing {
+  background: #fafbff;
 }
 
 /* Type colors */
@@ -1384,5 +2357,37 @@ watch(activeAnnotation, (id) => {
 
 .btn-reject:hover {
   background: #dc2626;
+}
+
+/* 分屏/预览中的穿插原文块 — 简约灰阶 */
+.note-interleaved-preview :deep(.note-excerpt-card) {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid #e8ecf1;
+  background: #f8fafc;
+}
+.note-interleaved-preview :deep(.note-excerpt-label) {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.note-interleaved-preview :deep(.note-excerpt-source) {
+  font-weight: 500;
+  color: #475569;
+  text-decoration: none;
+}
+.note-interleaved-preview :deep(.note-excerpt-source:hover) {
+  text-decoration: underline;
+  color: #334155;
+}
+.note-interleaved-preview :deep(.note-excerpt-body) {
+  font-size: 0.925rem;
+  line-height: 1.65;
+  color: #475569;
 }
 </style>

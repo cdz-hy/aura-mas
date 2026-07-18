@@ -1,7 +1,11 @@
 import requests
 import base64
+import logging
 import os
 from app.core.config import settings
+
+logger = logging.getLogger("services.ai_analyzer")
+
 
 class MultiModalAnalyzer:
     def __init__(self):
@@ -22,7 +26,7 @@ class MultiModalAnalyzer:
             return "图片文件不存在"
 
         if not self.api_key:
-            print("错误: 未配置 MIMO_API_KEY")
+            logger.error("未配置 MIMO_API_KEY")
             return ""
 
         # 构造提示词
@@ -74,8 +78,8 @@ class MultiModalAnalyzer:
                 result = response.json()
                 return result["choices"][0]["message"]["content"].strip()
             else:
-                print(f"MIMO 分析图片失败: {response.status_code} - {response.text}")
+                logger.error(f"MIMO 分析图片失败: {response.status_code} - {response.text}")
                 return ""
         except Exception as e:
-            print(f"调用 MIMO 分析服务时发生异常: {e}")
+            logger.error(f"调用 MIMO 分析服务时发生异常: {e}", exc_info=True)
             return ""

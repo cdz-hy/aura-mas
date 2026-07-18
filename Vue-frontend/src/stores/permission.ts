@@ -4,7 +4,7 @@ import type { MenuItem } from '@/types/menu'
 import router from '@/router'
 import { buildRoutes } from '@/config/routeComponents'
 
-const IMPLICIT_ROUTE_NAMES = new Set(['PlanDetail', 'NoteDetail', 'UserSettings'])
+const IMPLICIT_ROUTE_NAMES = new Set(['PlanDetail', 'PlanKnowledgeTree', 'NoteDetail', 'UserSettings', 'FlashcardReview'])
 
 export const usePermissionStore = defineStore('permission', () => {
   const menus = ref<MenuItem[]>([])

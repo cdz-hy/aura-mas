@@ -7,6 +7,7 @@ export interface StreamState {
   is_streaming: boolean
   source: string
   error?: string
+  thinkings?: Array<{ agent: string, content: string }>
 }
 
 export function getSessions(intentType: string, planId?: number) {
@@ -25,6 +26,16 @@ export function deleteSession(sessionId: string) {
   return request.delete<any, { data: null }>(`/dialogue/session/${sessionId}`)
 }
 
+export function deleteMessage(id: number) {
+  return request.delete<any, { data: null }>(`/dialogue/${id}`)
+}
+
+export function deleteMessages(ids: number[]) {
+  return request.delete<any, { data: null }>(`/dialogue/batch`, {
+    data: { ids }
+  })
+}
+
 export function linkSessionToPlan(sessionId: string, planId: number) {
   return request.put<any, { data: null }>(`/dialogue/session/${sessionId}/link-plan/${planId}`)
 }
@@ -36,17 +47,26 @@ export function getDialogueHistoryByPlan(planId: number, limit = 200) {
 }
 
 /**
+ * 按 intent_type 获取对话历史
+ */
+export function getDialogueHistoryByIntent(intentType: string, limit = 20) {
+  return request.get<any, { data: ChatMessage[] }>('/dialogue/history', {
+    params: { intentType, limit },
+  })
+}
+
+/**
  * 查询会话的流式输出状态（用于刷新后恢复流式动画）
  * 直接调用 Python 后端，不经过 Java 代理
  */
-export async function getStreamState(sessionId: string): Promise<StreamState | null> {
+export async function getStreamState(sessionId: string): Promise<{ state: StreamState | null; pendingConfirmation: { type: string; message: string; task_breakdown?: any } | null }> {
   try {
     const resp = await fetch(`${PYTHON_AI_BASE}/api/ai/stream-state?session_id=${encodeURIComponent(sessionId)}`)
-    if (!resp.ok) return null
+    if (!resp.ok) return { state: null, pendingConfirmation: null }
     const json = await resp.json()
-    return json.data || null
+    return { state: json.data || null, pendingConfirmation: json.pending_confirmation || null }
   } catch {
-    return null
+    return { state: null, pendingConfirmation: null }
   }
 }
 

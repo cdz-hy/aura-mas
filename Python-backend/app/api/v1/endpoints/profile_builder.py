@@ -166,7 +166,7 @@ async def profile_chat(
                         for sse_data in graph_step_to_sse(node_name, node_output):
                             bg_state["events"].append(sse_data)
                             _persist_profile_update(sse_data, user_id)
-                            if '"chunk"' in sse_data or '"stream_text"' in sse_data:
+                            if '"node_content"' in sse_data:
                                 try:
                                     d = json.loads(sse_data.replace("data: ", "").strip())
                                     content = d.get("content", "")

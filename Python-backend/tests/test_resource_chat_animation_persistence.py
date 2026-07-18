@@ -91,3 +91,53 @@ def test_extract_animation_source_context_prefers_content_then_html_then_metadat
     assert module_order == 6
     assert "经典序列模型" in source
     assert "隐藏状态" in source
+
+
+def test_create_placeholder_resource_keeps_parent_and_node(monkeypatch):
+    created = []
+
+    def fake_create_resource(**kwargs):
+        created.append(kwargs)
+        return {"id": 900, "moduleOrder": kwargs["module_order"]}
+
+    monkeypatch.setattr(resource_chat.java_client, "create_resource", fake_create_resource)
+    monkeypatch.setattr(resource_chat.java_client, "create_generation_task", lambda **kwargs: {"id": 1})
+
+    result = resource_chat._create_placeholder_resources(
+        42,
+        [{"title": "Redis 核心", "description": "desc", "resources": [{"resource_type": "quiz"}]}],
+        fixed_order=2,
+        parent_id=88,
+        node_id="node_redis",
+    )
+
+    assert result[1]["id"] == 900
+    assert created[0]["parent_id"] == 88
+    assert created[0]["module_order"] == 2
+    assert '"nodeId": "node_redis"' in created[0]["module_data"]
+    assert '"node_id": "node_redis"' in created[0]["module_data"]
+
+
+def test_save_quiz_resource_keeps_parent_and_node(monkeypatch):
+    created = []
+
+    def fake_create_resource(**kwargs):
+        created.append(kwargs)
+        return {"id": 901}
+
+    monkeypatch.setattr(resource_chat.java_client, "create_resource", fake_create_resource)
+
+    resource_id = resource_chat._save_quiz_resource(
+        42,
+        [{"question_text": "1+1=?", "correct_answer": "2"}],
+        {"title": "数学测验"},
+        module_order=2,
+        parent_id=88,
+        node_id="node_math",
+    )
+
+    assert resource_id == 901
+    assert created[0]["parent_id"] == 88
+    assert created[0]["module_order"] == 2
+    assert '"nodeId": "node_math"' in created[0]["module_data"]
+    assert '"node_id": "node_math"' in created[0]["module_data"]

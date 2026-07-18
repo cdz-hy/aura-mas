@@ -4,7 +4,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, nextTick } from 'vue'
-import { parseMarkdown } from '@/utils/markdown'
+import { parseMarkdown, normalizeMermaidCode } from '@/utils/markdown'
 
 const props = defineProps<{
   content: string
@@ -37,9 +37,7 @@ async function renderMermaidDiagrams() {
       try {
         const rawCode = decodeURIComponent(codeBase64)
         // 空白字符规范化：处理NBSP/零宽空格等容易导致解析崩溃的字符
-        const normalizedCode = rawCode
-          .replace(/[\u00A0\u2003\u2002\u2009\u3000]/g, ' ')
-          .replace(/[\u200B\u200C\u200D\uFEFF]/g, '')
+        const normalizedCode = normalizeMermaidCode(rawCode)
 
         // Record what code we are rendering on this element
         el.setAttribute('data-rendering-code', codeBase64)
@@ -58,14 +56,12 @@ async function renderMermaidDiagrams() {
         el.removeAttribute('data-rendering-code')
         el.classList.add('stream-fade-in')
       } catch (err: any) {
-        // Only show error if the code hasn't changed in the meantime
         if (el.getAttribute('data-mermaid-code') === codeBase64) {
-          console.error('Mermaid rendering error:', err)
+          console.warn('Mermaid rendering failed, showing raw code:', err.message)
+          // 清理 mermaid.render 失败后插入到 body 的错误 SVG 残留
+          document.querySelectorAll('div[id^="dmermaid-"], svg[id^="mermaid-"]').forEach(n => n.remove())
           el.innerHTML = `
-            <div class="flex flex-col p-4 bg-red-50 rounded-xl border border-red-100">
-              <span class="text-sm font-semibold text-red-600 mb-2">⚠️ 图表渲染失败</span>
-              <pre class="text-xs text-red-500 overflow-x-auto p-2 bg-white rounded border border-red-50/50">${err.message || String(err)}</pre>
-            </div>
+            <pre class="text-xs text-navy-500 bg-navy-50 rounded-xl p-4 border border-navy-100/50 overflow-x-auto leading-relaxed">${normalizedCode}</pre>
           `
           el.setAttribute('data-rendered', 'true')
           el.removeAttribute('data-rendering')

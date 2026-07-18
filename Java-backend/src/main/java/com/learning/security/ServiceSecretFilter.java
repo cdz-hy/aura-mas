@@ -25,7 +25,7 @@ public class ServiceSecretFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         String path = request.getRequestURI();
-        if (path.startsWith("/api/") && (path.contains("/internal/") || path.endsWith("/internal"))) {
+        if (path.startsWith("/api/")) {
             String secret = request.getHeader("X-Service-Secret");
             if (secret != null) {
                 if (internalSecret.equals(secret)) {

@@ -12,6 +12,7 @@ export interface QuizQuestion {
 }
 
 export interface QuizData {
+  id?: number
   title: string
   description: string
   questions: QuizQuestion[]

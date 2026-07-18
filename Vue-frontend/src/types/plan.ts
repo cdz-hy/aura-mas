@@ -22,7 +22,7 @@ export interface PlanModule {
   status: 'pending' | 'generating' | 'ready'
 }
 
-export type ResourceType = 'document' | 'mindmap' | 'quiz' | 'code' | 'reading' | 'summary' | 'video' | 'animation' | 'podcast'
+export type ResourceType = 'text' | 'document' | 'mindmap' | 'quiz' | 'code' | 'reading' | 'summary' | 'video' | 'animation' | 'podcast' | 'pptx'
 
 export interface LearningResource {
   id: number
@@ -37,6 +37,17 @@ export interface LearningResource {
   version: number
   createdAt: string
   updatedAt: string
+}
+
+export type AnimationExportQuality = '1080p' | '720p'
+export type AnimationExportStatus = 'idle' | 'rendering' | 'ready' | 'failed'
+export interface AnimationExportState {
+  status: AnimationExportStatus
+  url?: string | null
+  error?: string | null
+  startedAt?: string
+  completedAt?: string | null
+  resourceVersion?: number
 }
 
 export interface ResourceGenerationTask {

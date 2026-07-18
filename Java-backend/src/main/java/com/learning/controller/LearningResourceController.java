@@ -1,5 +1,7 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.Result;
 import com.learning.entity.LearningResource;
 import com.learning.entity.ResourceGenerationTask;
@@ -7,6 +9,7 @@ import com.learning.service.LearningResourceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,12 +36,30 @@ public class LearningResourceController {
     }
 
     @Operation(summary = "创建学习资源")
+    @OperationLog(type = OperationType.RESOURCE_CREATE, module = "Resource",
+            desc = "'创建学习资源'",
+            resourceId = "#result?.data?.id?.toString()")
     @PostMapping
     public Result<LearningResource> createResource(@RequestBody LearningResource resource) {
         return Result.success(resourceService.createResource(resource));
     }
 
+    @Operation(summary = "删除学习资源")
+    @OperationLog(type = OperationType.RESOURCE_DELETE, module = "Resource",
+            desc = "'删除学习资源ID: ' + #resourceId",
+            resourceId = "#resourceId?.toString()")
+    @DeleteMapping("/{resourceId}")
+    public Result<Void> deleteResource(Authentication authentication,
+                                         @PathVariable Long resourceId) {
+        Long userId = (Long) authentication.getPrincipal();
+        resourceService.deleteResource(resourceId, userId);
+        return Result.success();
+    }
+
     @Operation(summary = "更新资源内容(前端调用)")
+    @OperationLog(type = OperationType.RESOURCE_UPDATE_CONTENT, module = "Resource",
+            desc = "'更新资源内容ID: ' + #resourceId",
+            resourceId = "#resourceId?.toString()")
     @PutMapping("/{resourceId}/content")
     public Result<Void> updateResourceContent(@PathVariable Long resourceId,
                                                @RequestBody java.util.Map<String, Object> body) throws Exception {
@@ -55,11 +76,12 @@ public class LearningResourceController {
             }
         }
         Integer status = body.get("status") != null ? Integer.valueOf(body.get("status").toString()) : null;
-        resourceService.updateContent(resourceId, moduleData, status);
+        resourceService.updateContent(resourceId, moduleData, null, status);
         return Result.success();
     }
 
     @Operation(summary = "批量创建资源(前端调用)")
+    @OperationLog(type = OperationType.RESOURCE_BULK_CREATE, module = "Resource", desc = "批量创建学习资源")
     @PostMapping("/bulk")
     public Result<List<LearningResource>> bulkCreateUser(@RequestBody List<LearningResource> resources) {
         return Result.success(resourceService.bulkCreate(resources));
@@ -76,8 +98,9 @@ public class LearningResourceController {
     public Result<Void> updateContent(@PathVariable Long resourceId,
                                        @RequestBody java.util.Map<String, Object> body) {
         String moduleData = (String) body.get("moduleData");
+        String moduleType = (String) body.get("moduleType");
         Integer status = body.get("status") != null ? Integer.valueOf(body.get("status").toString()) : null;
-        resourceService.updateContent(resourceId, moduleData, status);
+        resourceService.updateContent(resourceId, moduleData, moduleType, status);
         return Result.success();
     }
 

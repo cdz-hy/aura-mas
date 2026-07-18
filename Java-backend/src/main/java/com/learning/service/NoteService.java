@@ -35,6 +35,7 @@ public class NoteService {
         note.setContent(request.getContent());
         note.setTags(serializeTags(request.getTags()));
         note.setIsPinned(request.getIsPinned() != null ? request.getIsPinned() : 0);
+        applyCaptureMetadata(note, request);
         note.setCreatedAt(LocalDateTime.now());
         note.setUpdatedAt(LocalDateTime.now());
         noteMapper.insert(note);
@@ -87,6 +88,7 @@ public class NoteService {
         if (request.getIsPinned() != null) {
             note.setIsPinned(request.getIsPinned());
         }
+        applyCaptureMetadata(note, request);
         note.setUpdatedAt(LocalDateTime.now());
         noteMapper.updateById(note);
         return note;
@@ -139,6 +141,30 @@ public class NoteService {
     public List<NoteResourceRel> getNoteResourceRels(Long noteId) {
         return noteResourceRelMapper.selectList(
                 new LambdaQueryWrapper<NoteResourceRel>().eq(NoteResourceRel::getNoteId, noteId));
+    }
+
+    private void applyCaptureMetadata(Note note, NoteCreateRequest request) {
+        if (request.getNoteType() != null) {
+            note.setNoteType(request.getNoteType());
+        }
+        if (request.getOrganizeStatus() != null) {
+            note.setOrganizeStatus(request.getOrganizeStatus());
+        }
+        if (request.getSourceType() != null) {
+            note.setSourceType(request.getSourceType());
+        }
+        if (request.getSourceId() != null) {
+            note.setSourceId(request.getSourceId());
+        }
+        if (request.getSourceTitle() != null) {
+            note.setSourceTitle(request.getSourceTitle());
+        }
+        if (request.getSourceRoute() != null) {
+            note.setSourceRoute(request.getSourceRoute());
+        }
+        if (request.getExcerpt() != null) {
+            note.setExcerpt(request.getExcerpt());
+        }
     }
 
     private String serializeTags(List<String> tags) {

@@ -1,5 +1,7 @@
 package com.learning.controller;
 
+import com.learning.annotation.OperationLog;
+import com.learning.common.OperationType;
 import com.learning.common.PageResult;
 import com.learning.common.Result;
 import com.learning.entity.KnowledgeBase;
@@ -10,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 @Tag(name = "知识库管理")
@@ -21,6 +24,9 @@ public class KnowledgeBaseController {
     private final KnowledgeBaseService kbService;
 
     @Operation(summary = "创建知识库记录（仅元数据，文件由 Python 端处理）")
+    @OperationLog(type = OperationType.KB_CREATE, module = "KB",
+            desc = "'创建知识库文档: ' + #body.get('docName')",
+            resourceId = "#result?.data?.id?.toString()")
     @PostMapping("/create")
     public Result<KnowledgeBase> create(Authentication authentication,
                                         @RequestBody Map<String, Object> body) {
@@ -53,6 +59,9 @@ public class KnowledgeBaseController {
     }
 
     @Operation(summary = "删除知识库文档")
+    @OperationLog(type = OperationType.KB_DELETE, module = "KB",
+            desc = "'删除知识库文档ID: ' + #id",
+            resourceId = "#id?.toString()")
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
         kbService.deleteById(id);
@@ -84,5 +93,11 @@ public class KnowledgeBaseController {
     public Result<Void> deleteInternal(@PathVariable Long id) {
         kbService.deleteById(id);
         return Result.success();
+    }
+
+    @Operation(summary = "内部API - 获取已入库的文档列表(parse_status=2)")
+    @GetMapping("/internal/indexed")
+    public Result<List<KnowledgeBase>> getIndexedDocuments() {
+        return Result.success(kbService.getIndexedDocuments());
     }
 }

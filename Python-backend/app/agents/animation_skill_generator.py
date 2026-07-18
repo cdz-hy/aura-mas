@@ -18,6 +18,12 @@ from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_animation_skill_generator_llm
 from app.skills.loader import load_skill
 from app.utils.token_recorder import record_from_mimo
+from app.utils import stream_registry
+from app.services.animation_narration import build_narration, build_pending_narration
+from app.agents.resource_type_generator import synthesize_speech
+import json
+import asyncio
+from app.services.db.java_client import java_client
 
 logger = logging.getLogger("agents.animation_skill_generator")
 
@@ -92,6 +98,12 @@ class _AnimationHtmlContractParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.start_tags: list[tuple[str, dict[str, str]]] = []
         self.end_tags: list[str] = []
+        self._ignored_depth = 0
+        self.visible_text: list[str] = []
+        self.beats: list[dict[str, str]] = []
+        self.beat_depth = 0
+        self.nested_beat = False
+        self.tag_stack: list[tuple[str, dict[str, str]]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_map = {
@@ -100,9 +112,32 @@ class _AnimationHtmlContractParser(HTMLParser):
             if name
         }
         self.start_tags.append((tag.lower(), attr_map))
+        classes = _class_tokens(attr_map.get("class", ""))
+        if "beat" in classes:
+            if self.beat_depth:
+                self.nested_beat = True
+            self.beat_depth += 1
+            parent_id = self.tag_stack[-1][1].get("id", "") if self.tag_stack else ""
+            self.beats.append({"tag": tag.lower(), "parent_id": parent_id, **attr_map})
+        if tag.lower() in {"script", "style"}:
+            self._ignored_depth += 1
+        if tag.lower() not in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
+            self.tag_stack.append((tag.lower(), attr_map))
 
     def handle_endtag(self, tag: str) -> None:
         self.end_tags.append(tag.lower())
+        for index in range(len(self.tag_stack) - 1, -1, -1):
+            if self.tag_stack[index][0] == tag.lower():
+                del self.tag_stack[index:]
+                break
+        if self.beat_depth and tag.lower() == "section":
+            self.beat_depth -= 1
+        if tag.lower() in {"script", "style"} and self._ignored_depth:
+            self._ignored_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._ignored_depth and data.strip():
+            self.visible_text.append(data)
 
 
 def _parse_animation_html(html_content: str) -> _AnimationHtmlContractParser:
@@ -159,7 +194,7 @@ def _escape(value: Any) -> str:
     return html.escape(str(value or ""), quote=True)
 
 
-def _summarize_source_content(source_content: str, state: AgentState) -> str:
+def _summarize_source_content(source_content: str, state: AgentState, on_chunk=None) -> str:
     """如果源内容过长，使用 LLM 摘要提取关键段；失败则降级为截断"""
     if len(source_content) <= MAX_SOURCE_CONTENT_LENGTH:
         return source_content
@@ -182,7 +217,7 @@ def _summarize_source_content(source_content: str, state: AgentState) -> str:
                 ),
             },
         ]
-        result = llm.chat_json(summary_messages, max_tokens=1024)
+        result = llm.chat_json(summary_messages)
         record_from_mimo(
             llm,
             state.get("user_id", 0),
@@ -364,6 +399,28 @@ def _validate_animation_html_contract(html_content: str) -> Tuple[bool, str]:
     ):
         return False, "Animation HTML must mark an initial active beat"
 
+    if not 2 <= len(parser.beats) <= 12:
+        return False, "Animation HTML must include 2-12 beats"
+    if parser.nested_beat:
+        return False, "Animation beats must be sibling sections, not nested"
+    if any(beat.get("tag") != "section" for beat in parser.beats):
+        return False, "Every animation beat must use a <section> tag"
+    if any(beat.get("parent_id") != "stage" for beat in parser.beats):
+        return False, "Every animation beat must be a direct child of #stage"
+    beat_ids = [beat.get("data-beat", "") for beat in parser.beats]
+    if beat_ids != [str(index) for index in range(len(parser.beats))]:
+        return False, "Beat data-beat values must be unique and sequential from 0"
+    active_indexes = [index for index, beat in enumerate(parser.beats) if "active" in _class_tokens(beat.get("class", ""))]
+    if active_indexes != [0]:
+        return False, "Only the first animation beat may be active initially"
+    narration_code = re.compile(r"(?:<[^>]+>|gsap\.|\.from(?:To)?\s*\(|window\.|\b(?:const|let|var)\b)", re.I)
+    for beat in parser.beats:
+        narration = re.sub(r"\s+", " ", beat.get("data-narration", "")).strip()
+        if not 30 <= len(narration) <= 220:
+            return False, "Each beat data-narration must contain 30-220 characters"
+        if narration_code.search(narration):
+            return False, "Beat data-narration must contain natural speech, not code"
+
     has_gsap_script = any(
         tag == "script"
         and "src" in attrs
@@ -373,6 +430,34 @@ def _validate_animation_html_contract(html_content: str) -> Tuple[bool, str]:
     )
     if not has_gsap_script:
         return False, "Animation HTML must include a GSAP <script src=\"...gsap...js\"> reference"
+    scripts = [(tag, attrs) for tag, attrs in start_tags if tag == "script"]
+    if len(scripts) != 2 or sum(1 for _, attrs in scripts if attrs.get("src")) != 1:
+        return False, "Animation HTML must contain exactly one GSAP script and one inline script"
+    inline_blocks = re.findall(r"<script\b(?![^>]*\bsrc\b)[^>]*>(.*?)</script\s*>", html_content, re.I | re.S)
+    if len(inline_blocks) != 1 or not re.search(r"window\.animateBeat\s*=\s*function\s*\(\s*index\s*\)", inline_blocks[0]):
+        return False, "Inline script must define window.animateBeat(index)"
+    if not re.search(r"<script\b(?![^>]*\bsrc\b)[^>]*>.*?</script\s*>\s*</body\s*>\s*</html\s*>\s*$", html_content, re.I | re.S):
+        return False, "Inline animation script must be the final element before </body>"
+    forbidden_tags = {"nav", "button", "audio", "video", "input", "select"}
+    if any(tag in forbidden_tags for tag, _ in start_tags):
+        return False, "Animation HTML must not include playback or navigation controls"
+    forbidden_js = (
+        r"addEventListener\s*\(\s*['\"](?:click|keydown|keyup|resize)",
+        r"setInterval\s*\(",
+        r"\.classList\.(?:add|remove|toggle)\s*\(\s*['\"]active",
+        r"\banimateBeat\s*\(\s*0\s*\)",
+    )
+    if any(re.search(pattern, html_content, re.I) for pattern in forbidden_js):
+        return False, "Animation HTML must leave playback, navigation, and scaling to the host application"
+    visible_text = "\n".join(parser.visible_text)
+    naked_js_patterns = (
+        r"\bwindow\.animateBeat\d+\s*=",
+        r"\b(?:const|let|var)\s+\w+\s*=\s*gsap\.timeline\s*\(",
+        r"\.fromTo\s*\([^\n]{20,}",
+        r"//\s*Init first beat\b",
+    )
+    if any(re.search(pattern, visible_text, re.IGNORECASE) for pattern in naked_js_patterns):
+        return False, "Animation JavaScript is exposed outside a <script> tag"
     return True, ""
 
 
@@ -412,20 +497,22 @@ def _build_fallback_html(title: str, description: str, source_content: str) -> s
     beats_data = []
     for idx in range(3):
         idea = paragraphs[idx] if idx < len(paragraphs) else paragraphs[-1]
+        narration = idea if len(idea) >= 30 else f"这一部分围绕{idea}展开，通过画面建立核心概念、关键关系和实际理解。"
         beats_data.append({
             "label": labels[idx],
             "idea": idea,
+            "narration": _shorten(narration, 220),
         })
 
     beat_sections = []
     for idx, beat in enumerate(beats_data, start=1):
         active_class = " active" if idx == 1 else ""
         beat_sections.append(
-            f'<div class="beat{active_class}">\n'
+            f'<section class="beat{active_class}" data-beat="{idx - 1}" data-narration="{_escape(beat["narration"])}">\n'
             f'  <span class="beat-tag">Beat {idx}/3</span>\n'
             f'  <h2>{_escape(beat["label"])}</h2>\n'
             f'  <p>{_escape(beat["idea"])}</p>\n'
-            f'</div>'
+            f'</section>'
         )
 
     beats_html = "\n".join(beat_sections)
@@ -436,6 +523,7 @@ def _build_fallback_html(title: str, description: str, source_content: str) -> s
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{_escape(title)}</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
 <style>
   :root {{
     --bg: #050505;
@@ -455,10 +543,12 @@ def _build_fallback_html(title: str, description: str, source_content: str) -> s
     min-height: 100vh;
     overflow: hidden;
   }}
+  #stage {{ position:relative; width:1920px; height:1080px; overflow:hidden; background:var(--bg); }}
   .beat {{
+    position:absolute;
+    inset:0;
     display: none;
-    padding: 8vh 6vw;
-    max-width: 900px;
+    padding: 160px 180px;
   }}
   .beat.active {{ display: block; }}
   .beat-tag {{
@@ -484,15 +574,16 @@ def _build_fallback_html(title: str, description: str, source_content: str) -> s
 </style>
 </head>
 <body>
+<main id="stage">
 {beats_html}
+</main>
 <script>
-  const beats = document.querySelectorAll('.beat');
-  let current = 0;
-  setInterval(() => {{
-    beats[current].classList.remove('active');
-    current = (current + 1) % beats.length;
-    beats[current].classList.add('active');
-  }}, 5000);
+  window.animateBeat = function(index) {{
+    const beat = document.querySelectorAll('.beat')[index];
+    if (!beat) return null;
+    const children = beat.querySelectorAll(':scope > *');
+    return typeof gsap === 'undefined' ? null : gsap.fromTo(children, {{opacity:0,y:24}}, {{opacity:1,y:0,duration:.6,stagger:.08}});
+  }};
 </script>
 </body>
 </html>"""
@@ -614,6 +705,12 @@ def _assemble_system_prompt(
     parts.append("3. 不要输出任何解释文字，只输出 HTML\n")
     parts.append("4. GSAP 3 via CDN: https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js\n")
     parts.append("5. 字体: Google Fonts Inter + Noto Sans SC\n\n")
+    parts.append("## AURA 应用原生契约（覆盖其他通用录屏规则）\n\n")
+    parts.append("- 生成 2-12 个 #stage 直接子级 section.beat；data-beat 从 0 连续递增且唯一；仅第一个带 active\n")
+    parts.append("- 每个 beat 带 30-220 字中文 data-narration，必须是自然口播且不含 HTML/CSS/JS/GSAP\n")
+    parts.append("- 只生成视觉和 window.animateBeat(index)，不要生成导航、按钮、音频、字幕、进度、事件、自动翻页或缩放\n")
+    parts.append("- 全文恰好两个 script：head 中 GSAP CDN，以及 body 末尾一个完整内联脚本\n")
+    parts.append("- 不要自行调用 animateBeat，不要修改 active class；宿主应用负责全部播放控制\n\n")
 
     # JS 语法正确性要求
     parts.append("## JavaScript 语法硬性要求（不通过 = 动画黑屏）\n\n")
@@ -631,6 +728,7 @@ def _assemble_user_message(
     source_content: str,
     user_profile: dict,
     selected_style: str,
+    user_message: str = "",
 ) -> str:
     """组装 user message"""
     behavior = user_profile.get("learning_behavior", {})
@@ -641,6 +739,9 @@ def _assemble_user_message(
     sg_text = "序列型" if sg < -0.3 else ("全局型" if sg > 0.3 else "均衡型")
 
     return f"""请基于以下内容生成科普动画 HTML。
+
+用户具体指令 (最重要，请务必严格遵循此指令的任何定制化要求):
+{user_message if user_message else "按照该类型的默认规则生成动画"}
 
 ## 口播稿/源内容标题
 {source_title}
@@ -697,6 +798,32 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
         )
     logger.info(f"  源资源内容长度: {len(source_resource_content)} 字符")
 
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "动画生成智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在加载动画技能包并生成教学动画...")
+
     # ── 阶段 1：加载动画技能包 ──
     stream_events: list[dict] = [{
         "event_type": "thinking",
@@ -742,15 +869,16 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
     quality_check = skill.references.get("quality-check", "")
 
     # ── 阶段 2：构思动画结构 ──
+    _emit_thinking("正在构思动画结构...")
     stream_events.append({
         "event_type": "thinking",
         "agent": "animation_skill_generator",
-        "data": {"message": "正在构思动画结构..."},
-        "step_description": "构思动画结构",
+        "data": {"message": "正在进行教学内容重构与分镜设计..."},
+        "step_description": "构思动画分镜",
     })
 
     # ── 源内容智能处理：过长则摘要 ──
-    processed_content = _summarize_source_content(source_resource_content, state)
+    processed_content = _summarize_source_content(source_resource_content, state, on_chunk=_emit_thinking_chunk)
 
     # 组装 prompt
     system_prompt = _assemble_system_prompt(
@@ -765,6 +893,7 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
         source_content=processed_content,
         user_profile=user_profile,
         selected_style=selected_style,
+        user_message=state.get("user_message", ""),
     )
 
     messages = [
@@ -778,11 +907,12 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
     js_retry_count = 0
 
     # ── 阶段 3：LLM 直出完整 HTML（支持 JS 语法验证 + 重试） ──
+    _emit_thinking("正在生成动画 HTML...")
     stream_events.append({
         "event_type": "thinking",
         "agent": "animation_skill_generator",
-        "data": {"message": "正在生成动画 HTML..."},
-        "step_description": "生成动画 HTML",
+        "data": {"message": "正在生成底层渲染代码及 GSAP 动画序列..."},
+        "step_description": "生成动画代码",
     })
 
     while True:
@@ -820,6 +950,7 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
                 break
 
             logger.info(f"  [动画生成] 成功提取 HTML，长度: {len(html_output)} 字符")
+            _emit_thinking("正在进行代码结构与逻辑验证...")
 
             # ── HTML 验证（JS 语法 + GSAP API 正确性 + 动画结构契约） ──
             is_valid, validation_error = _validate_js_syntax(html_output)
@@ -854,13 +985,13 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
                         f"**Validation error**: {validation_error}\n\n"
                         f"请修复这个 HTML，重新输出完整单文件 HTML。\n"
                         f"特别注意：\n"
-                        f"1. 保留 <html>...</html>、#stage、至少一个 .beat，且初始 .beat 同时包含 active\n"
-                        f"2. 使用 <script src=\"...gsap...js\"></script> 引入 GSAP\n"
-                        f"3. 检查所有 JavaScript 括号、花括号、方括号是否配对\n"
-                        f"4. 确保 gsap.to() / gsap.from() 的 target 选择器在 HTML 中有对应元素\n"
-                        f"5. tl.labels 是属性（对象），不是函数，不要写 tl.labels()\n"
-                        f"6. gsap.timeline() 没有 .add(labelName) 签名，用 tl.addLabel(name, position)\n"
-                        f"7. gsap.effects 需要先注册才能用，不要调用未注册的 effect\n"
+                        f"1. 保留 <html>...</html> 和 #stage；生成 2-12 个直接子级 section.beat\n"
+                        f"2. data-beat 必须从 0 连续递增；仅第一个 beat 带 active；每个 beat 有 30-220 字自然中文 data-narration\n"
+                        f"3. 全文仅两个 script：GSAP CDN 外链，以及 </body> 前定义 window.animateBeat(index) 的内联脚本\n"
+                        f"4. 检查所有 JavaScript 括号、花括号、方括号是否配对\n"
+                        f"5. 确保 gsap.to() / gsap.from() 的 target 选择器在 HTML 中有对应元素\n"
+                        f"6. 不生成导航、按钮、事件、自动翻页、音频、字幕、进度或缩放\n"
+                        f"7. tl.labels 是属性，不是函数；不要调用未注册的 gsap.effects\n"
                     ),
                 })
                 continue
@@ -887,8 +1018,12 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
             break
 
     # 构造输出（向后兼容结构）
+    _emit_thinking("正在构建初步旁白与字幕...")
     title = f"{source_title} - 动画演示"
     description = "基于源资源自动生成的科普动画。"
+    
+    # 阶段1：构建 pending 状态的旁白数据，让前端能立刻看无声版
+    pending_narration = build_pending_narration(html_output)
 
     generated = {
         "module_type": "animation",
@@ -898,6 +1033,8 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
         "content": html_output,  # 兼容
         "animationSpec": None,   # 不再有 animationSpec
         "duration": 60,
+        "narration": pending_narration,
+        "videoExports": {},
         "metadata": {
             "renderer": "jacky-motion",
             "version": "3.0",
@@ -925,6 +1062,35 @@ def animation_skill_generator_node(state: AgentState) -> Dict[str, Any]:
         "data": generated,
         "step_description": f"已生成动画资源",
     })
+
+    # 阶段2：启动后台异步任务，进行真实 TTS 语音合成并静默更新资源
+    resource_id = None
+    if "placeholder_resource_map" in state and state["placeholder_resource_map"]:
+        resource_id = list(state["placeholder_resource_map"].values())[0].get("id")
+    
+    def _tts_background_task(r_id, h_out):
+        try:
+            logger.info(f"  [动画后台合成] 开始为资源 {r_id} 合成真实语音...")
+            real_narration = build_narration(h_out, synthesize_speech)
+            if r_id:
+                # 获取目前数据库里的最新资源（防覆盖）
+                current = java_client.get_resource_by_id(r_id)
+                if current and current.get("moduleData"):
+                    mod_data = current["moduleData"]
+                    if isinstance(mod_data, str):
+                        try:
+                            mod_data = json.loads(mod_data)
+                        except:
+                            mod_data = {}
+                    mod_data["narration"] = real_narration
+                    java_client.update_resource_content(r_id, json.dumps(mod_data, ensure_ascii=False))
+                    logger.info(f"  [动画后台合成] 资源 {r_id} 真实语音合成并更新完成！")
+        except Exception as e:
+            logger.error(f"  [动画后台合成] 失败: {e}")
+
+    import threading
+    if resource_id:
+        threading.Thread(target=_tts_background_task, args=(resource_id, html_output), daemon=True).start()
 
     return {
         "generated_content": generated,

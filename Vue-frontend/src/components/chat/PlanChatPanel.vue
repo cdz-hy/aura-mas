@@ -1,5 +1,5 @@
 <template>
-  <div class="flex-1 flex-shrink-0 flex flex-col card overflow-hidden animate-fade-in-up min-w-[260px] md:min-w-[300px]" style="animation-delay: 0.1s">
+  <div class="plan-chat-panel flex-1 flex-shrink-0 flex flex-col card overflow-hidden animate-fade-in-up min-w-[260px] md:min-w-[300px]" style="animation-delay: 0.1s">
     <!-- Header with mode toggle -->
     <div class="px-4 py-3 border-b border-navy-100/50">
       <div class="flex items-center justify-between gap-3">
@@ -48,6 +48,16 @@
             <span v-if="currentSessions.length" class="absolute -top-1 -right-1 bg-navy-600 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center border border-white">
               {{ currentSessions.length }}
             </span>
+          </button>
+          <button
+            class="p-2 rounded-lg transition-colors relative"
+            :class="isManageMode ? 'bg-indigo-100 text-indigo-700' : 'bg-navy-50 text-navy-500 hover:bg-navy-100'"
+            @click="toggleManageMode()"
+            title="管理消息"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
           </button>
           <button
             class="p-2 rounded-lg bg-navy-50 text-navy-500 hover:bg-navy-100 transition-colors"
@@ -147,7 +157,12 @@
         </div>
 
         <!-- Message list -->
-        <div v-for="(msg, i) in chatStore.messages" :key="i" class="flex gap-3" :class="msg.role === 'user' ? 'justify-end' : ''">
+        <div v-for="(msg, i) in chatStore.messages" :key="i" class="flex gap-3 group" :class="msg.role === 'user' ? 'justify-end' : ''">
+          <!-- Checkbox for manage mode -->
+          <div v-if="isManageMode && msg.id" class="flex items-center" :class="msg.role === 'user' ? 'order-first ml-3' : 'mr-3'">
+            <input type="checkbox" :value="msg.id" v-model="selectedMessageIds" class="w-4 h-4 text-navy-600 rounded border-gray-300 focus:ring-navy-500 cursor-pointer" />
+          </div>
+
           <template v-if="msg.role === 'assistant'">
             <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-navy-500 to-navy-700 flex items-center justify-center flex-shrink-0">
               <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -155,8 +170,41 @@
               </svg>
             </div>
 
+            <!-- KB check confirmation card -->
+            <div v-if="msg.type === 'confirm' && msg.confirmationType === 'kb_check'" class="max-w-[85%] space-y-3">
+              <div class="bg-amber-50 rounded-2xl rounded-tl-sm px-5 py-3 border border-amber-200">
+                <div class="flex items-center gap-2 mb-2">
+                  <svg class="w-5 h-5 text-amber-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                  <span class="font-medium text-amber-800">知识库内容提示</span>
+                </div>
+                <p class="text-amber-700 text-sm leading-relaxed">{{ msg.content }}</p>
+              </div>
+              <div v-if="chatStore.awaitingConfirmation && i === chatStore.messages.length - 1" class="flex flex-wrap gap-2 ml-2">
+                <button class="px-4 py-2 rounded-lg bg-navy-600 text-white text-sm font-medium hover:bg-navy-700 transition-colors"
+                  @click="$emit('confirmBreakdown')">
+                  继续生成
+                </button>
+                <button class="px-4 py-2 rounded-lg bg-white text-navy-600 text-sm font-medium border border-navy-200 hover:bg-navy-50 transition-colors"
+                  @click="$emit('submitModification', '取消，暂不生成')">
+                  取消
+                </button>
+                <button class="px-4 py-2 rounded-lg bg-white text-navy-500 text-sm font-medium border border-navy-100 hover:bg-navy-50 transition-colors"
+                  @click="showModifyInput = !showModifyInput">
+                  说点别的...
+                </button>
+              </div>
+              <div v-if="showModifyInput && chatStore.awaitingConfirmation && i === chatStore.messages.length - 1" class="ml-2">
+                <form @submit.prevent="$emit('submitModification', modifyText); modifyText = ''; showModifyInput = false" class="flex gap-2">
+                  <input v-model="modifyText" type="text" class="input-field flex-1 text-sm" placeholder="随便说点什么，比如：有没有其他办法？" autofocus />
+                  <button type="submit" class="btn-primary px-4 text-sm" :disabled="!modifyText.trim()">发送</button>
+                </form>
+              </div>
+            </div>
+
             <!-- Task breakdown confirmation card -->
-            <div v-if="msg.type === 'confirm' && msg.breakdown" class="max-w-[85%] space-y-3">
+            <div v-else-if="msg.type === 'confirm' && msg.breakdown" class="max-w-[85%] space-y-3">
               <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3">
                 <p class="text-navy-700 mb-3">{{ msg.content }}</p>
                 <div v-if="msg.breakdown.modules" class="space-y-2">
@@ -198,6 +246,11 @@
             <!-- Resource generated card -->
             <div v-else-if="msg.type === 'resource_generated' && msg.resources?.length" class="max-w-[85%]">
               <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3">
+                <ThinkingProcess 
+                  v-if="msg.thinkings && msg.thinkings.length > 0" 
+                  :thinkings="msg.thinkings" 
+                  :isStreaming="chatStore.streaming && i === chatStore.messages.length - 1"
+                />
                 <p class="text-navy-700 mb-3">{{ msg.content }}</p>
                 <div class="flex flex-wrap gap-2">
                   <button
@@ -220,7 +273,18 @@
 
             <!-- Normal assistant message -->
             <div v-else class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
-              <div class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
+              <ThinkingProcess 
+                v-if="msg.thinkings && msg.thinkings.length > 0" 
+                :thinkings="msg.thinkings" 
+                :isStreaming="chatStore.streaming && i === chatStore.messages.length - 1"
+              />
+              <div v-if="msg.content" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(msg.content)"></div>
+              <div v-else-if="chatStore.streaming && i === chatStore.messages.length - 1 && chatStore.streamBuffer" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(chatStore.streamBuffer)"></div>
+              <div v-else-if="chatStore.streaming && i === chatStore.messages.length - 1" class="flex gap-1.5 py-1">
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0s"></span>
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.15s"></span>
+                <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.3s"></span>
+              </div>
             </div>
           </template>
 
@@ -229,23 +293,6 @@
               <p class="leading-relaxed">{{ msg.content }}</p>
             </div>
           </template>
-        </div>
-
-        <!-- Streaming indicator (assistant) -->
-        <div v-if="chatStore.streaming" class="flex items-start gap-3">
-          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-navy-500 to-navy-700 flex items-center justify-center flex-shrink-0">
-            <svg class="w-4 h-4 text-white animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-            </svg>
-          </div>
-          <div class="bg-navy-50 rounded-2xl rounded-tl-sm px-5 py-3 max-w-[80%]">
-            <div v-if="chatStore.streamBuffer" class="text-navy-700 leading-relaxed markdown-body" v-html="renderMd(chatStore.streamBuffer)"></div>
-            <div v-else class="flex gap-1.5 py-1">
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0s"></span>
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.15s"></span>
-              <span class="w-2 h-2 rounded-full bg-navy-300 animate-bounce" style="animation-delay: 0.3s"></span>
-            </div>
-          </div>
         </div>
 
         <!-- Module context prompt -->
@@ -259,7 +306,7 @@
             <p class="text-navy-700">你正在查看「<span class="font-medium">{{ moduleContextMessage.title }}</span>」，如需为该模块生成补充资源，请点击：</p>
             <div class="mt-3 flex flex-wrap gap-2">
               <button
-                v-for="opt in resourceOptions" :key="opt.type"
+                v-for="opt in resourceGenerationOptions" :key="opt.type"
                 class="text-xs px-3 py-1.5 rounded-full border transition-colors"
                 :class="generatingType === opt.type ? 'bg-navy-600 text-white border-navy-600' : 'bg-white text-navy-600 border-navy-200 hover:bg-navy-50'"
                 :disabled="!!generatingType"
@@ -280,7 +327,12 @@
         </div>
 
         <!-- Message list -->
-        <div v-for="(msg, i) in tutor.messages.value" :key="i" class="tutor-msg-row" :class="msg.role">
+        <div v-for="(msg, i) in tutor.messages.value" :key="i" class="tutor-msg-row group" :class="msg.role">
+          <!-- Checkbox for manage mode -->
+          <div v-if="isManageMode && msg.id" class="flex items-center" :class="msg.role === 'user' ? 'order-first ml-2' : 'mr-2'">
+            <input type="checkbox" :value="msg.id" v-model="selectedMessageIds" class="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500 cursor-pointer" />
+          </div>
+
           <div v-if="msg.role === 'assistant'" class="tutor-avatar">
             <img :src="tutorGif" alt="" />
           </div>
@@ -312,28 +364,43 @@
     </div>
 
     <!-- Input bar -->
-    <div class="px-6 py-3 border-t border-navy-100/50 bg-white">
+    <div class="plan-chat-inputbar px-6 py-3 border-t border-navy-100/50 bg-white">
+      <!-- Manage actions bar -->
+      <div v-if="isManageMode" class="flex items-center justify-between w-full">
+        <span class="text-sm text-navy-600 font-medium">已选择 {{ selectedMessageIds.length }} 条消息</span>
+        <div class="flex gap-2">
+          <button type="button" class="px-4 py-2 text-sm font-medium text-navy-600 bg-navy-50 rounded-xl hover:bg-navy-100 transition-colors" @click="toggleManageMode()">
+            取消
+          </button>
+          <button type="button" class="px-4 py-2 text-sm font-medium text-white bg-red-500 rounded-xl hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" :disabled="selectedMessageIds.length === 0" @click="deleteSelectedMessages()">
+            删除选中
+          </button>
+        </div>
+      </div>
+
       <!-- Assistant input -->
-      <form v-if="mode === 'assistant'" @submit.prevent="handleSendAssistant()" class="flex gap-3">
-        <input
+      <form v-else-if="mode === 'assistant'" @submit.prevent="handleSendAssistant()" class="flex gap-3 items-end w-full">
+        <AutoGrowTextarea
           v-model="assistantInput"
-          type="text"
-          class="input-field flex-1"
           :placeholder="chatStore.streaming ? 'AI回复中...' : chatStore.awaitingConfirmation ? '输入补充说明...' : '描述你想学习的内容...'"
           :disabled="chatStore.streaming"
+          show-voice
+          :voice-recording="voice.isRecording.value"
+          @voice-toggle="voice.toggle"
         />
         <button type="submit" class="btn-primary px-5" :disabled="!assistantInput.trim() || chatStore.streaming">
           发送
         </button>
       </form>
       <!-- Tutor input -->
-      <form v-else @submit.prevent="handleSendTutor()" class="flex gap-3">
-        <input
+      <form v-else @submit.prevent="handleSendTutor()" class="flex gap-3 items-end">
+        <AutoGrowTextarea
           v-model="tutorInput"
-          type="text"
-          class="input-field flex-1"
           placeholder="输入你的问题..."
           :disabled="tutor.loading.value"
+          show-voice
+          :voice-recording="voice.isRecording.value"
+          @voice-toggle="voice.toggle"
         />
         <button type="submit" class="btn-primary px-5" :disabled="!tutorInput.trim() || tutor.loading.value">
           发送
@@ -404,7 +471,11 @@ import { useAuthStore } from '@/stores/auth'
 import { parseMarkdown } from '@/utils/markdown'
 import { useTutor, pickFollowUp } from '@/composables/useTutor'
 import type { TutorContext } from '@/composables/useTutor'
+import ThinkingProcess from '@/components/chat/ThinkingProcess.vue'
 import tutorGif from '@/image/智能辅导.gif'
+import AutoGrowTextarea from '@/components/common/AutoGrowTextarea.vue'
+import { useVoiceInput } from '@/composables/useVoiceInput'
+import { resourceGenerationOptions } from '@/constants/resourceGenerationOptions'
 
 const props = defineProps<{
   planId: string
@@ -468,7 +539,38 @@ const showSessionList = ref(false)
 const assistantInput = ref('')
 const tutorInput = ref('')
 const showModifyInput = ref(false)
+
+// 语音输入：根据当前 mode 写入对应 ref
+const voice = useVoiceInput({
+  onText: (text) => {
+    if (props.mode === 'tutor') tutorInput.value += text
+    else assistantInput.value += text
+  },
+  onError: (err) => { console.error('[Voice]', err) },
+})
 const modifyText = ref('')
+const isManageMode = ref(false)
+const selectedMessageIds = ref<number[]>([])
+
+function toggleManageMode() {
+  isManageMode.value = !isManageMode.value
+  if (!isManageMode.value) {
+    selectedMessageIds.value = []
+  }
+}
+
+async function deleteSelectedMessages() {
+  if (selectedMessageIds.value.length === 0) return
+  const ids = [...selectedMessageIds.value]
+  selectedMessageIds.value = []
+  isManageMode.value = false
+  
+  if (props.mode === 'tutor') {
+    await tutor.deleteMessages(ids)
+  } else {
+    await chatStore.deleteMessages(ids)
+  }
+}
 
 const quickQuestions = [
   '我想学习 Python 基础',
@@ -476,18 +578,8 @@ const quickQuestions = [
   '这个知识点不太理解',
 ]
 
-const resourceOptions = [
-  { type: 'quiz', label: '测验' },
-  { type: 'mindmap', label: '思维导图' },
-  { type: 'code', label: '代码示例' },
-  { type: 'summary', label: '总结' },
-  { type: 'video', label: '教学视频' },
-  { type: 'animation', label: '动画' },
-  { type: 'podcast', label: '播客' },
-]
-
 const typeLabels: Record<string, string> = {
-  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客',
+  document: '文档', text: '图文', mindmap: '导图', quiz: '题目', code: '代码', reading: '阅读', summary: '总结', video: '视频', image: '图片', diagram: '图表', animation: '动画', podcast: '播客', pptx: 'PPT',
 }
 
 const moduleContextMessage = computed(() => chatStore.selectedModuleContext ? { title: chatStore.selectedModuleContext.title } : null)
@@ -515,19 +607,18 @@ function handleSendAssistant(text?: string) {
   showModifyInput.value = false
 
   const ctx = chatStore.selectedModuleContext
-  if (ctx) {
-    const resourceType = detectResourceType(msg)
-    if (resourceType) {
-      chatStore.requestSupplementaryResource(props.planId, ctx, resourceType)
-      return
-    }
-  }
   // 确认状态下，底部输入也走 confirmBreakdown 以携带 task_breakdown 上下文
   if (chatStore.awaitingConfirmation && chatStore.pendingTaskBreakdown) {
     chatStore.confirmBreakdown(props.planId, msg)
     return
   }
-  chatStore.sendMessage(msg, props.planId)
+  
+  const extraParams: Record<string, string> = {}
+  if (ctx) {
+    extraParams.current_module_id = String(ctx.moduleId)
+    extraParams.current_module_title = ctx.title
+  }
+  chatStore.sendMessage(msg, props.planId, extraParams)
 }
 
 function handleSendTutor() {
@@ -630,20 +721,11 @@ function badgeClass(type: string) {
   return { text: 'bg-blue-50 text-blue-500', document: 'bg-blue-50 text-blue-500', mindmap: 'bg-purple-50 text-purple-500', quiz: 'bg-amber-50 text-amber-500', code: 'bg-emerald-50 text-emerald-500', reading: 'bg-rose-50 text-rose-500', video: 'bg-red-50 text-red-500', summary: 'bg-sky-50 text-sky-500', image: 'bg-pink-50 text-pink-500', diagram: 'bg-indigo-50 text-indigo-500', animation: 'bg-orange-50 text-orange-500', podcast: 'bg-emerald-50 text-emerald-500' }[type] || 'bg-navy-50 text-navy-500'
 }
 
-function detectResourceType(msg: string): string | null {
-  const lower = msg.toLowerCase()
-  if (/测验|题目|练习|quiz|做题|出题/.test(lower)) return 'quiz'
-  if (/思维导图|导图|mindmap|脑图/.test(lower)) return 'mindmap'
-  if (/代码|code|示例代码|编程/.test(lower)) return 'code'
-  if (/总结|摘要|summary|复习|要点/.test(lower)) return 'summary'
-  if (/视频|video|教程|教学视频/.test(lower)) return 'video'
-  if (/动画|animation|动效/.test(lower)) return 'animation'
-  if (/播客|电台|podcast|博客|文章|blog|网页/.test(lower)) return 'podcast'
-  return null
-}
 
 // Load tutor sessions when switching to tutor mode
 watch(() => props.mode, (newMode) => {
+  isManageMode.value = false
+  selectedMessageIds.value = []
   if (newMode === 'tutor') {
     tutor.loadSessions()
     nextTick(() => scrollBottom())
@@ -736,6 +818,39 @@ defineExpose({ updateResourceTitle, updateResourceType, scrollBottom })
 </script>
 
 <style scoped>
+.plan-chat-panel {
+  border-color: rgba(185, 201, 232, 0.72);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.plan-chat-panel > div:first-child {
+  min-height: 72px;
+  border-bottom-color: rgba(188, 203, 232, 0.58);
+  background: linear-gradient(180deg, #ffffff 0%, rgba(249, 252, 255, 0.94) 100%);
+}
+
+.plan-chat-panel > .flex-1.overflow-y-auto {
+  background: #fff;
+}
+
+.plan-chat-inputbar {
+  border-top-color: rgba(188, 203, 232, 0.58);
+}
+
+.plan-chat-inputbar :deep(.input-field) {
+  height: 48px;
+  border-radius: 9px;
+  border-color: rgba(154, 176, 218, 0.78);
+  color: #5a7099;
+}
+
+.plan-chat-inputbar :deep(.btn-primary) {
+  min-width: 88px;
+  height: 48px;
+  border-radius: 9px;
+}
+
 .slide-down-enter-active,
 .slide-down-leave-active {
   transition: all 0.25s ease;

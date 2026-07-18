@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 64 64">
+
+    <defs>
+        <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#4164b2"/>
+            <stop offset="50%" stop-color="#649b64"/>
+            <stop offset="100%" stop-color="#a2c3a2"/>
+        </linearGradient>
+    </defs>
+
+    <!-- 第一层能量轨道 -->
+    <g>
+        <animateTransform attributeName="transform" type="rotate"
+            from="0 32 32" to="360 32 32" dur="10s" repeatCount="indefinite"/>
+        <circle cx="32" cy="32" r="20" fill="none"
+            stroke="url(#grad1)" stroke-width="3.5"
+            stroke-linecap="round" stroke-dasharray="28 98" opacity="0.85"/>
+    </g>
+
+    <!-- 第二层反向轨道 -->
+    <g>
+        <animateTransform attributeName="transform" type="rotate"
+            from="360 32 32" to="0 32 32" dur="16s" repeatCount="indefinite"/>
+        <circle cx="32" cy="32" r="16" fill="none"
+            stroke="#6783c1" stroke-width="2"
+            stroke-linecap="round" stroke-dasharray="16 84" opacity="0.5"/>
+    </g>
+
+    <!-- 中央核心 -->
+    <circle cx="32" cy="32" r="9" fill="url(#grad1)">
+        <animate attributeName="r" values="8.5;9.5;8.5" dur="3s" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- 内部柔光 -->
+    <circle cx="32" cy="32" r="4.5" fill="#fdf9f0" opacity="0.85">
+        <animate attributeName="opacity" values="0.7;1;0.7" dur="3s" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- 三个智能体节点 -->
+    <g>
+        <animateTransform attributeName="transform" type="rotate"
+            from="0 32 32" to="360 32 32" dur="25s" repeatCount="indefinite"/>
+
+        <circle cx="32" cy="9" r="3.2" fill="#6783c1">
+            <animate attributeName="r" values="2.8;3.5;2.8" dur="2.5s" repeatCount="indefinite"/>
+        </circle>
+
+        <circle cx="51" cy="45" r="3.2" fill="#a2c3a2">
+            <animate attributeName="r" values="2.8;3.5;2.8" dur="2.5s" begin="0.8s" repeatCount="indefinite"/>
+        </circle>
+
+        <circle cx="13" cy="45" r="3.2" fill="#e8b06a">
+            <animate attributeName="r" values="2.8;3.5;2.8" dur="2.5s" begin="1.6s" repeatCount="indefinite"/>
+        </circle>
+    </g>
+
+</svg>

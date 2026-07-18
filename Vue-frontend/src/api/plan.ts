@@ -1,4 +1,5 @@
 import request from './request'
+import { PYTHON_AI_BASE } from './request'
 import type { LearningPlan, PlanCreateRequest } from '@/types/plan'
 
 export function createPlan(data: PlanCreateRequest) {
@@ -19,4 +20,22 @@ export function updatePlan(planId: number, data: Partial<LearningPlan>) {
 
 export function deletePlan(planId: number) {
   return request.delete(`/plan/${planId}`)
+}
+
+// 生成计划SVG图标（Python后端，会直接更新Java后端）
+export async function generatePlanIcon(planId: number, planTitle: string, resourceTitles: string[]): Promise<{ svg: string | null; description?: string }> {
+  try {
+    const { useAuthStore } = await import('@/stores/auth')
+    const user_id = useAuthStore().user?.id || 0
+    const res = await fetch(`${PYTHON_AI_BASE}/api/analytics/plan-icon`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan_id: planId, plan_title: planTitle, resource_titles: resourceTitles, user_id })
+    })
+    const data = await res.json()
+    return { svg: data.svg || null, description: data.description }
+  } catch (e) {
+    console.warn('[PlanIcon] 生成图标失败:', e)
+    return { svg: null }
+  }
 }

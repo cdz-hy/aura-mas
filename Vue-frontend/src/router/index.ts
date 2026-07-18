@@ -2,6 +2,9 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionStore } from '@/stores/permission'
 
+export { resolveNoteCaptureSource } from '@/stores/noteCapture'
+export type { NoteCaptureSource, NoteCaptureMode, NoteCaptureRequest } from '@/stores/noteCapture'
+
 const routes: RouteRecordRaw[] = [
   {
     path: '/login',

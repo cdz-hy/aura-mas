@@ -8,7 +8,9 @@ from app.agents.schemas import AgentState
 from app.agents.llm_factory import get_rag_retriever_llm
 from app.prompts import RAG_RETRIEVER_QUERY_OPTIMIZER_PROMPT, RAG_RETRIEVER_CONFIG_PROMPT
 from app.utils.token_recorder import record_from_mimo
+from app.utils import stream_registry
 from app.services.retrieval import HybridRetrievalService
+import json
 
 logger = logging.getLogger("agents.rag_retriever")
 
@@ -181,7 +183,32 @@ async def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"{'='*60}")
     logger.info(f"  [RAG检索智能体] 开始处理")
     logger.info(f"  用户输入: {user_message[:100]}")
-    
+
+    # 实时推送思考过程
+    _sse_cb = state.get("sse_callback") or stream_registry.get_sse_callback(state.get("session_id", ""))
+    def _emit_thinking(content: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking", "agent": "RAG检索智能体", "content": content}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_start(agent: str, prefix: str = ""):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_start", "agent": agent, "content": prefix}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    def _emit_thinking_chunk(chunk: str):
+        if _sse_cb:
+            try:
+                _sse_cb(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+            except Exception:
+                pass
+
+    _emit_thinking("正在分析检索策略，准备提取相关学习资料...")
+
     # 重试模式：只检索未通过的模块
     if retry_mode and target_module_ids:
         logger.info(f"  [RAG检索智能体] 重试模式：只检索模块 {target_module_ids}")
@@ -211,6 +238,7 @@ async def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
         llm=llm
     )
     
+    _emit_thinking("正在分析用户画像和历史对话，优化检索关键词...")
     # 获取各个模块的优化检索词
     search_queries = _optimize_search_queries(
         modules_to_retrieve,
@@ -220,6 +248,12 @@ async def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
         user_id=state.get("user_id", 0),
         task_id=state.get("task_id"),
     )
+    
+    if search_queries:
+        query_list = ", ".join([f"「{q}」" for q in search_queries[:3]])
+        if len(search_queries) > 3:
+            query_list += " 等"
+        _emit_thinking(f"调用工具: 知识库向量检索 (检索词: {query_list})")
 
     all_results = []
     all_context_chunks = []
@@ -280,6 +314,8 @@ async def rag_retriever_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"    检索充足: {'是' if rag_sufficient else '否 (结果不足或均为低分无关内容)'}")
         if poor_module_ids:
             logger.info(f"    需自主生成的模块: {poor_module_ids}")
+
+        _emit_thinking(f"检索完成: 找到 {len(deduped_results)} 条高相关性内容 ({text_count} 段文本，{image_count} 张图片)")
 
         # 自主异常检测：当所有模块检索结果都不足时，检查是否与目标根本偏离
         if (not state.get("background_generation")

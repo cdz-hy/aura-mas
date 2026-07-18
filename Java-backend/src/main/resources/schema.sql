@@ -56,6 +56,64 @@ CREATE TABLE IF NOT EXISTS `learning_resource` (
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学习资源表';
 
+CREATE TABLE IF NOT EXISTS `knowledge_tree` (
+    `id` VARCHAR(64) NOT NULL,
+    `plan_id` BIGINT UNSIGNED NOT NULL,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `title` VARCHAR(160) NOT NULL,
+    `field` VARCHAR(160) DEFAULT '',
+    `current_problem` TEXT,
+    `learning_background` TEXT,
+    `current_node_id` VARCHAR(64) DEFAULT NULL,
+    `context_summary` TEXT,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_tree_plan_user` (`plan_id`, `user_id`),
+    KEY `idx_tree_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='交互式知识树';
+
+CREATE TABLE IF NOT EXISTS `knowledge_node` (
+    `id` VARCHAR(64) NOT NULL,
+    `tree_id` VARCHAR(64) NOT NULL,
+    `parent_id` VARCHAR(64) DEFAULT NULL,
+    `resource_id` BIGINT UNSIGNED DEFAULT NULL,
+    `title` VARCHAR(160) NOT NULL,
+    `summary` TEXT,
+    `content` TEXT,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'pending',
+    `relevance` INT NOT NULL DEFAULT 0,
+    `importance` INT NOT NULL DEFAULT 2,
+    `relevance_score` INT NOT NULL DEFAULT 2,
+    `difficulty` INT NOT NULL DEFAULT 2,
+    `depth` INT NOT NULL DEFAULT 0,
+    `sort_order` INT NOT NULL DEFAULT 0,
+    `prerequisite_ids` JSON DEFAULT NULL,
+    `is_fundamental` TINYINT NOT NULL DEFAULT 0,
+    `fp_relation` VARCHAR(80) DEFAULT '',
+    `fp_reason` TEXT,
+    `collapsed` TINYINT NOT NULL DEFAULT 0,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_node_tree` (`tree_id`),
+    KEY `idx_node_parent` (`parent_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识树节点';
+
+CREATE TABLE IF NOT EXISTS `tree_message` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `tree_id` VARCHAR(64) NOT NULL,
+    `node_id` VARCHAR(64) NOT NULL,
+    `role` VARCHAR(16) NOT NULL,
+    `content` TEXT NOT NULL,
+    `next_actions` JSON DEFAULT NULL,
+    `search_sources` JSON DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_tree_message_tree` (`tree_id`),
+    KEY `idx_tree_message_node` (`node_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识树节点消息';
+
 CREATE TABLE IF NOT EXISTS `ai_dialogue` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '用户ID',
@@ -121,12 +179,20 @@ CREATE TABLE IF NOT EXISTS `note` (
     `content` LONGTEXT NOT NULL,
     `tags` JSON DEFAULT NULL COMMENT '标签数组',
     `is_pinned` TINYINT DEFAULT 0 COMMENT '是否置顶',
+    `note_type` VARCHAR(32) DEFAULT NULL COMMENT '摘录/速记/提问: excerpt|quick|question',
+    `organize_status` VARCHAR(32) DEFAULT NULL COMMENT '整理状态: pending|organizing|organized|error',
+    `source_type` VARCHAR(64) DEFAULT NULL COMMENT '来源类型: resource|plan|knowledge_tree|tutor',
+    `source_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '来源实体ID',
+    `source_title` VARCHAR(255) DEFAULT NULL COMMENT '来源标题',
+    `source_route` VARCHAR(512) DEFAULT NULL COMMENT '来源前端路由',
+    `excerpt` TEXT DEFAULT NULL COMMENT '摘录原文（可为空）',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     `is_deleted` TINYINT DEFAULT 0,
     `deleted_at` DATETIME DEFAULT NULL,
     PRIMARY KEY (`id`),
-    KEY `idx_user_id` (`user_id`)
+    KEY `idx_user_id` (`user_id`),
+    KEY `idx_organize_status` (`organize_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='笔记表';
 
 CREATE TABLE IF NOT EXISTS `note_resource_rel` (
@@ -150,6 +216,16 @@ CREATE TABLE IF NOT EXISTS `note_resource_rel` (
 -- 笔记标签和置顶功能：
 -- ALTER TABLE note ADD COLUMN tags JSON DEFAULT NULL COMMENT '标签数组' AFTER content;
 -- ALTER TABLE note ADD COLUMN is_pinned TINYINT DEFAULT 0 COMMENT '是否置顶' AFTER tags;
+
+-- 笔记捕获元数据（侧边栏 workbench）：
+-- ALTER TABLE note ADD COLUMN note_type VARCHAR(32) DEFAULT NULL COMMENT '摘录/速记/提问: excerpt|quick|question' AFTER is_pinned;
+-- ALTER TABLE note ADD COLUMN organize_status VARCHAR(32) DEFAULT NULL COMMENT '整理状态: pending|organizing|organized|error' AFTER note_type;
+-- ALTER TABLE note ADD COLUMN source_type VARCHAR(64) DEFAULT NULL COMMENT '来源类型: resource|plan|knowledge_tree|tutor' AFTER organize_status;
+-- ALTER TABLE note ADD COLUMN source_id BIGINT UNSIGNED DEFAULT NULL COMMENT '来源实体ID' AFTER source_type;
+-- ALTER TABLE note ADD COLUMN source_title VARCHAR(255) DEFAULT NULL COMMENT '来源标题' AFTER source_id;
+-- ALTER TABLE note ADD COLUMN source_route VARCHAR(512) DEFAULT NULL COMMENT '来源前端路由' AFTER source_title;
+-- ALTER TABLE note ADD COLUMN excerpt TEXT DEFAULT NULL COMMENT '摘录原文（可为空）' AFTER source_route;
+-- ALTER TABLE note ADD INDEX idx_organize_status (organize_status);
 
 CREATE TABLE IF NOT EXISTS `flashcard` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -199,13 +275,18 @@ CREATE TABLE IF NOT EXISTS `ai_kb_generation` (
 CREATE TABLE IF NOT EXISTS `system_log` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED DEFAULT NULL,
-    `operation_type` VARCHAR(50) NOT NULL,
-    `resource_id` VARCHAR(255) DEFAULT NULL,
-    `user_ip` VARCHAR(45) DEFAULT NULL,
+    `operation_type` VARCHAR(50) NOT NULL COMMENT '操作类型编码',
+    `operation_desc` VARCHAR(200) DEFAULT NULL COMMENT '操作描述（人可读）',
+    `module` VARCHAR(50) DEFAULT NULL COMMENT '所属模块',
+    `resource_id` VARCHAR(255) DEFAULT NULL COMMENT '操作目标资源ID',
+    `user_ip` VARCHAR(45) DEFAULT NULL COMMENT '操作者IP',
+    `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1=成功 0=失败',
+    `error_msg` VARCHAR(500) DEFAULT NULL COMMENT '失败原因',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     KEY `idx_user_id` (`user_id`),
-    KEY `idx_operation` (`operation_type`)
+    KEY `idx_operation` (`operation_type`),
+    KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统操作日志表';
 
 CREATE TABLE IF NOT EXISTS `ai_token_usage` (
@@ -322,3 +403,68 @@ CREATE TABLE IF NOT EXISTS `daily_study_time` (
     UNIQUE KEY `uk_user_date` (`user_id`, `study_date`),
     KEY `idx_user_date` (`user_id`, `study_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='每日学习时长表';
+
+CREATE TABLE IF NOT EXISTS `user_knowledge_domain` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `domain_name` VARCHAR(100) NOT NULL,
+    `graph_data` JSON DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_deleted` TINYINT DEFAULT 0,
+    PRIMARY KEY (`id`),
+    KEY `idx_user_id` (`user_id`),
+    UNIQUE KEY `uk_user_domain` (`user_id`, `domain_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户知识领域图谱表';
+
+CREATE TABLE IF NOT EXISTS `resource_library` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `title` VARCHAR(255) NOT NULL COMMENT '资源标题',
+    `content_type` VARCHAR(20) NOT NULL COMMENT '内容类型: text/image',
+    `content` LONGTEXT COMMENT '文本内容 (text 类型)',
+    `image_url` VARCHAR(500) COMMENT '图片URL (image 类型)',
+    `image_caption` VARCHAR(500) COMMENT '图片描述 (image 类型)',
+    `qdrant_doc_id` BIGINT COMMENT 'Qdrant 中的 doc_id',
+    `status` TINYINT NOT NULL DEFAULT 0 COMMENT '状态: 0=待审核, 1=已入库, 2=已拒绝',
+    `created_by` BIGINT NOT NULL COMMENT '创建者用户ID',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_deleted` TINYINT DEFAULT 0,
+    `deleted_at` DATETIME DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_content_type` (`content_type`),
+    KEY `idx_status` (`status`),
+    KEY `idx_created_by` (`created_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='资源库表';
+
+-- 学习行为追踪表
+CREATE TABLE IF NOT EXISTS `learning_events` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `event_type` VARCHAR(50) NOT NULL,
+    `event_data` JSON,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_user_time` (`user_id`, `created_at`),
+    KEY `idx_event_type` (`event_type`),
+    KEY `idx_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学习行为追踪表';
+
+-- 学习策略推送表
+CREATE TABLE IF NOT EXISTS `learning_strategies` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `strategy_type` VARCHAR(50) NOT NULL,
+    `title` VARCHAR(200) NOT NULL,
+    `description` TEXT,
+    `strategy_data` JSON NOT NULL,
+    `status` VARCHAR(20) DEFAULT 'pending',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `expires_at` DATETIME,
+    `accepted_at` DATETIME,
+    PRIMARY KEY (`id`),
+    KEY `idx_user_status` (`user_id`, `status`),
+    KEY `idx_user_time` (`user_id`, `created_at`),
+    KEY `idx_status` (`status`),
+    KEY `idx_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学习策略推送表';

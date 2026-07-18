@@ -87,12 +87,16 @@ class JavaBackendClient:
                 if code == 200 or code == 0:
                     return result.get("data", result)
                 else:
+                    logger.error("Java 后端业务错误: %s %s -> code=%s msg=%s", method, path, code, result.get('msg'))
                     raise Exception(f"Java 后端返回错误: {result.get('msg', '未知错误')}")
             else:
+                logger.error("Java 后端 HTTP 错误: %s %s -> %s %s", method, path, resp.status_code, resp.text[:200])
                 raise Exception(f"Java 后端请求失败 ({resp.status_code}): {resp.text}")
         except requests.exceptions.ConnectionError:
+            logger.error("Java 后端连接失败: %s %s", method, url)
             raise Exception(f"无法连接 Java 后端: {url}")
         except requests.exceptions.Timeout:
+            logger.error("Java 后端请求超时: %s %s (timeout=%ss)", method, url, self.timeout)
             raise Exception(f"Java 后端请求超时: {url}")
 
     async def _arequest(self, method: str, path: str, **kwargs) -> Any:
@@ -109,12 +113,16 @@ class JavaBackendClient:
                 if code == 200 or code == 0:
                     return result.get("data", result)
                 else:
+                    logger.error("Java 后端业务错误(async): %s %s -> code=%s msg=%s", method, path, code, result.get('msg'))
                     raise Exception(f"Java 后端返回错误: {result.get('msg', '未知错误')}")
             else:
+                logger.error("Java 后端 HTTP 错误(async): %s %s -> %s %s", method, path, resp.status_code, resp.text[:200])
                 raise Exception(f"Java 后端请求失败 ({resp.status_code}): {resp.text}")
         except httpx.ConnectError:
+            logger.error("Java 后端连接失败(async): %s %s", method, url)
             raise Exception(f"无法连接 Java 后端: {url}")
         except httpx.TimeoutException:
+            logger.error("Java 后端请求超时(async): %s %s (timeout=%ss)", method, url, self.timeout)
             raise Exception(f"Java 后端请求超时: {url}")
 
     # ==================== 对话记录 ====================
@@ -127,6 +135,7 @@ class JavaBackendClient:
         dialogue_type: str,
         plan_id: Optional[int] = None,
         intent_type: Optional[str] = None,
+        conversation_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """创建对话记录"""
         body = {
@@ -139,6 +148,8 @@ class JavaBackendClient:
             body["planId"] = plan_id
         if intent_type is not None:
             body["intentType"] = intent_type
+        if conversation_context is not None:
+            body["conversationContext"] = conversation_context
         return self._request("POST", "/api/internal/dialogue", json=body)
 
     def update_dialogue_resource_id(self, dialogue_id: int, resource_id: int):
@@ -191,6 +202,135 @@ class JavaBackendClient:
     def get_plan(self, plan_id: int) -> Dict[str, Any]:
         """获取学习计划"""
         return self._request("GET", f"/api/plan/internal/{plan_id}")
+
+    def adjust_plan(self, plan_id: int, action: str, reason: str, modules: List[str] = None) -> Dict[str, Any]:
+        """调整学习计划（加速/减速/重排等）"""
+        body = {
+            "action": action,
+            "reason": reason,
+            "modules_to_adjust": modules or []
+        }
+        return self._request("POST", f"/api/plan/internal/{plan_id}/adjust", json=body)
+
+    def get_generation_task(self, task_id: int) -> Dict[str, Any]:
+        """获取资源生成任务"""
+        return self._request("GET", f"/api/resource-generation/internal/{task_id}")
+
+    # ==================== 知识图谱 ====================
+
+    def get_user_knowledge_domains(self, user_id: int) -> List[Dict[str, Any]]:
+        """获取用户所有的领域列表及图谱概览"""
+        return self._request("GET", f"/api/knowledge-graph/user/{user_id}")
+
+    def get_domain_knowledge_graph(self, domain_id: int) -> Dict[str, Any]:
+        """获取某个具体领域的完整 JSON 图谱"""
+        return self._request("GET", f"/api/knowledge-graph/domain/{domain_id}")
+
+    def create_knowledge_domain(self, user_id: int, domain_name: str, graph_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """新建领域图谱初始化数据"""
+        body = {"userId": user_id, "domainName": domain_name}
+        if graph_data:
+            body["graphData"] = graph_data
+        return self._request("POST", "/api/knowledge-graph/domain", json=body)
+
+    def update_knowledge_domain(self, domain_id: int, domain_name: Optional[str] = None, graph_data: Optional[Dict[str, Any]] = None) -> bool:
+        """保存/全量更新指定的领域图谱"""
+        body = {}
+        if domain_name:
+            body["domainName"] = domain_name
+        if graph_data is not None:
+            body["graphData"] = graph_data
+        return self._request("PUT", f"/api/knowledge-graph/domain/{domain_id}", json=body)
+
+    def patch_knowledge_graph_node(self, domain_id: int, node_id: str, mastery_level: Optional[float] = None, importance: Optional[float] = None) -> bool:
+        """更新某个节点的属性"""
+        body = {}
+        if mastery_level is not None:
+            body["masteryLevel"] = mastery_level
+        if importance is not None:
+            body["importance"] = importance
+        return self._request("PATCH", f"/api/knowledge-graph/domain/{domain_id}/node/{node_id}", json=body)
+
+    def trigger_mastery_update(self, user_id: int, resource_id: int, completed: bool):
+        """触发单个资源的异步掌握度分析"""
+        self.trigger_mastery_update_batch(user_id, [resource_id], completed)
+
+    def trigger_mastery_update_batch(self, user_id: int, resource_ids: list, completed: bool):
+        """批量触发掌握度分析（串行处理，避免并发冲突和 429）"""
+        try:
+            import requests as _req
+            _req.post(
+                f"http://localhost:8002/api/ai/knowledge-graph/update-mastery-batch",
+                json={"user_id": user_id, "resource_ids": resource_ids, "completed": completed},
+                timeout=5,
+            )
+        except Exception as e:
+            logger.warning("掌握度批量分析触发失败: user=%s resources=%s error=%s", user_id, resource_ids, e)
+
+    # ==================== 知识树 ====================
+
+    def get_or_create_tree(self, plan_id: int, user_id: int) -> dict:
+        return self._request("POST", f"/api/knowledge-tree/internal/plan/{plan_id}", params={"userId": user_id})
+
+    def get_tree_by_plan(self, plan_id: int, user_id: int) -> dict:
+        return self._request("GET", f"/api/knowledge-tree/internal/plan/{plan_id}", params={"userId": user_id})
+
+    def get_tree(self, tree_id: str, user_id: int) -> dict:
+        return self._request("GET", f"/api/knowledge-tree/internal/trees/{tree_id}", params={"userId": user_id})
+
+    def create_tree_node(self, payload: dict) -> dict:
+        return self._request("POST", "/api/knowledge-tree/internal/nodes", json=payload)
+
+    def create_tree_nodes_batch(self, payloads: list) -> list:
+        """批量创建知识树节点，减少 HTTP 往返。
+
+        payloads 是 CreateNodeRequest 列表。返回创建的节点列表。
+        批量创建时，同批次中先创建的节点可以作为后创建节点的 parent。
+        """
+        result = self._request("POST", "/api/knowledge-tree/internal/nodes/batch", json={"nodes": payloads})
+        if isinstance(result, dict):
+            return result.get("nodes", [])
+        return result if isinstance(result, list) else []
+
+    def update_tree_node(self, node_id: str, payload: dict) -> dict:
+        return self._request("PATCH", f"/api/knowledge-tree/internal/nodes/{node_id}", json=payload)
+
+    def verify_tree_node_access(self, tree_id: str, node_id: str, user_id: int) -> dict:
+        return self._request(
+            "GET",
+            f"/api/knowledge-tree/internal/trees/{tree_id}/nodes/{node_id}/verify",
+            params={"userId": user_id},
+        )
+
+    def add_tree_message(self, node_id: str, payload: dict) -> dict:
+        return self._request("POST", f"/api/knowledge-tree/internal/nodes/{node_id}/messages", json=payload)
+
+    def get_tree_messages(self, node_id: str) -> list:
+        return self._request("GET", f"/api/knowledge-tree/internal/nodes/{node_id}/messages")
+
+    def update_tree(self, tree_id: str, payload: dict) -> dict:
+        return self._request("PATCH", f"/api/knowledge-tree/internal/trees/{tree_id}", json=payload)
+
+    def sync_task_breakdown(
+        self,
+        plan_id: int,
+        user_id: int,
+        breakdown: dict,
+        learning_background: str = "",
+    ) -> dict:
+        modules = breakdown.get("modules", []) if isinstance(breakdown, dict) else []
+        payload = {
+            "userId": user_id,
+            "title": breakdown.get("title") if isinstance(breakdown, dict) else None,
+            "description": breakdown.get("description") if isinstance(breakdown, dict) else None,
+            "learningBackground": learning_background or breakdown.get("learning_background", ""),
+            "modules": modules,
+        }
+        return self._request(
+            "POST",
+            f"/api/knowledge-tree/internal/plan/{plan_id}/sync-breakdown",
+            json=payload,
+        )
 
     def update_plan_status(self, plan_id: int, status: int):
         """更新计划状态"""
@@ -258,11 +398,13 @@ class JavaBackendClient:
         """获取同一模块下的所有资源"""
         return self._request("GET", f"/api/resource/internal/plan/{plan_id}/module/{module_order}")
 
-    def update_resource_content(self, resource_id: int, module_data: str, status: Optional[int] = None):
+    def update_resource_content(self, resource_id: int, module_data: str, status: Optional[int] = None, module_type: Optional[str] = None):
         """更新资源内容"""
         body = {"moduleData": module_data}
         if status is not None:
             body["status"] = status
+        if module_type is not None:
+            body["moduleType"] = module_type
         self._request("PUT", f"/api/resource/internal/{resource_id}/content", json=body)
 
     def update_resource_status(self, resource_id: int, status: int):
@@ -303,6 +445,10 @@ class JavaBackendClient:
     def get_user_quiz_stats(self, user_id: int, plan_id: int) -> Dict[str, Any]:
         """获取用户答题统计"""
         return self._request("GET", f"/api/quiz/internal/stats/{plan_id}", params={"userId": user_id})
+
+    def get_dashboard_stats(self, user_id: int) -> Dict[str, Any]:
+        """获取仪表盘统计数据（包含学习时长、今日学习等）"""
+        return self._request("GET", "/api/stats/internal/dashboard", params={"userId": user_id})
 
     def get_quiz_records_by_resource(self, user_id: int, resource_id: int) -> list:
         """获取用户对指定资源的答题记录"""
@@ -450,6 +596,10 @@ class JavaBackendClient:
     def get_kb_by_id(self, kb_id: int) -> Dict[str, Any]:
         """获取知识库记录"""
         return self._request("GET", f"/api/admin/kb/internal/{kb_id}")
+
+    def get_indexed_kb_documents(self) -> list:
+        """获取已入库的知识库文档列表(parse_status=2)"""
+        return self._request("GET", "/api/admin/kb/internal/indexed") or []
 
     def delete_kb_by_id(self, kb_id: int):
         """删除知识库记录"""

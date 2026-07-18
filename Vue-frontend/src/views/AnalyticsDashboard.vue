@@ -56,7 +56,7 @@
       </div>
 
       <!-- Tab Content -->
-      <div class="animate-fade-in-up">
+      <div :key="activeTab" class="animate-fade-in-up">
         <component :is="currentTabComponent" :data="analyticsData" />
       </div>
     </template>
@@ -77,6 +77,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
 import { getAnalyticsData, type AnalyticsData } from '@/api/analytics'
+import { tracker } from '@/utils/tracker'
 import WeekComparison from '@/components/analytics/WeekComparison.vue'
 
 // Async tab components
@@ -102,7 +103,7 @@ function applyPreset(preset: { label: string; days: number }) {
 
 const tabs = [
   { key: 'overview', label: '学习概览' },
-  { key: 'ai', label: 'AI洞察' },
+  { key: 'ai', label: '对话分布' },
   { key: 'review', label: '复习助手' },
 ]
 
@@ -122,7 +123,6 @@ const summaryStats = computed(() => {
   const quiz = data.quizAnalysis || {}
   const heatmap = data.heatmap || {}
   const flashcard = data.flashcardStats || {}
-  const ai = data.aiInteraction || {}
 
   return [
     {
@@ -159,12 +159,12 @@ const summaryStats = computed(() => {
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
     },
     {
-      label: 'AI交互',
-      value: `${ai.totalDialogues || 0}轮`,
-      sub: `平均 ${ai.avgSessionLength || 0} 轮/会话`,
+      label: '资源完成率',
+      value: `${overview.resourceCompletionRate || 0}%`,
+      sub: `${overview.completedResources || 0} / ${overview.totalResources || 0} 个`,
       bgClass: 'bg-rose-50',
       iconClass: 'text-rose-500',
-      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
     },
   ]
 })
@@ -193,5 +193,10 @@ async function fetchData(days?: number) {
   }
 }
 
-onMounted(() => fetchData())
+onMounted(() => {
+  fetchData()
+
+  // 追踪页面浏览
+  tracker.trackPageView({ page: 'analytics' })
+})
 </script>

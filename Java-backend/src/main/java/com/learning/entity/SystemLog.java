@@ -16,10 +16,17 @@ public class SystemLog {
 
     private String operationType;
 
+    private String operationDesc;
+
+    private String module;
+
     private String resourceId;
 
     private String userIp;
 
-    @TableField(fill = FieldFill.INSERT)
+    private Integer status;
+
+    private String errorMsg;
+
     private LocalDateTime createdAt;
 }
