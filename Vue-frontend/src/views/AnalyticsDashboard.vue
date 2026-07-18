@@ -103,7 +103,7 @@ function applyPreset(preset: { label: string; days: number }) {
 
 const tabs = [
   { key: 'overview', label: '学习概览' },
-  { key: 'ai', label: 'AI洞察' },
+  { key: 'ai', label: '对话分布' },
   { key: 'review', label: '复习助手' },
 ]
 

@@ -3,17 +3,18 @@ AI 学习顾问 API
 提供智能对话、学习分析、计划建议、语音合成等功能
 
 前端调用:
-  POST /api/ai/plan-advisor/chat
+  GET /api/ai/plan-advisor/chat (SSE 流式输出)
   POST /api/ai/plan-advisor/tts
 """
 import json
 import logging
 import base64
+import asyncio
 import requests as http_requests
-from fastapi import APIRouter, HTTPException, Header
-from fastapi.responses import JSONResponse, Response
+from typing import AsyncGenerator, Optional, List, Dict, Any
+from fastapi import APIRouter, HTTPException, Header, Query
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
 from app.agents.llm_factory import get_tutor_llm
 from app.services.db.java_client import java_client
 from app.utils.profile_utils import ensure_learning_behavior_fields, update_learning_behavior
@@ -21,6 +22,37 @@ from app.core.config import settings
 
 logger = logging.getLogger("api.plan_advisor")
 router = APIRouter()
+
+
+async def _error_stream(message: str):
+    """SSE 错误流"""
+    yield f'data: {json.dumps({"type": "error", "content": message}, ensure_ascii=False)}\n\n'
+
+
+# 回答生成提示词
+RESPONSE_PROMPT = """你是一个温暖亲切的 AI 学习顾问。根据之前的分析结果，用自然亲切的语气回答学生的问题。
+
+## 语言风格
+- 像朋友一样聊天，不要太正式
+- 关心学生的学习状态，适时鼓励
+- 回答简洁明了，控制在 200 字以内
+- 使用中文回复
+- 不要使用 emoji
+
+## 回答规则
+1. 根据学习数据和分析结果回答
+2. 如果有学习建议，自然地提出来
+3. 如果学生问的是具体问题，直接回答
+4. 回答要具体、实用，不要太笼统"""
+
+# 工具中文名映射
+TOOL_NAME_MAP = {
+    "get_notes": "获取笔记列表",
+    "get_note_content": "获取笔记内容",
+    "get_learning_profile": "获取学习画像",
+    "get_quiz_analysis": "获取答题分析",
+    "get_study_heatmap": "获取学习热力图",
+}
 
 
 class AdvisorRequest(BaseModel):
@@ -249,27 +281,37 @@ def _execute_tool(action: Dict[str, Any], user_id: int) -> str:
         return f"工具执行失败: {str(e)}"
 
 
-@router.post("/chat")
+@router.get("/chat")
 async def advisor_chat(
-    request: AdvisorRequest,
-    authorization: Optional[str] = Header(None),
+    ticket: str = Query(..., description="Java 后端签发的短期 Ticket"),
+    user_message: str = Query("", description="用户消息"),
+    session_id: str = Query("", description="会话 ID"),
+    stats: str = Query("{}", description="学习统计数据 JSON"),
+    plans: str = Query("[]", description="学习计划列表 JSON"),
 ):
     """
-    AI 学习顾问对话
+    AI 学习顾问对话 - SSE 流式输出
     """
     # 验证 ticket
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="缺少认证信息")
-
-    ticket = authorization.replace("Bearer ", "")
     try:
         ticket_info = java_client.validate_ticket(ticket)
         user_id = ticket_info["user_id"]
     except Exception as e:
         logger.error(f"Ticket 验证失败: {e}")
-        raise HTTPException(status_code=401, detail="认证失败")
+        return StreamingResponse(
+            _error_stream(f"认证失败: {str(e)}"),
+            media_type="text/event-stream",
+        )
 
-    logger.info(f"[AI顾问] 用户 {user_id}, 消息: {request.userMessage[:50]}")
+    # 解析参数
+    try:
+        stats_data = json.loads(stats) if stats else {}
+        plans_data = json.loads(plans) if plans else []
+    except:
+        stats_data = {}
+        plans_data = []
+
+    logger.info(f"[AI顾问] 用户 {user_id}, 消息: {user_message[:50]}")
 
     # 获取用户画像
     user_profile = {}
@@ -279,19 +321,26 @@ async def advisor_chat(
     except Exception:
         pass
 
-    # 获取对话历史（作为上下文）
+    # 确定会话 ID
+    if not session_id:
+        session_id = f"advisor-{user_id}"
+
+    # 获取对话历史（带压缩上下文）
     chat_history = []
-    session_id = f"advisor-{user_id}"
     try:
-        history = java_client.get_dialogue_history(
+        from app.agents.conversation_compressor import build_chat_history_with_context
+        raw_history = java_client.get_dialogue_history(
             user_id=user_id,
             session_id=session_id,
-            limit=10
+            limit=50
         )
-        if history:
-            for h in history[-10:]:  # 最近10条
-                role = "用户" if h.get("dialogueType") == "USER" else "助手"
-                content = h.get("conversationText", "")
+        if raw_history:
+            # 使用压缩上下文构建历史
+            compressed_history = build_chat_history_with_context(raw_history)
+            # 取最近的消息
+            for h in compressed_history[-15:]:
+                role = h.get("role", "assistant")
+                content = h.get("content", "")
                 if content and not content.startswith("[系统自动触发]"):
                     chat_history.append(f"{role}: {content[:200]}")
     except Exception as e:
@@ -299,8 +348,8 @@ async def advisor_chat(
 
     # 获取用户的学习计划详情和资源内容
     plans_with_resources = []
-    if request.plans:
-        for plan in request.plans[:3]:  # 只取前3个计划
+    if plans_data:
+        for plan in plans_data[:3]:  # 只取前3个计划
             plan_id = plan.get("id")
             if plan_id:
                 try:
@@ -343,8 +392,8 @@ async def advisor_chat(
                     })
 
     # 构造上下文
-    stats_text = _format_stats(request.stats) if request.stats else "暂无学习数据"
-    plans_text = _format_plans(request.plans) if request.plans else "暂无学习计划"
+    stats_text = _format_stats(stats_data) if stats_data else "暂无学习数据"
+    plans_text = _format_plans(plans_data) if plans_data else "暂无学习计划"
 
     # 构造详细的计划和资源信息
     plans_detail_text = ""
@@ -384,7 +433,7 @@ async def advisor_chat(
 {history_context}
 
 ## 学生的问题
-{request.userMessage}
+{user_message}
 
 ## 你的任务
 1. **分析学生的学习计划和资源内容**：仔细阅读上面的学习计划详情，了解学生在学什么、学到了什么程度
@@ -403,15 +452,14 @@ async def advisor_chat(
 请根据以上信息回复学生，并输出 JSON:"""
 
     # 保存用户消息到数据库（系统自动触发的消息不保存）
-    session_id = f"advisor-{user_id}"
-    is_system_trigger = request.userMessage.startswith("[系统自动触发]")
+    is_system_trigger = user_message.startswith("[系统自动触发]")
     if not is_system_trigger:
-        logger.info(f"[AI顾问] 保存用户消息: session_id={session_id}, message={request.userMessage[:50]}")
+        logger.info(f"[AI顾问] 保存用户消息: session_id={session_id}, message={user_message[:50]}")
         try:
             result = java_client.create_dialogue(
                 user_id=user_id,
                 session_id=session_id,
-                conversation_text=request.userMessage,
+                conversation_text=user_message,
                 dialogue_type="USER",
                 intent_type="plan_advisor",
             )
@@ -424,126 +472,224 @@ async def advisor_chat(
     MAX_REACT_ROUNDS = 5
     react_history = []
     tool_results_context = []
+    message = ""
+    profile_update = {}
+    plan_suggestion = {}
 
-    for round_num in range(1, MAX_REACT_ROUNDS + 1):
-        # 构造工具调用历史
-        react_context = ""
-        if react_history:
-            react_context = "\n\n## 工具调用记录\n" + "\n".join(react_history)
+    # 收集思考过程（用于保存到数据库）
+    _thinkings = []
+    _thinking_chunks = []
 
-        # 构造用户输入
-        current_input = f"""{user_input}
+    # 事件队列（用于在同步和异步之间传递事件）
+    _sse_events = []
+
+    def _sse_callback(data):
+        _sse_events.append(data)
+        if '"thinking_chunk"' in data:
+            try:
+                d = json.loads(data.replace("data: ", "").strip())
+                if d.get("type") == "thinking_chunk" and "content" in d:
+                    _thinking_chunks.append(d["content"])
+            except Exception:
+                pass
+
+    # 在单独线程中执行智能顾问核心逻辑
+    def _run_advisor():
+        nonlocal message, profile_update, plan_suggestion
+
+        for round_num in range(1, MAX_REACT_ROUNDS + 1):
+            # 构造工具调用历史
+            react_context = ""
+            if react_history:
+                react_context = "\n\n## 工具调用记录\n" + "\n".join(react_history)
+
+            # 构造用户输入
+            current_input = f"""{user_input}
 {react_context}
 
 请分析学生的问题，决定是否需要调用工具获取更多信息，输出 JSON:"""
 
-        messages = [
-            {"role": "system", "content": ADVISOR_SYSTEM_PROMPT},
-            {"role": "user", "content": current_input},
-        ]
+            messages = [
+                {"role": "system", "content": ADVISOR_SYSTEM_PROMPT},
+                {"role": "user", "content": current_input},
+            ]
 
+            try:
+                # 推送思考开始事件
+                thinking_start_content = f"第 {round_num} 轮思考"
+                _sse_callback(f'data: {json.dumps({"type": "thinking_start", "agent": "AI学习顾问", "content": thinking_start_content}, ensure_ascii=False)}\n\n')
+                _thinkings.append({"agent": "AI学习顾问", "content": ""})
+
+                # 使用流式 LLM 调用，实时推送思考过程
+                def _on_thought_chunk(chunk_text):
+                    _thinking_chunks.append(chunk_text)
+                    if _thinkings:
+                        _thinkings[-1]["content"] += chunk_text
+                    _sse_callback(f'data: {json.dumps({"type": "thinking_chunk", "content": chunk_text}, ensure_ascii=False)}\n\n')
+
+                result = llm.chat_json_stream(messages, on_chunk=_on_thought_chunk, stream_field="thought")
+
+                from app.utils.token_recorder import record_from_mimo
+                record_from_mimo(llm, user_id, "plan_advisor")
+            except Exception as e:
+                logger.error(f"[AI顾问] LLM 调用失败: {e}")
+                _sse_callback(f'data: {json.dumps({"type": "error", "content": "抱歉，处理你的请求时出现了问题。"}, ensure_ascii=False)}\n\n')
+                return
+
+            # 解析结果
+            decision = result.get("decision", "finish").lower().strip()
+            thought = result.get("thought", "")
+
+            if decision == "tool_call":
+                # 执行工具调用
+                actions = result.get("actions", [])
+                if not actions:
+                    logger.warning("[AI顾问] tool_call 但 actions 为空")
+                    break
+
+                for act in actions:
+                    act_name = act.get("action", "")
+                    logger.info(f"[AI顾问] 执行工具: {act_name}")
+
+                    # 推送工具调用进度
+                    _sse_callback(f'data: {json.dumps({"type": "progress", "content": f"正在{TOOL_NAME_MAP.get(act_name, act_name)}..."}, ensure_ascii=False)}\n\n')
+
+                    tool_result = _execute_tool(act, user_id)
+
+                    # 记录工具调用结果
+                    react_history.append(f"工具 {act_name} 结果:\n{tool_result}")
+                    tool_results_context.append({"tool": act_name, "result": tool_result})
+
+                    logger.info(f"[AI顾问] 工具 {act_name} 结果长度: {len(tool_result)} 字符")
+
+                # 继续下一轮
+                continue
+
+            elif decision == "finish":
+                # 获取计划建议和画像更新信息
+                profile_update = result.get("profile_update", {})
+                plan_suggestion = result.get("plan_suggestion", {})
+
+                # 使用 chat_stream 真正流式生成回答
+                response_messages = [
+                    {"role": "system", "content": RESPONSE_PROMPT},
+                    {"role": "user", "content": f"学生的问题：{user_message}\n\n请根据以上分析，用自然亲切的语气回答学生的问题。"},
+                ]
+
+                full_response = ""
+                try:
+                    for chunk in llm.chat_stream(response_messages):
+                        full_response += chunk
+                        _sse_callback(f'data: {json.dumps({"type": "chunk", "content": chunk}, ensure_ascii=False)}\n\n')
+                except Exception as e:
+                    logger.error(f"[AI顾问] 流式回答生成失败: {e}")
+
+                message = full_response or "抱歉，我没有理解你的问题。"
+
+                # 保存 AI 回复到数据库（包含思考过程）
+                if not is_system_trigger:
+                    try:
+                        # 构建思考过程上下文
+                        conversation_context = None
+                        context_obj = {}
+                        if _thinkings:
+                            context_obj["thinkings"] = _thinkings
+                        if _thinking_chunks:
+                            context_obj["thinking_process"] = "".join(_thinking_chunks)
+                        if react_history:
+                            context_obj["react_history"] = react_history
+                            context_obj["tool_calls"] = [
+                                {"tool": tr["tool"], "result": tr["result"][:200]}
+                                for tr in tool_results_context
+                            ]
+                        if context_obj:
+                            conversation_context = json.dumps(context_obj, ensure_ascii=False)
+
+                        java_client.create_dialogue(
+                            user_id=user_id,
+                            session_id=session_id,
+                            conversation_text=message,
+                            dialogue_type="AI",
+                            intent_type="plan_advisor",
+                            conversation_context=conversation_context,
+                        )
+
+                        # 异步触发会话压缩
+                        try:
+                            from app.agents.conversation_compressor import async_compress_and_save
+                            asyncio.create_task(async_compress_and_save(
+                                user_id=user_id,
+                                session_id=session_id,
+                                plan_id=0,
+                            ))
+                        except Exception as e:
+                            logger.warning(f"[AI顾问] 触发会话压缩失败: {e}")
+
+                    except Exception as e:
+                        logger.warning(f"[AI顾问] 保存AI回复失败: {e}")
+
+                # 更新画像
+                if profile_update.get("should_update") and profile_update.get("updates"):
+                    try:
+                        updates = profile_update["updates"]
+                        current_behavior = ensure_learning_behavior_fields(user_profile)
+                        updated_behavior = update_learning_behavior(
+                            current=current_behavior,
+                            updates=updates,
+                            confidence=0.6,
+                        )
+                        java_client.save_user_profile(user_id, updated_behavior, "AI顾问对话自动更新")
+                    except Exception as e:
+                        logger.warning(f"[AI顾问] 画像更新失败: {e}")
+
+                # 推送计划建议
+                if plan_suggestion.get("should_suggest") and plan_suggestion.get("modules"):
+                    _sse_callback(f'data: {json.dumps({"type": "plan_suggestion", "content": message, "suggestion": plan_suggestion}, ensure_ascii=False)}\n\n')
+
+                # 推送完成事件
+                _sse_callback(f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n')
+                return
+
+            else:
+                # 未知 decision
+                message = result.get("message", "抱歉，我没有理解你的问题。")
+                _sse_callback(f'data: {json.dumps({"type": "chunk", "content": message}, ensure_ascii=False)}\n\n')
+                _sse_callback(f'data: {json.dumps({"type": "done"}, ensure_ascii=False)}\n\n')
+                return
+
+        # 循环结束但没有 finish
+        _sse_callback(f'data: {json.dumps({"type": "error", "content": "抱歉，处理请求时出现了问题。"}, ensure_ascii=False)}\n\n')
+
+    # 生成事件流（使用与智能辅导相同的架构）
+    async def generate_events() -> AsyncGenerator[str, None]:
         try:
-            result = llm.chat_json(messages)
-            from app.utils.token_recorder import record_from_mimo
-            record_from_mimo(llm, user_id, "plan_advisor")
+            # 在线程池中执行智能顾问核心逻辑（避免阻塞事件循环）
+            loop = asyncio.get_event_loop()
+            task = loop.run_in_executor(None, _run_advisor)
+
+            # 实时轮询推送事件（真流式）
+            while not task.done():
+                while _sse_events:
+                    yield _sse_events.pop(0)
+                await asyncio.sleep(0.05)
+
+            # 推送执行期间产生的残余事件
+            while _sse_events:
+                yield _sse_events.pop(0)
+
         except Exception as e:
-            logger.error(f"[AI顾问] LLM 调用失败: {e}")
-            return JSONResponse(content={
-                "message": "抱歉，处理你的请求时出现了问题。请稍后再试。",
-                "type": "text"
-            })
+            logger.error(f"[AI顾问] 执行异常: {e}", exc_info=True)
+            yield f'data: {json.dumps({"type": "error", "content": str(e)}, ensure_ascii=False)}\n\n'
 
-        # 解析结果
-        decision = result.get("decision", "finish").lower().strip()
-        thought = result.get("thought", "")
-
-        if decision == "tool_call":
-            # 执行工具调用
-            actions = result.get("actions", [])
-            if not actions:
-                logger.warning("[AI顾问] tool_call 但 actions 为空")
-                break
-
-            for act in actions:
-                act_name = act.get("action", "")
-                logger.info(f"[AI顾问] 执行工具: {act_name}")
-
-                tool_result = _execute_tool(act, user_id)
-
-                # 记录工具调用结果
-                react_history.append(f"工具 {act_name} 结果:\n{tool_result}")
-                tool_results_context.append({"tool": act_name, "result": tool_result})
-
-                logger.info(f"[AI顾问] 工具 {act_name} 结果长度: {len(tool_result)} 字符")
-
-            # 继续下一轮
-            continue
-
-        elif decision == "finish":
-            # 提取最终响应
-            message = result.get("message", "抱歉，我没有理解你的问题。")
-            profile_update = result.get("profile_update", {})
-            plan_suggestion = result.get("plan_suggestion", {})
-            break
-
-        else:
-            # 未知 decision，直接使用结果
-            message = result.get("message", "抱歉，我没有理解你的问题。")
-            profile_update = result.get("profile_update", {})
-            plan_suggestion = result.get("plan_suggestion", {})
-            break
-    else:
-        # 循环结束但没有 finish，使用最后一次结果
-        message = result.get("message", "抱歉，我没有理解你的问题。")
-        profile_update = result.get("profile_update", {})
-        plan_suggestion = result.get("plan_suggestion", {})
-
-    # 保存 AI 回复到数据库（系统自动触发的对话不保存）
-    if not is_system_trigger:
-        logger.info(f"[AI顾问] 保存AI回复: session_id={session_id}, message={message[:50]}")
-        try:
-            result = java_client.create_dialogue(
-                user_id=user_id,
-                session_id=session_id,
-                conversation_text=message,
-                dialogue_type="AI",
-                intent_type="plan_advisor",
-            )
-            logger.info(f"[AI顾问] AI回复保存成功: {result}")
-        except Exception as e:
-            logger.error(f"[AI顾问] 保存AI回复失败: {e}", exc_info=True)
-
-    # 更新画像
-    if profile_update.get("should_update") and profile_update.get("updates"):
-        try:
-            updates = profile_update["updates"]
-            current_behavior = ensure_learning_behavior_fields(user_profile)
-            updated_behavior = update_learning_behavior(
-                current=current_behavior,
-                updates=updates,
-                confidence=0.6,
-            )
-            java_client.save_user_profile(user_id, updated_behavior, "AI顾问对话自动更新")
-            logger.info(f"[AI顾问] 画像更新成功")
-        except Exception as e:
-            logger.warning(f"[AI顾问] 画像更新失败: {e}")
-
-    # 返回响应
-    if plan_suggestion.get("should_suggest") and plan_suggestion.get("modules"):
-        return JSONResponse(content={
-            "message": message,
-            "type": "plan_suggestion",
-            "suggestion": {
-                "title": plan_suggestion.get("title", "推荐学习计划"),
-                "description": plan_suggestion.get("description", ""),
-                "modules": plan_suggestion.get("modules", [])
-            }
-        })
-
-    return JSONResponse(content={
-        "message": message,
-        "type": "text"
-    })
+    return StreamingResponse(
+        generate_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 class CreatePlanRequest(BaseModel):
@@ -551,6 +697,7 @@ class CreatePlanRequest(BaseModel):
     title: str
     description: str = ""
     modules: List[Dict[str, Any]] = []
+    session_id: str = ""
 
 
 @router.post("/create-plan")
@@ -629,7 +776,7 @@ async def create_plan_from_suggestion(
         logger.info(f"[AI顾问] 计划创建完成，共 {len(resource_ids)} 个资源")
 
         # 3. 保存顾问对话记录
-        session_id = f"advisor-{user_id}"
+        session_id = request.session_id or f"advisor-{user_id}"
         try:
             java_client.create_dialogue(
                 user_id=user_id,
