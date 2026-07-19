@@ -361,7 +361,7 @@ def controller_node(state: AgentState) -> Dict[str, Any]:
         context_info += "\n[系统状态] 用户已给出确认/补充反馈。"
     if asked_profile_question:
         context_info += f"\n[系统状态] 上一轮简答智能体询问了用户关于「{asked_profile_question}」的画像问题，用户当前输入很可能是回答，应归类为 simple_qa 而非生成资源。"
-    elif pending_question:
+    elif pending_question and isinstance(pending_question, str):
         context_info += f"\n[系统状态] 上一轮系统向用户提出了追问：「{pending_question[:100]}」。用户当前输入很可能是对该问题的回答。如果用户提供了具体的学习主题、知识点或补充信息，你应该根据其内容识别为对应的生成意图（如 generate_resource / generate_quiz 等），否则归类为 simple_qa。"
 
     if context_info:
