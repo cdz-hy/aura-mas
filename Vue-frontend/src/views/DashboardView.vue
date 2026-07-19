@@ -219,6 +219,9 @@ const completingPlanId = ref<number | null>(null)
 const dynamicGreeting = ref('继续你的学习之旅')
 const displayedGreeting = ref('继续你的学习之旅')
 const isTyping = ref(false)
+let greetingTimer: ReturnType<typeof setTimeout> | null = null
+let greetingRequestId = 0
+let greetingAbortCtrl: AbortController | null = null
 
 // 画像气泡开关（默认开启）
 const CLOUD_ENABLED_KEY = 'profile_cloud_enabled'
@@ -343,32 +346,42 @@ async function loadDashboard() {
 }
 
 async function loadGreeting() {
+  // 取消上一次请求和打字机动画
+  greetingAbortCtrl?.abort()
+  greetingAbortCtrl = new AbortController()
+  const requestId = ++greetingRequestId
+  if (greetingTimer) { clearTimeout(greetingTimer); greetingTimer = null }
+
   try {
     const userId = authStore.user?.id
     if (userId) {
-      const greeting = await getGreeting(userId)
+      const greeting = await getGreeting(userId, greetingAbortCtrl.signal)
+      // 如果已经有新请求，丢弃本次结果
+      if (requestId !== greetingRequestId) return
       if (greeting) {
         dynamicGreeting.value = greeting
-        // 启动打字机动画
-        typewriterEffect(greeting)
+        typewriterEffect(greeting, requestId)
       }
     }
-  } catch (e) {
+  } catch (e: any) {
+    if (e?.name === 'AbortError') return
     console.warn('获取个性化问候语失败，使用默认值', e)
   }
 }
 
-function typewriterEffect(text: string) {
+function typewriterEffect(text: string, requestId: number) {
   displayedGreeting.value = ''
   isTyping.value = true
   let i = 0
-  const speed = 60 // 每个字符的间隔时间（毫秒）
+  const speed = 60
 
   function type() {
+    // 如果已被新请求取代，停止打字
+    if (requestId !== greetingRequestId) return
     if (i < text.length) {
       displayedGreeting.value += text.charAt(i)
       i++
-      setTimeout(type, speed)
+      greetingTimer = setTimeout(type, speed)
     } else {
       isTyping.value = false
     }

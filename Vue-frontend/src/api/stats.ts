@@ -29,9 +29,9 @@ export function getDashboardStats() {
   return request.get<any, { data: DashboardStats }>('/stats/dashboard')
 }
 
-// 获取首页个性化问候语（Python后端，带2小时缓存）
-export function getGreeting(userId: number) {
-  return fetch(`${PYTHON_AI_BASE}/api/analytics/greeting?user_id=${userId}`)
+// 获取首页个性化问候语（Python后端，带3分钟缓存）
+export function getGreeting(userId: number, signal?: AbortSignal) {
+  return fetch(`${PYTHON_AI_BASE}/api/analytics/greeting?user_id=${userId}`, { signal })
     .then(res => res.json())
     .then(res => res.greeting as string)
 }

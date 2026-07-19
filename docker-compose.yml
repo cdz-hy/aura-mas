@@ -2,12 +2,50 @@ services:
   redis:
     image: redis:7-alpine
     container_name: aura-redis
+    restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    mem_limit: 256m
+    networks:
+      - aura-net
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: aura-rabbitmq
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    mem_limit: 300m
+    networks:
+      - aura-net
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: aura-qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    mem_limit: 1024m
+    networks:
+      - aura-net
+
+networks:
+  aura-net:
+    driver: bridge
 
 volumes:
   redis_data:
+  rabbitmq_data:
+  qdrant_data:
